@@ -46,6 +46,9 @@ fun CircleScreen(
     onOpenSettings: () -> Unit,
     onKnock: () -> Unit = {},
     onOpenTool: (String) -> Unit = {},
+    onMinimise: () -> Unit = {},
+    onExit: () -> Unit = {},
+    onStayUnlocked: (Boolean) -> Unit = {},
 ) {
     val torStatus by TorService.status.collectAsState()
     val knocks by MessageService.incomingKnocks.collectAsState()
@@ -53,43 +56,57 @@ fun CircleScreen(
     val notesOn by ToolsState.notesEnabled.collectAsState()
     val flashOn by ToolsState.flashlightEnabled.collectAsState()
     val invisible by org.cmchat.app.settings.AppSettings.invisibleMode.collectAsState()
+    val stayUnlocked by org.cmchat.app.settings.AppSettings.sessionWindowEnabled.collectAsState()
+    val online = torStatus is TorStatus.Online
     Column(Modifier.fillMaxSize().background(CmBackground)) {
-        Row(
-            Modifier.fillMaxWidth().padding(20.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // Bigger logo, smaller status text.
-            CmChatLogo(size = 32)
-            Spacer(Modifier.width(10.dp))
-            TorIndicator(torStatus)
-            Spacer(Modifier.weight(1f))
-            // My status: Online / Invisible. Tap to toggle; going Online starts
-            // self-timers on any messages that arrived while Invisible.
+        // Centered header: logo (coloured+glowing only when the engine is online),
+        // engine status line, minimise/exit pill, then the user's own status.
+        Box(Modifier.fillMaxWidth().padding(top = 14.dp, start = 16.dp, end = 16.dp)) {
+            // "+" knock, top-right.
             Box(
-                Modifier.clip(RoundedCornerShape(16.dp))
-                    .background(if (invisible) CmCard else CmGreen.copy(alpha = 0.2f))
-                    .clickable {
-                        val nowInvisible = !invisible
-                        org.cmchat.app.settings.AppSettings.invisibleMode.value = nowInvisible
-                        if (!nowInvisible) org.cmchat.app.chat.ChatStore.markMissedSeen()
-                    }
-                    .padding(horizontal = 12.dp, vertical = 7.dp),
-            ) {
-                Text(if (invisible) "Invisible" else "Online",
-                    color = if (invisible) CmTextDim else CmGreen,
-                    fontFamily = Nunito, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-            }
-            Spacer(Modifier.width(10.dp))
-            // Suggestive tappable orange "+" (the "Knock" word/bubble is gone).
-            Box(
-                Modifier.size(38.dp).clip(CircleShape).background(CmOrange)
+                Modifier.align(Alignment.TopEnd).size(38.dp).clip(CircleShape).background(CmOrange)
                     .clickable { onKnock() },
                 contentAlignment = Alignment.Center,
             ) {
                 Text("+", color = Color.White, fontFamily = Nunito,
                     fontSize = 24.sp, fontWeight = FontWeight.Bold)
             }
+            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                CmChatLogo(size = 34, active = online)
+                Spacer(Modifier.height(4.dp))
+                EngineLine(torStatus)
+                Spacer(Modifier.height(10.dp))
+                MinimiseExitPill(onMinimise = onMinimise, onExit = onExit)
+                Spacer(Modifier.height(10.dp))
+                // My own status, prefixed "Me:" so it reads distinctly from the
+                // contacts' statuses on the left. Tap to toggle Online/Invisible.
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Me:", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
+                    Spacer(Modifier.width(6.dp))
+                    Box(
+                        Modifier.clip(RoundedCornerShape(16.dp))
+                            .background(if (invisible) CmCard else CmGreen.copy(alpha = 0.2f))
+                            .clickable {
+                                val nowInvisible = !invisible
+                                org.cmchat.app.settings.AppSettings.invisibleMode.value = nowInvisible
+                                if (!nowInvisible) org.cmchat.app.chat.ChatStore.markMissedSeen()
+                            }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    ) {
+                        Text(if (invisible) "Invisible" else "Online",
+                            color = if (invisible) CmTextDim else CmGreen,
+                            fontFamily = Nunito, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                StayUnlockedTick(stayUnlocked) {
+                    val now = !stayUnlocked
+                    org.cmchat.app.settings.AppSettings.sessionWindowEnabled.value = now
+                    onStayUnlocked(now)
+                }
+            }
         }
+        Spacer(Modifier.height(10.dp))
 
         for (k in knocks) {
             Column(
@@ -195,17 +212,61 @@ private fun DockTool(label: String, glyph: String, active: Boolean = false, onCl
     }
 }
 
+/** Engine status line under the logo: "Engine: Online / Starting / Offline …". */
 @Composable
-private fun TorIndicator(status: TorStatus) {
+private fun EngineLine(status: TorStatus) {
     val (color, label) = when (status) {
         is TorStatus.Online -> CmGreen to "Online"
         is TorStatus.Connecting -> CmOrange to "Connecting ${status.percent}%"
-        is TorStatus.Starting -> CmOrange to "Connecting"
+        is TorStatus.Starting -> CmOrange to "Starting"
         is TorStatus.Offline -> CmTextDim to "Offline"
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
-        Spacer(Modifier.width(5.dp))
-        Text(label, color = color, fontFamily = Nunito, fontSize = 11.sp)
+        Box(Modifier.size(7.dp).clip(CircleShape).background(color))
+        Spacer(Modifier.width(6.dp))
+        Text("Engine: $label", color = color, fontFamily = Nunito, fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold)
+    }
+}
+
+/**
+ * Minimal segmented pill: [–] minimise | [⏻] exit. Dark aesthetic, 1px border,
+ * dim icons, the exit power icon in red. Subtle, not a big button bar.
+ */
+@Composable
+private fun MinimiseExitPill(onMinimise: () -> Unit, onExit: () -> Unit) {
+    val border = Color(0xFF2B3340)
+    val red = Color(0xFFFF3B3B)
+    Row(
+        Modifier.clip(RoundedCornerShape(16.dp)).border(1.dp, border, RoundedCornerShape(16.dp)),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.clickable { onMinimise() }.padding(horizontal = 20.dp, vertical = 7.dp),
+            contentAlignment = Alignment.Center) {
+            Text("–", color = CmTextDim, fontFamily = Nunito, fontSize = 18.sp,
+                fontWeight = FontWeight.Bold)
+        }
+        Box(Modifier.width(1.dp).height(22.dp).background(border))
+        Box(Modifier.clickable { onExit() }.padding(horizontal = 20.dp, vertical = 7.dp),
+            contentAlignment = Alignment.Center) {
+            Text("⏻", color = red, fontFamily = Nunito, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+/** "Stay unlocked" tick — small, centred, symmetric. */
+@Composable
+private fun StayUnlockedTick(checked: Boolean, onToggle: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { onToggle() }
+            .padding(horizontal = 8.dp, vertical = 4.dp)) {
+        Box(Modifier.size(16.dp).clip(RoundedCornerShape(4.dp))
+            .background(if (checked) CmGreen else CmCard)
+            .border(1.dp, if (checked) CmGreen else CmTextFaint, RoundedCornerShape(4.dp)),
+            contentAlignment = Alignment.Center) {
+            if (checked) Text("✓", color = CmBackground, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.width(7.dp))
+        Text("Stay unlocked", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
     }
 }

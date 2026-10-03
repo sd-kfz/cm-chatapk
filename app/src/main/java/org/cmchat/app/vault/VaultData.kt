@@ -42,6 +42,8 @@ data class VaultSettings(
     val privacyPin: String? = null,
     /** If true, a successful unlock stays valid for 6h (no re-ask on return). */
     val sessionWindow: Boolean = false,
+    /** Selected UI language (BCP-47 tag); English until a locale is translated. */
+    val language: String = "en",
 )
 
 /** Everything persisted in the encrypted vault. Messages are NOT here. */

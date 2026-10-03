@@ -7,13 +7,12 @@ import android.content.Context
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import org.cmchat.app.settings.AppSettings
 
 /**
- * Deliberately generic notifications. By default nothing on the lock screen
- * names a sender or shows content: a BUZZ shows as "Activity", a new message as
- * "Notification" (the original CM-Chat behaviour). A single setting can switch
- * on the sender's nickname. Every notification is cleared on any wipe path.
+ * Deliberately generic notifications. A notification NEVER reveals who sent a
+ * message: a BUZZ shows only as "Activity", a new message only as "Notification"
+ * (the original CM-Chat behaviour). There is no option to show a sender name.
+ * Every notification is cleared on any wipe path.
  */
 object Notifier {
     private const val CHANNEL_ID = "cm_activity"
@@ -32,25 +31,23 @@ object Notifier {
         }
     }
 
-    private fun post(ctx: Context, id: Int, title: String, nickname: String?) {
+    private fun post(ctx: Context, id: Int, title: String) {
         ensureChannel(ctx)
-        // Show a nickname only if the user opted in; never any message content.
-        val showName = AppSettings.showBuzzSenderName.value && !nickname.isNullOrBlank()
+        // Title only — never a sender name and never any message content.
         val builder = NotificationCompat.Builder(ctx, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
             .setContentTitle(title)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setAutoCancel(true)
             .setShowWhen(false)
-        if (showName) builder.setContentText(nickname)
         runCatching { NotificationManagerCompat.from(ctx).notify(id, builder.build()) }
     }
 
-    /** A buzz arrived. Generic "Activity"; nickname only if the setting is on. */
-    fun activity(ctx: Context, nickname: String?) = post(ctx, ID_ACTIVITY, "Activity", nickname)
+    /** A buzz arrived. Generic "Activity" — no sender, no content. */
+    fun activity(ctx: Context) = post(ctx, ID_ACTIVITY, "Activity")
 
-    /** A new message arrived. Generic "Notification"; nickname only if opted in. */
-    fun message(ctx: Context, nickname: String?) = post(ctx, ID_MESSAGE, "Notification", nickname)
+    /** A new message arrived. Generic "Notification" — no sender, no content. */
+    fun message(ctx: Context) = post(ctx, ID_MESSAGE, "Notification")
 
     fun clearAll(ctx: Context) {
         runCatching { NotificationManagerCompat.from(ctx).cancelAll() }

@@ -246,6 +246,39 @@ and nothing secret is stored in the repo. Test with the debug APK meanwhile.
   reflection/ScriptEngine anywhere; Calculator.eval is a pure arithmetic parser
   used only by the calculator tool, never the passcode.
 
+## UI batch (languages, notif privacy, logo, Me, shredder, engine line, etc.)
+- Languages: added Finnish (fi) + Norwegian (no) to the list (Languages.kt, 14
+  locales). A Language picker screen persists the choice in the vault
+  (VaultSettings.language); English is complete, others scaffolded (strings still
+  English until each locale is filled in).
+- Notification privacy: removed the "show sender name" option entirely. Only two
+  generic types remain — "Activity" (buzz) and "Notification" (message); neither
+  ever reveals who sent anything.
+- Logo glow: stronger, softer bloom (higher floor + bigger peak + wider blur),
+  clipped to the logo's own bounds so it never spills past the edges.
+- Logo state by Tor: the Circle-page logo is desaturated grey with no glow when
+  the engine isn't Online, and only coloured + glowing when Online. The
+  login/naming logo is unaffected (always coloured).
+- "Me:" label: own status now reads "Me: Invisible" / "Me: Online", distinct
+  from contacts' statuses.
+- Engine status line: moved under the logo, centred, as "Engine: Online /
+  Starting / Connecting n% / Offline".
+- Minimise/Exit pill: a small centred segmented pill between the status line and
+  the "Me:" row — left "–" minimises (Tor keeps running, moveTaskToBack); right
+  red "⏻" Exits (full teardown + finish). 1px #2b3340 border, dim icons, red exit.
+- Stay-unlocked tick: a small symmetric checkbox on the Circle page toggles the
+  6h session window (persisted), mirroring the Settings toggle.
+- Shredder PIN expanded: the reverse-PIN now erases ALL recoverable on-disk data
+  (Shredder.shredAll: filesDir, caches, code cache, no-backup, external files/
+  cache, databases, shared_prefs — overwrite then delete) plus RAM, then resets
+  to first-run. Only the app binary remains (needs user uninstall).
+- Per-setting hints: one-line italic plain-language explanations (<=60 chars)
+  under the settings that need them.
+- RAM diagnostics: its OWN screen + log (RamDiag), separate from the Tor/Diag
+  log; samples used heap over time labelled by active features, with "Enable all
+  features" and a peak readout. (Android can't attribute heap per-feature exactly
+  — it's an indicator under the active feature set, noted in-app.)
+
 ## Stability + security hardening
 - Onion rotation loop / "address collision" fixed: ServerController now guards
   publish with a Mutex (single-flight — never two publishes at once), a fast

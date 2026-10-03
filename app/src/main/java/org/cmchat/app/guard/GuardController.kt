@@ -76,6 +76,24 @@ object GuardController {
         }
     }
 
+    /**
+     * Clear all RAM state and stop the onion server WITHOUT killing the process
+     * (used by the Shredder PIN, which then resets the UI to first-run). Does not
+     * stop Tor — that happens when the user next Exits or the process ends.
+     */
+    fun wipeRamOnly() {
+        ChatStore.clearAll()
+        org.cmchat.app.tools.ToolsState.clear()
+        org.cmchat.app.buzz.BuzzPolicy.clear()
+        org.cmchat.app.diag.Diag.clear()
+        appContext?.let {
+            org.cmchat.app.diag.CrashCatcher.delete(it)
+            org.cmchat.app.notify.Notifier.clearAll(it)
+            org.cmchat.app.tools.Flashlight.off(it)
+        }
+        ServerController.stop()
+    }
+
     /** Silent RAM wipe: drop chats, stop server + Tor, kill the process. */
     fun wipeAndDie() {
         ChatStore.clearAll()

@@ -31,6 +31,7 @@ fun SettingsScreen(
     onExit: () -> Unit = {},
     onAbout: () -> Unit = {},
     onLanguage: () -> Unit = {},
+    onRamDiag: () -> Unit = {},
     privacyPinSet: Boolean = false,
     verifyPrivacyPin: (String) -> Boolean = { false },
     onCreatePrivacyPin: (String) -> Unit = {},
@@ -67,12 +68,12 @@ fun SettingsScreen(
 
             GroupHeader("Chats")
             GeneralTimerRow()
-            ToolToggle("Share my last-seen", org.cmchat.app.settings.AppSettings.shareLastSeen)
+            ToolToggle("Share my last-seen", org.cmchat.app.settings.AppSettings.shareLastSeen,
+                hint = "Let friends see you were online recently.")
             BuzzFrequencyRow()
             ToolToggle("Let a Buzz reach me when closed",
-                org.cmchat.app.settings.AppSettings.buzzListenerWhenClosed)
-            ToolToggle("Show sender name on alerts",
-                org.cmchat.app.settings.AppSettings.showBuzzSenderName)
+                org.cmchat.app.settings.AppSettings.buzzListenerWhenClosed,
+                hint = "A nudge can still wake you after you close the app.")
 
             GroupHeader("Privacy & Safety 🔒")
             if (!privacyUnlocked) {
@@ -81,8 +82,10 @@ fun SettingsScreen(
                     "tap", onClick = { askPin = true },
                 )
             } else {
-                Setting("Cerberus · idle auto-wipe", "90 min")
-                Setting("Kill Timer", "not armed")
+                Setting("Cerberus · idle auto-wipe", "90 min",
+                    hint = "Wipes everything if the app sits unused too long.")
+                Setting("Kill Timer", "not armed",
+                    hint = "A countdown that wipes everything when it ends.")
                 StayReachableRow()
                 ShredderRow()
                 DecoyGroup()
@@ -96,8 +99,10 @@ fun SettingsScreen(
             }
 
             GroupHeader("Server")
-            Setting("My Server", onClick = onOpenMyServer)
-            Setting("Bridges (obfs4 / Snowflake)", "coming")
+            Setting("My Server", onClick = onOpenMyServer,
+                hint = "Your own address that friends connect to.")
+            Setting("Bridges (obfs4 / Snowflake)", "coming",
+                hint = "Help connect where Tor is blocked.")
 
             GroupHeader("Tools")
             ToolToggle("Tool: Calculator", org.cmchat.app.tools.ToolsState.calcEnabled)
@@ -111,12 +116,17 @@ fun SettingsScreen(
                     fontWeight = FontWeight.SemiBold)
                 Slider(value = textSize, onValueChange = { textSize = it }, valueRange = -6f..6f)
             }
-            ToolToggle("Metadata scrub (strip EXIF/GPS)", org.cmchat.app.settings.AppSettings.metadataScrub)
+            ToolToggle("Metadata scrub (strip EXIF/GPS)", org.cmchat.app.settings.AppSettings.metadataScrub,
+                hint = "Removes hidden location/date from photos you send.")
             SessionWindowRow(onSessionWindow)
-            Setting("Diagnostics & troubleshoot", onClick = onOpenDiagnostics)
+            Setting("Diagnostics & troubleshoot", onClick = onOpenDiagnostics,
+                hint = "See what's happening if something isn't working.")
+            Setting("RAM diagnostics", onClick = onRamDiag,
+                hint = "See which features use the most memory.")
             Setting("Verify App Integrity")
             Setting("Change PIN")
-            Setting("Language", onClick = onLanguage)
+            Setting("Language", onClick = onLanguage,
+                hint = "Choose the app's language.")
             Setting("About / Version", onClick = onAbout)
             Spacer(Modifier.height(4.dp))
         }
@@ -306,24 +316,38 @@ private fun BuzzFrequencyRow() {
     }
 }
 
+/** A one-line, very-simple italic hint under a setting (<=60 chars). */
 @Composable
-private fun ToolToggle(label: String, flow: kotlinx.coroutines.flow.MutableStateFlow<Boolean>) {
+private fun Hint(text: String) {
+    Text(text.take(60), color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp,
+        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+        modifier = Modifier.padding(start = 4.dp, top = 2.dp))
+}
+
+@Composable
+private fun ToolToggle(label: String, flow: kotlinx.coroutines.flow.MutableStateFlow<Boolean>, hint: String = "") {
     val on by flow.collectAsState()
-    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CmCard)
-        .clickable { flow.value = !on }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, color = CmText, fontFamily = Nunito, fontSize = 14.sp, modifier = Modifier.weight(1f))
-        Text(if (on) "On" else "Off", color = if (on) CmGreen else CmTextDim,
-            fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+    Column {
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CmCard)
+            .clickable { flow.value = !on }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(label, color = CmText, fontFamily = Nunito, fontSize = 14.sp, modifier = Modifier.weight(1f))
+            Text(if (on) "On" else "Off", color = if (on) CmGreen else CmTextDim,
+                fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        }
+        if (hint.isNotEmpty()) Hint(hint)
     }
 }
 
 @Composable
-private fun Setting(label: String, value: String = "", onClick: () -> Unit = {}) {
-    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CmCard)
-        .clickable { onClick() }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, color = CmText, fontFamily = Nunito, fontSize = 14.sp,
-            modifier = Modifier.weight(1f))
-        if (value.isNotEmpty())
-            Text(value, color = CmBlue, fontFamily = Nunito, fontSize = 13.sp)
+private fun Setting(label: String, value: String = "", hint: String = "", onClick: () -> Unit = {}) {
+    Column {
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CmCard)
+            .clickable { onClick() }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(label, color = CmText, fontFamily = Nunito, fontSize = 14.sp,
+                modifier = Modifier.weight(1f))
+            if (value.isNotEmpty())
+                Text(value, color = CmBlue, fontFamily = Nunito, fontSize = 13.sp)
+        }
+        if (hint.isNotEmpty()) Hint(hint)
     }
 }

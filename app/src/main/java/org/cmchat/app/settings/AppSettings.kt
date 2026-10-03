@@ -31,11 +31,6 @@ object AppSettings {
      */
     val buzzListenerWhenClosed = MutableStateFlow(true)
 
-    /**
-     * Show the sender's nickname on Buzz/message notifications. Default OFF:
-     * the lock screen shows only "Activity"/"Notification", never a name.
-     */
-    val showBuzzSenderName = MutableStateFlow(false)
 
     /**
      * Keep the FULL server running after the app is closed, until the user taps

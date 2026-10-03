@@ -40,6 +40,8 @@ private sealed class Nav {
     object Knock : Nav()
     object Diagnostics : Nav()
     object About : Nav()
+    object Language : Nav()
+    object RamDiag : Nav()
     data class Tool(val which: String) : Nav()
 }
 
@@ -202,6 +204,7 @@ fun AppNav() {
             org.cmchat.app.settings.AppSettings.invisibleMode.value = true
             // Session window (item 7): load the saved choice and stamp this unlock.
             org.cmchat.app.settings.AppSettings.sessionWindowEnabled.value = unlocked.settings.sessionWindow
+            org.cmchat.app.settings.Languages.selected.value = unlocked.settings.language
             org.cmchat.app.settings.AppSettings.lastUnlockMs = System.currentTimeMillis()
             TorService.start(context)
             org.cmchat.app.guard.GuardController.init(context)
@@ -234,6 +237,19 @@ fun AppNav() {
                 onOpenSettings = { nav = Nav.Settings },
                 onKnock = { nav = Nav.Knock },
                 onOpenTool = { nav = Nav.Tool(it) },
+                onMinimise = { (context as? android.app.Activity)?.moveTaskToBack(true) },
+                onExit = {
+                    org.cmchat.app.LifecycleController.exit(context)
+                    (context as? android.app.Activity)?.finish()
+                },
+                onStayUnlocked = { enabled ->
+                    val p = pin; val cur = data
+                    if (p != null && cur != null) {
+                        val updated = cur.copy(settings = cur.settings.copy(sessionWindow = enabled))
+                        runCatching { manager.save(p, updated) }
+                        data = updated
+                    }
+                },
             )
         }
         is Nav.Chat -> ChatScreen(
@@ -276,6 +292,8 @@ fun AppNav() {
             onOpenDiagnostics = { nav = Nav.Diagnostics },
             onExit = { org.cmchat.app.LifecycleController.exit(context) },
             onAbout = { nav = Nav.About },
+            onLanguage = { nav = Nav.Language },
+            onRamDiag = { nav = Nav.RamDiag },
             privacyPinSet = data?.settings?.privacyPin != null,
             verifyPrivacyPin = { entered -> entered == data?.settings?.privacyPin },
             onCreatePrivacyPin = { newPin ->
@@ -297,6 +315,19 @@ fun AppNav() {
         )
         Nav.Diagnostics -> org.cmchat.app.ui.screens.DiagnosticsScreen(onBack = { nav = Nav.Settings })
         Nav.About -> org.cmchat.app.ui.screens.AboutScreen(onBack = { nav = Nav.Settings })
+        Nav.RamDiag -> org.cmchat.app.ui.screens.RamDiagnosticsScreen(onBack = { nav = Nav.Settings })
+        Nav.Language -> org.cmchat.app.ui.screens.LanguageScreen(
+            onBack = { nav = Nav.Settings },
+            onPick = { tag ->
+                org.cmchat.app.settings.Languages.selected.value = tag
+                val p = pin; val cur = data
+                if (p != null && cur != null) {
+                    val updated = cur.copy(settings = cur.settings.copy(language = tag))
+                    runCatching { manager.save(p, updated) }
+                    data = updated
+                }
+            },
+        )
         Nav.MyId -> MyIdScreen(cmId = myCmId(data), onBack = { nav = Nav.Settings })
         Nav.Knock -> KnockScreen(
             myCmId = myCmId(data),

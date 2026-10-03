@@ -32,6 +32,7 @@ private const val MAX_PASSCODE = 128
 
 @Composable
 fun LockScreen(manager: VaultManager, onUnlocked: (String, VaultData, firstRun: Boolean) -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
     // Recomputed after a duress wipe so the screen falls back to first-run.
     var epoch by remember { mutableStateOf(0) }
     val firstRun = remember(epoch) { manager.firstRunNeeded() }
@@ -75,7 +76,13 @@ fun LockScreen(manager: VaultManager, onUnlocked: (String, VaultData, firstRun: 
             Phase.UNLOCK -> {
                 when (val r = manager.unlock(entered)) {
                     is UnlockResult.Success -> { wrongCount = 0; onUnlocked(entered, r.data, false) }
-                    UnlockResult.Duress -> { epoch += 1 } // silent: back to first-run
+                    UnlockResult.Duress -> {
+                        // Shredder PIN: erase ALL recoverable on-disk data + RAM,
+                        // then fall silently back to first-run.
+                        org.cmchat.app.guard.GuardController.wipeRamOnly()
+                        org.cmchat.app.vault.Shredder.shredAll(ctx)
+                        epoch += 1
+                    }
                     UnlockResult.WrongPin -> {
                         wrongCount += 1
                         status = "Wrong PIN"

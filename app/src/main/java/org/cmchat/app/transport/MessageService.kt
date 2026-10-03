@@ -281,7 +281,7 @@ object MessageService {
                 // Generic "Notification" unless that chat is already on screen.
                 if (activeChatCmId != chatCmId) {
                     org.cmchat.app.settings.AppSettings.appContext?.let { ctx ->
-                        org.cmchat.app.notify.Notifier.message(ctx, names[chatCmId])
+                        org.cmchat.app.notify.Notifier.message(ctx)
                     }
                 }
             }
@@ -330,7 +330,7 @@ object MessageService {
         org.cmchat.app.buzz.BuzzPolicy.requestShake(chatCmId)
         // Generic "Activity" bar notification; nickname only if opted in.
         org.cmchat.app.settings.AppSettings.appContext?.let { ctx ->
-            org.cmchat.app.notify.Notifier.activity(ctx, names[chatCmId])
+            org.cmchat.app.notify.Notifier.activity(ctx)
         }
     }
 
