@@ -7,9 +7,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.cmchat.app.transport.Transport
 import java.net.ServerSocket
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Onion service (my "server") state for the active Face. */
 sealed interface ServerStatus {
@@ -39,11 +42,42 @@ object ServerController {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var serverSocket: ServerSocket? = null
     /** onion address without the ".onion" suffix, for DEL_ONION on stop. */
-    private var currentServiceId: String? = null
+    @Volatile private var currentServiceId: String? = null
+    /** The onion private key currently published, so we don't re-add the same one. */
+    @Volatile private var activeKey: String? = null
 
-    /** Set by MessageService: handles each accepted incoming connection. */
+    /** Single-flight guard: only one publish/rotate/stop runs at a time. */
+    private val publishMutex = Mutex()
+    /** Debounce rotation so it can never fire in a tight loop. */
+    @Volatile private var lastRotateMs = 0L
+    private const val MIN_ROTATE_INTERVAL_MS = 60_000L
+
+    // ---- incoming-connection DoS limits ------------------------------------
+    /** Max simultaneous incoming onion connections; extras are dropped. */
+    private const val MAX_CONCURRENT_CONN = 8
+    private val activeConns = AtomicInteger(0)
+    /** Accept-rate token bucket (global; peers are indistinguishable pre-auth). */
+    private const val ACCEPT_BURST = 12
+    private const val ACCEPT_REFILL_PER_SEC = 6.0
+    @Volatile private var acceptTokens = ACCEPT_BURST.toDouble()
+    @Volatile private var acceptRefillAt = System.currentTimeMillis()
+    /** A connected peer that sends nothing must not hold a slot forever. */
+    private const val CONN_READ_TIMEOUT_MS = 15_000
+
+    /** Set by MessageService: handles each accepted connection synchronously. */
     @Volatile
     var onIncoming: ((java.net.Socket) -> Unit)? = null
+
+    @Synchronized
+    private fun acceptAllowed(): Boolean {
+        val now = System.currentTimeMillis()
+        acceptTokens = (acceptTokens + (now - acceptRefillAt) / 1000.0 * ACCEPT_REFILL_PER_SEC)
+            .coerceAtMost(ACCEPT_BURST.toDouble())
+        acceptRefillAt = now
+        if (acceptTokens < 1.0) return false
+        acceptTokens -= 1.0
+        return true
+    }
 
     /**
      * @param existingOnionKey the Face's stored "ED25519-V3:..." key, or null
@@ -55,56 +89,55 @@ object ServerController {
         existingOnionAddress: String? = null,
         onPublished: (OnionPublish) -> Unit,
     ) {
-        // Publish ONCE per session. If a service is already registered (Online)
-        // or a publish is in flight (Starting), reuse it — never ADD_ONION the
-        // same service twice (that collides on the address). restart() clears
-        // the state first, so it still re-publishes.
-        synchronized(this) {
-            if (_status.value is ServerStatus.Online || _status.value is ServerStatus.Starting) return
-            _status.value = ServerStatus.Starting
-        }
+        // Fast path: already online for THIS exact key -> nothing to do. Prevents
+        // the re-publish storm when the start effect re-fires on recomposition.
+        if (_status.value is ServerStatus.Online && activeKey == existingOnionKey) return
         scope.launch {
-            val control = TorService.controlConnection()
-            if (control == null) {
-                _status.value = ServerStatus.Failed("Tor not connected")
-                return@launch
-            }
-            val result = runCatching {
-                val server = Transport.openServer(0)
-                serverSocket = server
-                val ports = mapOf(80 to "127.0.0.1:${server.localPort}")
-                val keyArg = existingOnionKey ?: "NEW:ED25519-V3"
-                org.cmchat.app.diag.Diag.i(
-                    "onion",
-                    "ADD_ONION ${if (existingOnionKey != null) "ED25519-V3:<stored>" else "NEW:ED25519-V3"} " +
-                        "Port=80,127.0.0.1:${server.localPort}",
-                )
-                val reply = control.addOnion(keyArg, ports)
-                // jtorctl parses the ADD_ONION reply into keys "onionAddress"
-                // (the base32 host, no scheme, no ".onion") and "onionPrivKey"
-                // ("ED25519-V3:..."). Log presence only — the priv key is this
-                // device's own onion key (already in the vault), never a blob.
-                org.cmchat.app.diag.Diag.i("onion", "ADD_ONION reply keys=${reply.keys}")
-                fun v(name: String) = reply.entries.firstOrNull { it.key.equals(name, true) }?.value
-                // New key first; fall back to the stored address on recreate
-                // (a recreate reply may omit the address).
-                val addr = v("onionAddress")
-                    ?: existingOnionAddress?.removeSuffix(".onion")
-                    ?: throw IllegalStateException(
-                        "ADD_ONION returned no onionAddress; reply=${reply.entries.joinToString { "${it.key}=${redact(it.key, it.value)}" }}"
+            // Single-flight: never run two publishes concurrently.
+            publishMutex.withLock {
+                if (_status.value is ServerStatus.Online && activeKey == existingOnionKey) return@withLock
+                _status.value = ServerStatus.Starting
+                val control = TorService.controlConnection()
+                if (control == null) {
+                    _status.value = ServerStatus.Failed("Tor not connected"); return@withLock
+                }
+                val result = runCatching {
+                    // DEL any previous service, and (defensively) the stored address
+                    // we're about to re-add, so re-adding can never collide.
+                    currentServiceId?.let { runCatching { control.delOnion(it) } }
+                    existingOnionAddress?.removeSuffix(".onion")?.let {
+                        runCatching { control.delOnion(it) }
+                    }
+                    val server = Transport.openServer(0)
+                    serverSocket?.let { old -> runCatching { old.close() } }
+                    serverSocket = server
+                    val ports = mapOf(80 to "127.0.0.1:${server.localPort}")
+                    val keyArg = existingOnionKey ?: "NEW:ED25519-V3"
+                    org.cmchat.app.diag.Diag.i(
+                        "onion",
+                        "ADD_ONION ${if (existingOnionKey != null) "ED25519-V3:<stored>" else "NEW:ED25519-V3"} " +
+                            "Port=80,127.0.0.1:${server.localPort}",
                     )
-                val priv = v("onionPrivKey") ?: existingOnionKey
-                currentServiceId = addr
-                acceptLoop(server)
-                OnionPublish("$addr.onion", priv)
-            }
-            result.onSuccess { pub ->
-                onPublished(pub)
-                org.cmchat.app.diag.Diag.i("onion", "published ${pub.onion}")
-                _status.value = ServerStatus.Online(pub.onion, faceName, System.currentTimeMillis())
-            }.onFailure { e ->
-                org.cmchat.app.diag.Diag.e("onion", "publish failed", e)
-                _status.value = ServerStatus.Failed(e.message ?: "publish failed")
+                    val reply = control.addOnion(keyArg, ports)
+                    org.cmchat.app.diag.Diag.i("onion", "ADD_ONION reply keys=${reply.keys}")
+                    fun v(name: String) = reply.entries.firstOrNull { it.key.equals(name, true) }?.value
+                    val addr = v("onionAddress")
+                        ?: existingOnionAddress?.removeSuffix(".onion")
+                        ?: throw IllegalStateException("ADD_ONION returned no onionAddress")
+                    val priv = v("onionPrivKey") ?: existingOnionKey
+                    currentServiceId = addr
+                    activeKey = priv ?: existingOnionKey
+                    acceptLoop(server)
+                    OnionPublish("$addr.onion", priv)
+                }
+                result.onSuccess { pub ->
+                    onPublished(pub)
+                    org.cmchat.app.diag.Diag.i("onion", "published ${pub.onion}")
+                    _status.value = ServerStatus.Online(pub.onion, faceName, System.currentTimeMillis())
+                }.onFailure { e ->
+                    org.cmchat.app.diag.Diag.e("onion", "publish failed", e)
+                    _status.value = ServerStatus.Failed(e.message ?: "publish failed")
+                }
             }
         }
     }
@@ -116,34 +149,49 @@ object ServerController {
      * address-update to contacts. Manual (triggered from My Server).
      */
     fun requestNewAddress(onNew: (OnionPublish) -> Unit) {
+        // Debounce: at most one rotation per interval, never in a tight loop.
+        val now = System.currentTimeMillis()
+        if (now - lastRotateMs < MIN_ROTATE_INTERVAL_MS) {
+            org.cmchat.app.diag.Diag.i("onion", "rotation debounced"); return
+        }
         scope.launch {
-            val control = TorService.controlConnection() ?: run {
-                _status.value = ServerStatus.Failed("Tor not connected"); return@launch
+            // Single-flight: skip if a publish/rotate is already running.
+            if (!publishMutex.tryLock()) {
+                org.cmchat.app.diag.Diag.i("onion", "rotation skipped (publish in flight)"); return@launch
             }
-            val server = serverSocket ?: run {
-                _status.value = ServerStatus.Failed("server not running"); return@launch
-            }
-            val faceName = (status.value as? ServerStatus.Online)?.faceName ?: ""
-            val oldId = currentServiceId
-            runCatching {
-                val ports = mapOf(80 to "127.0.0.1:${server.localPort}")
-                val reply = control.addOnion("NEW:ED25519-V3", ports)
-                fun v(name: String) = reply.entries.firstOrNull { it.key.equals(name, true) }?.value
-                val addr = v("onionAddress") ?: throw IllegalStateException("no onionAddress")
-                val priv = v("onionPrivKey")
-                currentServiceId = addr
-                OnionPublish("$addr.onion", priv)
-            }.onSuccess { pub ->
-                _status.value = ServerStatus.Online(pub.onion, faceName, System.currentTimeMillis())
-                onNew(pub)
-                org.cmchat.app.diag.Diag.i("onion", "rotated to new address")
-                // Keep the old address alive ~24h, then remove it.
-                if (oldId != null) scope.launch {
-                    kotlinx.coroutines.delay(24 * 60 * 60_000L)
-                    runCatching { TorService.controlConnection()?.delOnion(oldId) }
+            try {
+                lastRotateMs = System.currentTimeMillis()
+                val control = TorService.controlConnection() ?: run {
+                    _status.value = ServerStatus.Failed("Tor not connected"); return@launch
                 }
-            }.onFailure {
-                org.cmchat.app.diag.Diag.e("onion", "address rotation failed", it)
+                val server = serverSocket ?: run {
+                    _status.value = ServerStatus.Failed("server not running"); return@launch
+                }
+                val faceName = (status.value as? ServerStatus.Online)?.faceName ?: ""
+                val oldId = currentServiceId
+                runCatching {
+                    val ports = mapOf(80 to "127.0.0.1:${server.localPort}")
+                    val reply = control.addOnion("NEW:ED25519-V3", ports)
+                    fun v(name: String) = reply.entries.firstOrNull { it.key.equals(name, true) }?.value
+                    val addr = v("onionAddress") ?: throw IllegalStateException("no onionAddress")
+                    val priv = v("onionPrivKey")
+                    currentServiceId = addr
+                    activeKey = priv
+                    OnionPublish("$addr.onion", priv)
+                }.onSuccess { pub ->
+                    _status.value = ServerStatus.Online(pub.onion, faceName, System.currentTimeMillis())
+                    onNew(pub)
+                    org.cmchat.app.diag.Diag.i("onion", "rotated to new address")
+                    // Keep the old address alive ~24h, then remove it.
+                    if (oldId != null) scope.launch {
+                        kotlinx.coroutines.delay(24 * 60 * 60_000L)
+                        runCatching { TorService.controlConnection()?.delOnion(oldId) }
+                    }
+                }.onFailure {
+                    org.cmchat.app.diag.Diag.e("onion", "address rotation failed", it)
+                }
+            } finally {
+                publishMutex.unlock()
             }
         }
     }
@@ -153,11 +201,14 @@ object ServerController {
         _status.value = ServerStatus.Off
         val id = currentServiceId
         currentServiceId = null
+        activeKey = null
         val sock = serverSocket
         serverSocket = null
         scope.launch {
-            runCatching { id?.let { TorService.controlConnection()?.delOnion(it) } }
-            runCatching { sock?.close() }
+            publishMutex.withLock {
+                runCatching { id?.let { TorService.controlConnection()?.delOnion(it) } }
+                runCatching { sock?.close() }
+            }
         }
     }
 
@@ -200,12 +251,28 @@ object ServerController {
         scope.launch {
             while (!server.isClosed) {
                 val socket = runCatching { server.accept() }.getOrNull() ?: break
-                // Note: Invisible mode no longer refuses connections. Messages
-                // still arrive but are held as "missed" (no receipts exist, so a
-                // sender can't tell Online from Invisible). See MessageService.
+                // DoS defense: drop beyond the accept-rate bucket or the concurrent
+                // cap, before doing any work or allocating buffers. Peers are
+                // indistinguishable pre-auth over Tor, so this is a global limit;
+                // a per-contact limit applies post-auth in MessageService.
+                if (!acceptAllowed() || activeConns.get() >= MAX_CONCURRENT_CONN) {
+                    runCatching { socket.close() }
+                    org.cmchat.app.diag.Diag.droppedFrame()
+                    continue
+                }
                 val handler = onIncoming
-                if (handler != null) runCatching { handler(socket) }
-                else runCatching { socket.close() }
+                if (handler == null) { runCatching { socket.close() }; continue }
+                activeConns.incrementAndGet()
+                scope.launch {
+                    try {
+                        runCatching { socket.soTimeout = CONN_READ_TIMEOUT_MS }
+                        handler(socket)   // synchronous: reads + opens + dispatches
+                    } catch (_: Exception) {
+                    } finally {
+                        activeConns.decrementAndGet()
+                        runCatching { socket.close() }
+                    }
+                }
             }
         }
     }

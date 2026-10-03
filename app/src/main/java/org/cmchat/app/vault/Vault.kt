@@ -34,8 +34,14 @@ class Vault(private val crypto: CryptoManager, private val dir: File) {
         if (!exists()) return null
         val salt = saltFile.readBytes()
         val key = crypto.deriveKey(pin, salt)
-        val plain = crypto.open(vaultFile.readBytes(), key) ?: return null
-        return json.decodeFromString(VaultData.serializer(), String(plain, Charsets.UTF_8))
+        val plain = crypto.open(vaultFile.readBytes(), key)
+        key.fill(0)                               // zero the Argon2 key ASAP
+        if (plain == null) return null
+        return try {
+            json.decodeFromString(VaultData.serializer(), String(plain, Charsets.UTF_8))
+        } finally {
+            plain.fill(0)                          // zero the decrypted plaintext
+        }
     }
 
     /** Best-effort wipe: overwrite then delete. Flash wear-levelling means
@@ -49,7 +55,13 @@ class Vault(private val crypto: CryptoManager, private val dir: File) {
     private fun writeEncrypted(pin: String, salt: ByteArray, data: VaultData) {
         val key = crypto.deriveKey(pin, salt)
         val plain = json.encodeToString(VaultData.serializer(), data).toByteArray(Charsets.UTF_8)
-        vaultFile.writeBytes(crypto.seal(plain, key))
+        try {
+            vaultFile.writeBytes(crypto.seal(plain, key))
+        } finally {
+            // Zero key material + the serialized plaintext as soon as we're done.
+            key.fill(0)
+            plain.fill(0)
+        }
     }
 
     private fun overwriteAndDelete(f: File) {

@@ -114,6 +114,10 @@ class TorService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        // Single-instance guard: if a previous (possibly half-dead) instance is
+        // still around, tear its Tor binding down before we take over so the new
+        // start never races a dying old one.
+        instance?.takeIf { it !== this }?.let { old -> runCatching { old.teardown() } }
         instance = this
         // startForeground() is the LITERAL FIRST action, before any Tor work, so
         // we never trip ForegroundServiceDidNotStartInTime. The channel is created
@@ -176,17 +180,33 @@ class TorService : Service() {
     }
 
     override fun onDestroy() {
+        teardown()
+        scope.cancel()
+        super.onDestroy()
+    }
+
+    /**
+     * Fully tear Tor + the onion service down, even when bootstrap is stuck.
+     * Idempotent and safe to call from the single-instance guard or onDestroy:
+     *   1) stop the onion (DEL_ONION + close the loopback socket),
+     *   2) HALT tor via the control port (kills a stuck bootstrap immediately),
+     *   3) unbind the Guardian service (its onDestroy stops the tor thread),
+     *   4) clear state. Only nulls the static instance if it is still us, so a
+     *      freshly started instance is never clobbered by an old one dying.
+     */
+    private fun teardown() {
         bootstrapJob?.cancel()
-        LocalBroadcastManager.getInstance(this).unregisterReceiver(statusReceiver)
+        runCatching { LocalBroadcastManager.getInstance(this).unregisterReceiver(statusReceiver) }
+        runCatching { org.cmchat.app.tor.ServerController.stop() }
+        runCatching { gpService?.torControlConnection?.shutdownTor("HALT") }
         if (bound) {
             runCatching { unbindService(gpConnection) }
             bound = false
         }
         runCatching { stopService(Intent(this, GpTorService::class.java)) }
+        gpService = null
         _status.value = TorStatus.Offline
-        instance = null
-        scope.cancel()
-        super.onDestroy()
+        if (instance === this) instance = null
     }
 
     private fun startBootstrapPolling() {

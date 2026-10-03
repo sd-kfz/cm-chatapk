@@ -66,6 +66,12 @@ object MessageService {
     @Volatile
     var activeChatCmId: String? = null
 
+    /** Per-contact post-auth rate limit (drop a contact that floods us). */
+    private val contactRate = RateLimiter(burst = 20, refillPerSec = 5.0)
+
+    /** Cap pending knock requests so a knock flood can't grow RAM without bound. */
+    private const val MAX_PENDING_KNOCKS = 20
+
     fun configure(
         crypto: CryptoManager,
         myDisplayName: String,
@@ -215,29 +221,35 @@ object MessageService {
 
     // ---- incoming ----------------------------------------------------------
 
+    /**
+     * Handle one incoming connection SYNCHRONOUSLY (ServerController owns the
+     * socket lifecycle, the concurrency cap and the socket read timeout, and
+     * closes the socket afterward). We read exactly ONE length-bounded frame,
+     * then authenticate it (open) BEFORE doing any further work; a frame that
+     * opens with no key is dropped without allocating or acting on anything.
+     * Received bytes are only ever decrypted/parsed — never executed.
+     */
     private fun handleIncoming(socket: Socket) {
-        scope.launch {
-            socket.use { s ->
-                val sealed = Transport.readFrame(s.getInputStream()) ?: return@use
-                val c = crypto ?: return@use
-                val pub = myPub ?: return@use
-                val sec = mySec ?: return@use
+        val sealed = Transport.readFrame(socket.getInputStream()) ?: return
+        val c = crypto ?: return
+        val pub = myPub ?: return
+        val sec = mySec ?: return
 
-                // 1) KNOCK: anonymous sealed box, openable with my key alone.
-                c.sealedOpen(sealed, pub, sec)?.let { inner ->
-                    dispatchAnonymous(inner); return@use
-                }
-                // 2) crypto_box from a known contact: try each contact's key.
-                for ((cmId, peer) in contacts) {
-                    val inner = c.boxOpen(sealed, peer.identityPubKeyHex, sec) ?: continue
-                    if (buzzOnlyMode) dispatchBuzzOnly(cmId, inner)
-                    else dispatchFromContact(cmId, peer, inner)
-                    return@use
-                }
-                // Couldn't decrypt with any key -> drop (count only, no content).
-                org.cmchat.app.diag.Diag.droppedFrame()
-            }
+        // 1) KNOCK: anonymous sealed box, openable with my key alone.
+        c.sealedOpen(sealed, pub, sec)?.let { inner ->
+            dispatchAnonymous(inner); return
         }
+        // 2) crypto_box from a known contact: try each contact's key.
+        for ((cmId, peer) in contacts) {
+            val inner = c.boxOpen(sealed, peer.identityPubKeyHex, sec) ?: continue
+            // Per-contact (post-auth) rate limit — drop a contact that floods us.
+            if (!contactRate.allow(cmId)) { org.cmchat.app.diag.Diag.droppedFrame(); return }
+            if (buzzOnlyMode) dispatchBuzzOnly(cmId, inner)
+            else dispatchFromContact(cmId, peer, inner)
+            return
+        }
+        // Couldn't decrypt with any key -> drop (count only, no content).
+        org.cmchat.app.diag.Diag.droppedFrame()
     }
 
     private fun dispatchAnonymous(inner: ByteArray) {
@@ -245,7 +257,10 @@ object MessageService {
         val type = FrameType.fromCode(inner[0].toInt() and 0xff) ?: return
         if (type == FrameType.KNOCK) {
             val kp = decodeKnock(inner) ?: return
-            _incomingKnocks.value = _incomingKnocks.value + KnockRequest(kp.displayName, kp.cmId)
+            val cur = _incomingKnocks.value
+            // Cap pending knocks (flood guard) and de-dup by cmId.
+            if (cur.size >= MAX_PENDING_KNOCKS || cur.any { it.cmId == kp.cmId }) return
+            _incomingKnocks.value = cur + KnockRequest(kp.displayName, kp.cmId)
         }
     }
 

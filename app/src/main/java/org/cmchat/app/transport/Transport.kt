@@ -22,7 +22,11 @@ import java.net.Socket
  */
 object Transport {
 
-    const val MAX_FRAME_BYTES = 8 * 1024 * 1024
+    // Bounded BEFORE allocation (input hardening): a text frame is a ~10,000-char
+    // body + small JSON/crypto overhead, so 64 KiB is ample. A sender claiming a
+    // larger length is rejected without allocating the buffer. (File transfer,
+    // when added, will negotiate its own chunked path, not a giant frame.)
+    const val MAX_FRAME_BYTES = 64 * 1024
 
     fun writeFrame(out: OutputStream, sealed: ByteArray) {
         val d = DataOutputStream(out)

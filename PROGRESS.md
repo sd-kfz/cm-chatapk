@@ -246,6 +246,39 @@ and nothing secret is stored in the repo. Test with the debug APK meanwhile.
   reflection/ScriptEngine anywhere; Calculator.eval is a pure arithmetic parser
   used only by the calculator tool, never the passcode.
 
+## Stability + security hardening
+- Onion rotation loop / "address collision" fixed: ServerController now guards
+  publish with a Mutex (single-flight — never two publishes at once), a fast
+  "already online for this key -> no-op" check (kills the re-publish storm when
+  the start effect re-fires), DEL_ONION of the previous AND the stored address
+  before every ADD_ONION (re-add can't collide), and tracks activeKey. Rotation
+  (requestNewAddress) is debounced to at most once / 60s and skips if a publish
+  is in flight.
+- Tor teardown: TorService.teardown() stops the onion (DEL_ONION), HALTs tor via
+  the control port (kills a stuck 95% bootstrap), unbinds the Guardian service
+  (its onDestroy stops the tor thread), and clears state; a single-instance guard
+  tears any old half-dead instance down before a new start, and the static
+  instance is only nulled if it is still us. Stop/Exit now actually stop Tor.
+- Onion DoS protection: accept loop enforces a global accept-rate token bucket
+  and a max-concurrent-connection cap (drop before any work/alloc), sets a 15s
+  read timeout so a silent peer can't hold a slot, and hands each connection off
+  synchronously with proper close/decrement. The frame is authenticated (opened)
+  BEFORE any dispatch. Post-auth, a per-contact token bucket (RateLimiter, unit-
+  tested) drops a contact that floods us. Pending knocks capped at 20 + de-duped.
+  (Peers are indistinguishable pre-auth over Tor, so pre-auth limiting is global;
+  per-peer limiting applies once a frame authenticates to a known contact.)
+- Input hardening: max frame size cut 8 MiB -> 64 KiB, checked BEFORE allocating
+  the buffer; all remote bytes are only decrypted/parsed, never executed; flood
+  OOM bounded by the frame cap + concurrent cap + knock cap + rate limits.
+- Control port: we never configure it; Guardian binds it to 127.0.0.1 with
+  cookie auth (never 0.0.0.0). Verified no ControlPort/SETCONF/0.0.0.0 in code.
+- Exported components: MainActivity stays exported (launcher); our services are
+  exported=false; Guardian's org.torproject.jni.TorService is force-merged to
+  exported=false (we only bind it in-process).
+- Memory: the Argon2 key and the decrypted vault plaintext are zeroed (fill(0))
+  immediately after use on both load and save paths. (JVM Strings are immutable
+  so the decoded object graph can't be wiped, but raw key/plaintext buffers are.)
+
 ## Lock keyboard (custom) + Single Message + text limits
 - Lock screen: the simple digit pad stays default with an "ABC" key that switches
   to CM-Chat's OWN dark QWERTY (not the grey system keyboard) — only the key
