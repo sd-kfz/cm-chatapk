@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">CM-Chat</string>
+    <!-- Launcher label uses a Cyrillic capital Es (U+0421), which looks like
+         "C" but sorts to the bottom of the app drawer. app_name stays Latin. -->
+    <string name="launcher_label">СM-Chat</string>
+</resources>

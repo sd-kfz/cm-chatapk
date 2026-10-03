@@ -1,0 +1,72 @@
+package org.cmchat.app.chat
+
+/**
+ * Local-only send state. There are NO delivery/read receipts (dropped): a peer
+ * never tells us "delivered" or "read". SENDING/SENT/OFFLINE are purely our own
+ * knowledge of whether the outbound socket write succeeded, used only for the
+ * offline/retry affordance — never shown as a receipt.
+ */
+enum class MsgState { SENDING, SENT, OFFLINE }
+
+/**
+ * Self-destruct durations, shared by the per-message timer and the general
+ * timer. OFF = never. A message disappears this long after it is SEEN.
+ */
+enum class SelfTimer(val label: String, val millis: Long?) {
+    OFF("off", null),
+    S30("30s", 30_000L),
+    M5("5m", 5 * 60_000L),
+    M10("10m", 10 * 60_000L),
+    M30("30m", 30 * 60_000L),
+    M60("60m", 60 * 60_000L),
+    M120("120m", 120 * 60_000L),
+    H6("6h", 6 * 60 * 60_000L),
+    H12("12h", 12 * 60 * 60_000L),
+    H24("24h", 24 * 60 * 60_000L);
+
+    companion object {
+        fun fromLabel(l: String): SelfTimer = entries.firstOrNull { it.label == l } ?: OFF
+    }
+}
+
+/** A chat message. RAM-only; never written to disk. */
+data class ChatMessage(
+    val id: String,
+    val mine: Boolean,
+    val text: String,
+    val state: MsgState,
+    val selfTimer: SelfTimer = SelfTimer.OFF,
+    val createdAt: Long = System.currentTimeMillis(),
+    val seenAt: Long? = null,
+    val system: Boolean = false,
+    /** Arrived while Invisible: shown as a red italic "Missed Message" once Online. */
+    val missed: Boolean = false,
+)
+
+/**
+ * Per-chat presence — deliberately coarse, never an exact time. Within 24h it
+ * reads "last seen recently"; after 24h it shows nothing at all. The global
+ * "Share my last-seen" toggle hides your own either way.
+ */
+object LastSeen {
+    private const val DAY_MS = 24 * 60 * 60_000L
+
+    fun bucket(lastSeenAtMs: Long?, nowMs: Long = System.currentTimeMillis()): String? {
+        if (lastSeenAtMs == null || lastSeenAtMs > nowMs) return null
+        return if (nowMs - lastSeenAtMs <= DAY_MS) "last seen recently" else null
+    }
+}
+
+object SelfTimerRules {
+    /** A message disappears this long after it is SEEN (not sent). Null = never. */
+    fun expiresAt(seenAtMs: Long?, timer: SelfTimer): Long? {
+        val seen = seenAtMs ?: return null
+        val d = timer.millis ?: return null
+        return seen + d
+    }
+
+    fun isExpired(seenAtMs: Long?, timer: SelfTimer, nowMs: Long = System.currentTimeMillis()): Boolean {
+        val at = expiresAt(seenAtMs, timer) ?: return false
+        return nowMs >= at
+    }
+}
