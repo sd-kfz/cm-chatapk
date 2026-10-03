@@ -12,7 +12,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -26,6 +25,11 @@ import org.cmchat.app.vault.VaultManager
 
 private enum class Phase { UNLOCK, NEW_PIN, CONFIRM_PIN, NAME_FACE }
 
+/** Shift state for the in-app letter keyboard. */
+private enum class Shift { OFF, ONE_SHOT, CAPS }
+
+private const val MAX_PASSCODE = 128
+
 @Composable
 fun LockScreen(manager: VaultManager, onUnlocked: (String, VaultData, firstRun: Boolean) -> Unit) {
     // Recomputed after a duress wipe so the screen falls back to first-run.
@@ -37,7 +41,9 @@ fun LockScreen(manager: VaultManager, onUnlocked: (String, VaultData, firstRun: 
     var firstPin by remember(epoch) { mutableStateOf("") }
     var faceName by remember(epoch) { mutableStateOf("") }
     var status by remember(epoch) { mutableStateOf("") }
-    var alpha by remember(epoch) { mutableStateOf(false) } // alphanumeric passcode mode
+    var alpha by remember(epoch) { mutableStateOf(false) } // letter keyboard showing
+    var usedAlpha by remember(epoch) { mutableStateOf(false) } // password mixes letters/symbols
+    var shift by remember(epoch) { mutableStateOf(Shift.OFF) }
     var wrongCount by remember(epoch) { mutableStateOf(0) }
     var lockedFor by remember(epoch) { mutableStateOf(0) }
 
@@ -54,7 +60,7 @@ fun LockScreen(manager: VaultManager, onUnlocked: (String, VaultData, firstRun: 
         when (phase) {
             Phase.NEW_PIN -> {
                 if (!VaultManager.isValidNewPin(entered)) {
-                    status = "6-digit PIN, or 6+ chars with a letter — not a palindrome"
+                    status = "Use at least 6 characters — and not a palindrome"
                 } else {
                     firstPin = entered; status = ""; phase = Phase.CONFIRM_PIN
                 }
@@ -90,7 +96,7 @@ fun LockScreen(manager: VaultManager, onUnlocked: (String, VaultData, firstRun: 
         Spacer(Modifier.height(10.dp))
         Text(
             when (phase) {
-                Phase.NEW_PIN -> "Create a 6-digit PIN  ·  Aa for letters"
+                Phase.NEW_PIN -> "Create a 6-digit PIN  ·  ABC for letters"
                 Phase.CONFIRM_PIN -> "Confirm your PIN"
                 Phase.NAME_FACE -> "Name your first Tag"
                 Phase.UNLOCK -> "Welcome back"
@@ -130,75 +136,65 @@ fun LockScreen(manager: VaultManager, onUnlocked: (String, VaultData, firstRun: 
                 Text("Create", color = CmBackground, fontFamily = Nunito,
                     fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
-        } else if (alpha) {
-            // Alphanumeric passcode IN PLACE on this same screen: the field gets
-            // focus and the system keyboard opens here (no new window/screen). The
-            // passcode is opaque input — it is ONLY fed to Argon2 key derivation as
-            // bytes, never executed/evaluated/reflected anywhere. Cap 128 chars.
-            val focus = remember { androidx.compose.ui.focus.FocusRequester() }
-            LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
-            OutlinedTextField(
-                value = pin,
-                onValueChange = { pin = it.take(128).filter { c -> c != '\n' } },
-                singleLine = true,
-                label = { Text("Passcode", color = CmTextDim) },
-                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                    keyboardType = androidx.compose.ui.text.input.KeyboardType.Password,
-                    imeAction = androidx.compose.ui.text.input.ImeAction.Done,
-                ),
-                keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                    onDone = { if (lockedFor <= 0 && pin.isNotEmpty()) { val e = pin; pin = ""; submitPin(e) } },
-                ),
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = CmCard, unfocusedContainerColor = CmCard,
-                    focusedTextColor = CmText, unfocusedTextColor = CmText,
-                    cursorColor = CmBlue,
-                ),
-                modifier = Modifier.fillMaxWidth().focusRequester(focus),
-            )
-            Spacer(Modifier.height(12.dp))
+        } else {
+            // SECURITY: `pin` is an opaque passcode string collected ONLY to be
+            // passed to Argon2id (cryptoPwHash) as raw bytes. It is never executed,
+            // eval'd, used as a filename, shell string, or SQL anywhere.
+            fun append(s: String) { if (pin.length < MAX_PASSCODE) pin += s }
+
+            // Masked display — one dot per character (capped so a long passcode
+            // doesn't overflow), length-agnostic so digits+letters+symbols all fit.
+            MaskedDots(pin.length)
+            Spacer(Modifier.height(16.dp))
             Text(
                 if (lockedFor > 0) "Try again in " + LoginThrottle.format(lockedFor) else status,
                 color = if (lockedFor > 0 || status.isNotEmpty()) CmRed else CmBackground,
                 fontFamily = Nunito, fontSize = 13.sp,
             )
-            Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                Text("123", color = CmTextDim, fontFamily = Nunito, fontSize = 14.sp,
-                    modifier = Modifier.clickable { alpha = false; pin = "" })
+            Spacer(Modifier.height(16.dp))
+
+            if (!alpha) {
+                Keypad(enabled = lockedFor <= 0) { k ->
+                    when (k) {
+                        "ABC" -> { alpha = true; usedAlpha = true }   // switch to letters
+                        "<" -> if (pin.isNotEmpty()) pin = pin.dropLast(1)
+                        else -> append(k)
+                    }
+                    // Pure 6-digit PIN keeps the instant-submit UX; once the letter
+                    // keyboard has been used, submission is via the Enter key.
+                    if (!usedAlpha && pin.length == 6) { val e = pin; pin = ""; submitPin(e) }
+                }
+            } else {
+                LetterKeyboard(
+                    enabled = lockedFor <= 0,
+                    shift = shift,
+                    onChar = { c ->
+                        val ch = if (c.length == 1 && c[0].isLetter() && shift != Shift.OFF)
+                            c.uppercase() else c
+                        append(ch)
+                        if (shift == Shift.ONE_SHOT) shift = Shift.OFF
+                    },
+                    onShift = {
+                        shift = when (shift) {
+                            Shift.OFF -> Shift.ONE_SHOT      // tap once = next char upper
+                            Shift.ONE_SHOT -> Shift.CAPS     // tap again = caps lock
+                            Shift.CAPS -> Shift.OFF
+                        }
+                    },
+                    onBackspace = { if (pin.isNotEmpty()) pin = pin.dropLast(1) },
+                    onToDigits = { alpha = false },
+                )
+            }
+
+            // Explicit submit once a mixed passcode is in use (variable length).
+            if (usedAlpha) {
+                Spacer(Modifier.height(14.dp))
                 Box(Modifier.clip(RoundedCornerShape(14.dp)).background(CmBlue)
                     .then(if (lockedFor > 0 || pin.isEmpty()) Modifier
                           else Modifier.clickable { val e = pin; pin = ""; submitPin(e) })
-                    .padding(horizontal = 24.dp, vertical = 11.dp)) {
+                    .padding(horizontal = 40.dp, vertical = 12.dp)) {
                     Text("Enter", color = CmBackground, fontFamily = Nunito,
-                        fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-        } else {
-            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                repeat(6) { i ->
-                    Box(Modifier.size(16.dp).clip(CircleShape)
-                        .background(if (i < pin.length) CmBlue else CmCard))
-                }
-            }
-            Spacer(Modifier.height(18.dp))
-            Text(
-                if (lockedFor > 0) "Try again in " + LoginThrottle.format(lockedFor) else status,
-                color = if (lockedFor > 0 || status.isNotEmpty()) CmRed else CmBackground,
-                fontFamily = Nunito, fontSize = 13.sp,
-            )
-            Spacer(Modifier.height(18.dp))
-            Keypad(enabled = lockedFor <= 0) { k ->
-                when (k) {
-                    "Aa" -> { alpha = true; pin = "" }       // switch to full keyboard
-                    "<" -> if (pin.isNotEmpty()) pin = pin.dropLast(1)
-                    else -> if (pin.length < 6) pin += k
-                }
-                if (!alpha && pin.length == 6) {
-                    val entered = pin; pin = ""
-                    submitPin(entered)
+                        fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -209,33 +205,107 @@ fun LockScreen(manager: VaultManager, onUnlocked: (String, VaultData, firstRun: 
     }
 }
 
+/** Masked passcode display: one dot per char, capped so it never overflows. */
+@Composable
+private fun MaskedDots(count: Int) {
+    val shown = count.coerceAtMost(20)
+    val text = "●".repeat(shown) + if (count > 20) " +${count - 20}" else ""
+    // Reserve height so the layout doesn't jump between empty and filled.
+    Box(Modifier.heightIn(min = 20.dp), contentAlignment = Alignment.Center) {
+        Text(text, color = CmBlue, fontFamily = Nunito, fontSize = 18.sp,
+            fontWeight = FontWeight.Bold)
+    }
+}
+
 @Composable
 private fun Keypad(enabled: Boolean, onKey: (String) -> Unit) {
-    // Bottom-left cell (under 7, left of 0) is the "Aa" alphanumeric toggle.
-    val keys = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "Aa", "0", "<")
+    // Bottom-left cell (under 7, left of 0) switches to the letter keyboard.
+    val keys = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "ABC", "0", "<")
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         for (row in 0..3) {
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 for (col in 0..2) {
                     val k = keys[row * 3 + col]
+                    val special = k == "ABC" || k == "<"
                     Box(
                         Modifier.size(74.dp).clip(RoundedCornerShape(16.dp))
-                            .background(if (k == "Aa") CmBackground else CmCard)
-                            .then(
-                                if (k.isEmpty() || !enabled) Modifier
-                                else Modifier.clickable { onKey(k) }
-                            ),
+                            .background(if (k == "ABC") CmBackground else CmCard)
+                            .then(if (!enabled) Modifier else Modifier.clickable { onKey(k) }),
                         contentAlignment = Alignment.Center,
                     ) {
-                        if (k.isNotEmpty())
-                            Text(k, color = if (k == "Aa") CmBlue
-                                    else if (enabled) CmText else CmTextFaint,
-                                fontFamily = Nunito,
-                                fontSize = if (k == "Aa") 18.sp else 22.sp,
-                                fontWeight = FontWeight.SemiBold)
+                        Text(if (k == "<") "⌫" else k,
+                            color = if (k == "ABC") CmBlue else if (enabled) CmText else CmTextFaint,
+                            fontFamily = Nunito,
+                            fontSize = if (special) 18.sp else 22.sp,
+                            fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * CM-Chat's own dark QWERTY (NOT the grey system keyboard) — only the key
+ * ARRANGEMENT follows the reference. Row 1 is symbols only; [Shift] one-shot /
+ * caps-lock; [123] returns to the number pad; [⌫] backspaces.
+ */
+@Composable
+private fun LetterKeyboard(
+    enabled: Boolean,
+    shift: Shift,
+    onChar: (String) -> Unit,
+    onShift: () -> Unit,
+    onBackspace: () -> Unit,
+    onToDigits: () -> Unit,
+) {
+    val upper = shift != Shift.OFF
+    val symbols = listOf("|", "@", "#", "$", "%", "^", "&", "*", "«", "»")
+    val row2 = "qwertyuiop".map { it.toString() }
+    val row3 = "asdfghjkl".map { it.toString() }
+    val row4mid = "zxcvbnm".map { it.toString() }
+
+    @Composable
+    fun key(label: String, onClick: () -> Unit, bg: androidx.compose.ui.graphics.Color = CmCard,
+            fg: androidx.compose.ui.graphics.Color = CmText) {
+        Box(
+            Modifier.fillMaxWidth().height(46.dp).clip(RoundedCornerShape(10.dp)).background(bg)
+                .then(if (enabled) Modifier.clickable { onClick() } else Modifier),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(label, color = if (enabled) fg else CmTextFaint, fontFamily = Nunito,
+                fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        }
+    }
+
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            symbols.forEach { s -> Box(Modifier.weight(1f)) { key(s, { onChar(s) }) } }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            row2.forEach { c ->
+                Box(Modifier.weight(1f)) { key(if (upper) c.uppercase() else c, { onChar(c) }) }
+            }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            Spacer(Modifier.weight(0.5f))
+            row3.forEach { c ->
+                Box(Modifier.weight(1f)) { key(if (upper) c.uppercase() else c, { onChar(c) }) }
+            }
+            Spacer(Modifier.weight(0.5f))
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            // Shift: highlighted when armed (one-shot) or locked (caps).
+            val shiftBg = if (shift == Shift.OFF) CmCard else CmBlue
+            val shiftFg = if (shift == Shift.OFF) CmText else CmBackground
+            Box(Modifier.weight(1.5f)) {
+                key(if (shift == Shift.CAPS) "⇪" else "⇧", onShift, bg = shiftBg, fg = shiftFg)
+            }
+            row4mid.forEach { c ->
+                Box(Modifier.weight(1f)) { key(if (upper) c.uppercase() else c, { onChar(c) }) }
+            }
+            Box(Modifier.weight(1f)) { key("123", onToDigits, fg = CmBlue) }
+            Box(Modifier.weight(1.5f)) { key("⌫", onBackspace) }
         }
     }
 }

@@ -12,6 +12,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
+import org.cmchat.app.chat.displayLabel
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -281,7 +282,7 @@ private fun GeneralTimerRow() {
         .padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
         Text("General timer (all messages)", color = CmText, fontFamily = Nunito, fontSize = 14.sp,
             modifier = Modifier.weight(1f))
-        Text(if (t == org.cmchat.app.chat.SelfTimer.OFF) "Off" else t.label,
+        Text(t.displayLabel(),
             color = if (t == org.cmchat.app.chat.SelfTimer.OFF) CmTextDim else CmRed,
             fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
     }

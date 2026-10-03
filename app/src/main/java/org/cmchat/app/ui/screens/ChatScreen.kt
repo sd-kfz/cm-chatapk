@@ -30,6 +30,7 @@ import org.cmchat.app.chat.ChatStore
 import org.cmchat.app.chat.LastSeen
 import org.cmchat.app.chat.MsgState
 import org.cmchat.app.chat.SelfTimer
+import org.cmchat.app.chat.displayLabel
 import org.cmchat.app.transport.MessageService
 import org.cmchat.app.ui.components.CerberusMark
 import org.cmchat.app.ui.theme.*
@@ -239,7 +240,7 @@ fun ChatScreen(
                     Box(Modifier.clip(RoundedCornerShape(10.dp))
                         .background(if (sel) CmBlue else CmCard).clickable { selfTimer = t }
                         .padding(horizontal = 10.dp, vertical = 5.dp)) {
-                        Text(t.label, color = if (sel) CmBackground else CmTextDim,
+                        Text(t.displayLabel(), color = if (sel) CmBackground else CmTextDim,
                             fontFamily = Nunito, fontSize = 12.sp)
                     }
                 }
@@ -258,13 +259,21 @@ fun ChatScreen(
             }
         }
 
+        // Live counter once the body gets long (past ~9,000 of the 10,000 cap).
+        if (input.length > 9_000) {
+            Text("%,d / %,d".format(input.length, MAX_BODY_CHARS),
+                color = if (input.length >= MAX_BODY_CHARS) CmRed else CmTextDim,
+                fontFamily = Nunito, fontSize = 11.sp,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp),
+                textAlign = androidx.compose.ui.text.style.TextAlign.End)
+        }
         Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.Bottom) {
             Box(Modifier.weight(1f).clip(RoundedCornerShape(22.dp)).background(CmCard)
                 .padding(horizontal = 16.dp, vertical = 12.dp)) {
                 if (input.isEmpty()) Text("Message…", color = CmTextDim, fontFamily = Nunito, fontSize = 15.sp)
                 BasicTextField(
-                    // Enter = newline; send only via the button. Cap 100,000 chars.
-                    value = input, onValueChange = { if (it.length <= 100_000) input = it },
+                    // Enter = newline; send only via the button. Body max 10,000.
+                    value = input, onValueChange = { if (it.length <= MAX_BODY_CHARS) input = it },
                     singleLine = false, maxLines = 6,
                     textStyle = TextStyle(color = CmText, fontFamily = Nunito, fontSize = 15.sp),
                     cursorBrush = SolidColor(CmBlue),
@@ -272,20 +281,27 @@ fun ChatScreen(
                 )
             }
             Spacer(Modifier.width(8.dp))
-            Box(Modifier.size(44.dp).clip(CircleShape).background(CmBlue).clickable {
-                val text = input.trimEnd()
-                if (text.isNotEmpty()) {
-                    if (chatCmId != null) MessageService.sendText(chatCmId, text, selfTimer)
-                    else ChatStore.addMine(chatId, text, selfTimer)
-                    input = ""
-                    selfTimer = SelfTimer.OFF   // per-message timer resets to 0
-                }
-            }, contentAlignment = Alignment.Center) {
-                Text("➤", color = CmBackground, fontSize = 18.sp)
+            // Minimum body = 1 char: send is disabled while the body is blank.
+            val canSend = input.isNotBlank()
+            Box(Modifier.size(44.dp).clip(CircleShape)
+                .background(if (canSend) CmBlue else CmCard)
+                .clickable(enabled = canSend) {
+                    val text = input.trimEnd()
+                    if (text.isNotEmpty()) {
+                        if (chatCmId != null) MessageService.sendText(chatCmId, text, selfTimer)
+                        else ChatStore.addMine(chatId, text, selfTimer)
+                        input = ""
+                        selfTimer = SelfTimer.OFF   // per-message timer resets
+                    }
+                }, contentAlignment = Alignment.Center) {
+                Text("➤", color = if (canSend) CmBackground else CmTextDim, fontSize = 18.sp)
             }
         }
     }
 }
+
+/** Chat body hard cap (min 1 enforced by disabling send when blank). */
+private const val MAX_BODY_CHARS = 10_000
 
 @Composable
 private fun Bubble(m: ChatMessage) {

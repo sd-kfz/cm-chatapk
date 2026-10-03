@@ -29,6 +29,14 @@ enum class SelfTimer(val label: String, val millis: Long?) {
     }
 }
 
+/**
+ * UI display text. OFF shows as "Single Message" (its behaviour is unchanged —
+ * with OFF a message follows the global/general expiry; any other value is a
+ * one-off per-message timer). `label` stays the wire value, so only the DISPLAYED
+ * text changes.
+ */
+fun SelfTimer.displayLabel(): String = if (this == SelfTimer.OFF) "Single Message" else label
+
 /** A chat message. RAM-only; never written to disk. */
 data class ChatMessage(
     val id: String,

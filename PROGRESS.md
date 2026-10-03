@@ -246,6 +246,23 @@ and nothing secret is stored in the repo. Test with the debug APK meanwhile.
   reflection/ScriptEngine anywhere; Calculator.eval is a pure arithmetic parser
   used only by the calculator tool, never the passcode.
 
+## Lock keyboard (custom) + Single Message + text limits
+- Lock screen: the simple digit pad stays default with an "ABC" key that switches
+  to CM-Chat's OWN dark QWERTY (not the grey system keyboard) — only the key
+  arrangement follows the reference. Row 1 = symbols (| @ # $ % ^ & * « »); rows
+  2-4 qwerty; [Shift] one-shot / caps-lock (highlighted state); [123] back to the
+  number pad; [⌫] backspace. The passcode accumulates across both screens (mixes
+  digits+letters+symbols), masked as dots, capped 128, submitted via Enter once
+  letters are used (pure 6-digit keeps instant-submit). isValidNewPin now accepts
+  any 6..128 non-palindrome passcode. SECURITY: passcode is opaque bytes passed
+  only to Argon2id — never executed/eval'd/used as a filename/shell/SQL (noted in
+  code).
+- Self-timer "off" renamed to "Single Message" in the UI (chat selector + Settings
+  general timer) via SelfTimer.displayLabel(); wire value stays "off", behaviour
+  unchanged (OFF = follow the global/general expiry; any other = one-off timer).
+- Chat body limits: max 10,000 chars (was 100,000), min 1 (send disabled while
+  blank), live "9,214 / 10,000" counter once past ~9,000.
+
 ## CRITICAL crash fix — ForegroundServiceDidNotStartInTime (definitive)
 - Repro: launch on Android 14 (Ulefone Armor 22). On unlock we started Tor; the
   service died with ForegroundServiceDidNotStartInTimeException at the point we

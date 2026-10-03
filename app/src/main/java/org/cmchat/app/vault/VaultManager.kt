@@ -56,17 +56,13 @@ class VaultManager(val crypto: CryptoManager, dir: File) {
 
     companion object {
         /**
-         * Accepts either a 6-digit numeric PIN or an alphanumeric passcode of 6+
-         * chars that includes at least one letter. Argon2id (cryptoPwHash) hashes
-         * the raw bytes, so any length/charset derives a valid key. A palindrome
-         * is always rejected so the reversed-input duress check stays unambiguous.
+         * Accepts any passcode of 6..128 characters (digits, letters and/or the
+         * keyboard symbols) that is not a palindrome. Argon2id (cryptoPwHash)
+         * hashes the raw bytes, so any length/charset derives a valid key; the
+         * passcode is treated as OPAQUE BYTES only and never interpreted. The
+         * palindrome rejection keeps the reversed-input duress check unambiguous.
          */
-        fun isValidNewPin(pin: String): Boolean {
-            if (pin == pin.reversed()) return false
-            val numeric6 = pin.length == 6 && pin.all { it.isDigit() }
-            val alphanumeric = pin.length >= 6 &&
-                pin.all { it.isLetterOrDigit() } && pin.any { it.isLetter() }
-            return numeric6 || alphanumeric
-        }
+        fun isValidNewPin(pin: String): Boolean =
+            pin.length in 6..128 && pin != pin.reversed()
     }
 }
