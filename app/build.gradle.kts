@@ -40,6 +40,20 @@ android {
         }
     }
 
+    // Per-ABI APK splits: one lean APK per architecture instead of one fat
+    // universal APK. Each split still bundles that ABI's native libs — libtor.so
+    // AND libgojni.so (the obfs4/snowflake pluggable transports) — so bridges
+    // keep working in every split. A universal APK is also produced as a
+    // fallback. x86_64 is built (emulator testing) but not published.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            isUniversalApk = true
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true

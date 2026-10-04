@@ -20,7 +20,25 @@ continue.
 - Release signing: not set up yet (release APK is unsigned). Stable-key
   signing via GitHub secrets is a later step; see "Signing TODO" below.
 
-## Left-anchored header · privacy-PIN digi-lock · rotation hot-loop (latest)
+## Per-ABI APK splits (latest)
+Commit `build: per-ABI APK splits (arm64 primary, arm32 fallback), keep PT libs
+per split`.
+- `app/build.gradle.kts`: `splits { abi { … include arm64-v8a, armeabi-v7a,
+  x86_64; isUniversalApk = true } }`. One lean APK per architecture + a universal
+  fallback. Verified each split carries its own `libtor.so` AND `libgojni.so`
+  (obfs4/snowflake) + libsodium — bridges intact per split.
+- Signed release sizes: **arm64-v8a 34.2 MB**, armeabi-v7a 31.7 MB,
+  x86_64 37.2 MB, universal 99.7 MB (down from the single 100 MB fat APK).
+- CI (`.github/workflows/build.yml`): builds debug + release splits; if no real
+  `KEYSTORE_BASE64` secret it generates an EPHEMERAL signing key so the release
+  APKs are v2-signed and installable (caveat: fresh key per run ⇒ uninstall to
+  move between builds until a stable key is configured). Publishes a GitHub
+  Release (`v0.1-build<run>`) with arm64 (recommended) + arm32 + universal; the
+  release notes lead with arm64 and the one-line guidance. x86_64 builds for
+  emulator testing but is NOT published. Debug artifact now uploads all per-ABI
+  debug APKs.
+
+## Left-anchored header · privacy-PIN digi-lock · rotation hot-loop
 Commit `ui: left-anchored compact header; privacy PIN digi-lock; fix rotation
 hot-loop + log spam`.
 - **Header:** Circle header rebuilt left-anchored and compact — logo + engine

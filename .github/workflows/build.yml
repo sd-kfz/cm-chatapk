@@ -5,6 +5,10 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+# Needed so the build can publish the signed APKs to a GitHub Release.
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -17,21 +21,43 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
 
-      # Decode the release keystore only if the repo secrets are set. Without
-      # them the release build is unsigned; nothing secret is stored in the repo.
+      # Decode the real release keystore if the repo secrets are set, and export
+      # the signing env for Gradle. Nothing secret is stored in the repo.
       - name: Decode signing keystore (if configured)
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KS_PW: ${{ secrets.KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KS_KEY_PW: ${{ secrets.KEY_PASSWORD }}
         if: ${{ env.KEYSTORE_BASE64 != '' }}
         run: |
           echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/cmchat.keystore"
-          echo "CMCHAT_KEYSTORE=$RUNNER_TEMP/cmchat.keystore" >> "$GITHUB_ENV"
+          {
+            echo "CMCHAT_KEYSTORE=$RUNNER_TEMP/cmchat.keystore"
+            echo "CMCHAT_KEYSTORE_PASSWORD=$KS_PW"
+            echo "CMCHAT_KEY_ALIAS=$KS_ALIAS"
+            echo "CMCHAT_KEY_PASSWORD=$KS_KEY_PW"
+          } >> "$GITHUB_ENV"
+
+      # If no real keystore is configured, generate an EPHEMERAL one so the
+      # release APKs are signed and therefore installable. NOTE: this key is new
+      # on every run, so upgrading in place needs an uninstall until the repo
+      # owner configures a stable KEYSTORE_BASE64 secret.
+      - name: Generate ephemeral signing key (if none configured)
+        if: ${{ env.CMCHAT_KEYSTORE == '' }}
+        run: |
+          keytool -genkeypair -v -keystore "$RUNNER_TEMP/cmchat-ephemeral.keystore" \
+            -storepass cmchat -keypass cmchat -alias cmchat \
+            -keyalg RSA -keysize 2048 -validity 3650 \
+            -dname "CN=CM-Chat, OU=dev, O=CM-Chat, C=US"
+          {
+            echo "CMCHAT_KEYSTORE=$RUNNER_TEMP/cmchat-ephemeral.keystore"
+            echo "CMCHAT_KEYSTORE_PASSWORD=cmchat"
+            echo "CMCHAT_KEY_ALIAS=cmchat"
+            echo "CMCHAT_KEY_PASSWORD=cmchat"
+          } >> "$GITHUB_ENV"
 
       - name: Run unit tests and build debug and release APKs
-        env:
-          CMCHAT_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          CMCHAT_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          CMCHAT_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           set +e
           ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease --no-daemon --stacktrace 2>&1 | tee gradle-build.log
@@ -45,18 +71,52 @@ jobs:
           name: gradle-build-log
           path: gradle-build.log
 
-      - name: Upload debug APK
+      # Debug APKs are now per-ABI (+ a universal one); upload them all.
+      - name: Upload debug APKs
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: cm-chat-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
-      - name: Upload release APK
+      - name: Upload release APKs
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: cm-chat-apk
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
+
+      # Publish the signed per-ABI release APKs to a GitHub Release, leading with
+      # arm64 (recommended). x86_64 is built above for emulator testing but is
+      # intentionally NOT published here.
+      - name: Publish APKs to Release
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v0.1-build${{ github.run_number }}"
+          R=app/build/outputs/apk/release
+          NOTES="$(cat <<'EOF'
+          **Recommended: `app-arm64-v8a-release.apk`**
+
+          Most phones = arm64. Only use arm32 if arm64 won't install.
+
+          - **arm64-v8a** — recommended for virtually all modern phones (~34 MB).
+          - **armeabi-v7a** — older 32-bit phones only (~32 MB).
+          - **universal** — fallback if you're unsure which to pick (larger, ~100 MB).
+
+          Bridges (obfs4/Snowflake) are included in every build for its architecture.
+
+          _These are signed with an ephemeral CI key (a fresh key each build), so to
+          move between builds you may need to uninstall first. A stable signing key
+          is set up by the repo owner._
+          EOF
+          )"
+          gh release create "$TAG" \
+            "$R"/app-arm64-v8a-release*.apk \
+            "$R"/app-armeabi-v7a-release*.apk \
+            "$R"/app-universal-release*.apk \
+            --title "CM-Chat $TAG" \
+            --notes "$NOTES"
