@@ -59,54 +59,55 @@ fun CircleScreen(
     val stayUnlocked by org.cmchat.app.settings.AppSettings.sessionWindowEnabled.collectAsState()
     val online = torStatus is TorStatus.Online
     Column(Modifier.fillMaxSize().background(CmBackground)) {
-        // Centered header: logo (coloured+glowing only when the engine is online),
-        // engine status line, minimise/exit pill, then the user's own status.
-        Box(Modifier.fillMaxWidth().padding(top = 14.dp, start = 16.dp, end = 16.dp)) {
-            // "+" knock, top-right.
-            Box(
-                Modifier.align(Alignment.TopEnd).size(38.dp).clip(CircleShape).background(CmOrange)
-                    .clickable { onKnock() },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("+", color = Color.White, fontFamily = Nunito,
-                    fontSize = 24.sp, fontWeight = FontWeight.Bold)
-            }
-            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                CmChatLogo(size = 34, active = online)
-                Spacer(Modifier.height(4.dp))
+        // Compact, LEFT-anchored header: logo + engine line on one row (knock "+"
+        // on the right), then the "Me:" status + minimise/exit pill, then the
+        // stay-unlocked tick. Tight spacing so more of the screen is for chats.
+        Column(Modifier.fillMaxWidth().padding(top = 8.dp, start = 16.dp, end = 16.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                CmChatLogo(size = 30, active = online)
+                Spacer(Modifier.width(10.dp))
                 EngineLine(torStatus)
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.weight(1f))
+                // "+" knock, top-right.
+                Box(
+                    Modifier.size(36.dp).clip(CircleShape).background(CmOrange)
+                        .clickable { onKnock() },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("+", color = Color.White, fontFamily = Nunito,
+                        fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                // My own status, prefixed "Me:". Tap to toggle Online/Invisible.
+                Text("Me:", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
+                Spacer(Modifier.width(6.dp))
+                Box(
+                    Modifier.clip(RoundedCornerShape(16.dp))
+                        .background(if (invisible) CmCard else CmGreen.copy(alpha = 0.2f))
+                        .clickable {
+                            val nowInvisible = !invisible
+                            org.cmchat.app.settings.AppSettings.invisibleMode.value = nowInvisible
+                            if (!nowInvisible) org.cmchat.app.chat.ChatStore.markMissedSeen()
+                        }
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                ) {
+                    Text(if (invisible) "Invisible" else "Online",
+                        color = if (invisible) CmTextDim else CmGreen,
+                        fontFamily = Nunito, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+                Spacer(Modifier.weight(1f))
                 MinimiseExitPill(onMinimise = onMinimise, onExit = onExit)
-                Spacer(Modifier.height(10.dp))
-                // My own status, prefixed "Me:" so it reads distinctly from the
-                // contacts' statuses on the left. Tap to toggle Online/Invisible.
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Me:", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
-                    Spacer(Modifier.width(6.dp))
-                    Box(
-                        Modifier.clip(RoundedCornerShape(16.dp))
-                            .background(if (invisible) CmCard else CmGreen.copy(alpha = 0.2f))
-                            .clickable {
-                                val nowInvisible = !invisible
-                                org.cmchat.app.settings.AppSettings.invisibleMode.value = nowInvisible
-                                if (!nowInvisible) org.cmchat.app.chat.ChatStore.markMissedSeen()
-                            }
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                    ) {
-                        Text(if (invisible) "Invisible" else "Online",
-                            color = if (invisible) CmTextDim else CmGreen,
-                            fontFamily = Nunito, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                StayUnlockedTick(stayUnlocked) {
-                    val now = !stayUnlocked
-                    org.cmchat.app.settings.AppSettings.sessionWindowEnabled.value = now
-                    onStayUnlocked(now)
-                }
+            }
+            Spacer(Modifier.height(6.dp))
+            StayUnlockedTick(stayUnlocked) {
+                val now = !stayUnlocked
+                org.cmchat.app.settings.AppSettings.sessionWindowEnabled.value = now
+                onStayUnlocked(now)
             }
         }
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(8.dp))
 
         for (k in knocks) {
             Column(

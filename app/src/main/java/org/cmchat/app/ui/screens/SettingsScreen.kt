@@ -13,6 +13,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import org.cmchat.app.chat.displayLabel
+import org.cmchat.app.vault.LoginThrottle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -36,19 +37,24 @@ fun SettingsScreen(
     privacyPinSet: Boolean = false,
     verifyPrivacyPin: (String) -> Boolean = { false },
     onCreatePrivacyPin: (String) -> Unit = {},
+    onRemovePrivacyPin: () -> Unit = {},
     onSessionWindow: (Boolean) -> Unit = {},
 ) {
     var textSize by remember { mutableStateOf(0f) }
     var privacyUnlocked by remember { mutableStateOf(false) }
-    var askPin by remember { mutableStateOf(false) }
+    var askMode by remember { mutableStateOf<PinMode?>(null) }
 
-    if (askPin) {
-        PinGateDialog(
-            create = !privacyPinSet,
+    askMode?.let { mode ->
+        PrivacyPinDialog(
+            mode = mode,
             verify = verifyPrivacyPin,
-            onCreate = onCreatePrivacyPin,
-            onPass = { privacyUnlocked = true; askPin = false },
-            onDismiss = { askPin = false },
+            onSetNew = onCreatePrivacyPin,
+            onRemove = { onRemovePrivacyPin(); privacyUnlocked = false },
+            onPass = {
+                if (mode == PinMode.UNLOCK || mode == PinMode.SET) privacyUnlocked = true
+                askMode = null
+            },
+            onDismiss = { askMode = null },
         )
     }
 
@@ -80,7 +86,8 @@ fun SettingsScreen(
             if (!privacyUnlocked) {
                 Setting(
                     if (privacyPinSet) "Unlock Privacy & Safety" else "Set a Privacy PIN (4-8 digits)",
-                    "tap", onClick = { askPin = true },
+                    if (privacyPinSet) "🔒 locked" else "set up",
+                    onClick = { askMode = if (privacyPinSet) PinMode.UNLOCK else PinMode.SET },
                 )
             } else {
                 Setting("Cerberus · idle auto-wipe", "90 min",
@@ -91,6 +98,10 @@ fun SettingsScreen(
                 ShredderRow()
                 DecoyGroup()
                 StatusDefaultRow()
+                Setting("Change Privacy PIN", onClick = { askMode = PinMode.CHANGE },
+                    hint = "Enter the current PIN, then set a new one.")
+                Setting("Remove Privacy PIN", onClick = { askMode = PinMode.REMOVE },
+                    hint = "Stop gating this section with a PIN.")
                 Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
                     .background(CmRed.copy(alpha = 0.15f)).clickable { onWipeEverything() }.padding(14.dp),
                     contentAlignment = Alignment.Center) {
@@ -167,40 +178,106 @@ private fun GroupHeader(title: String) {
         fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp, start = 4.dp))
 }
 
+/** Which flow the privacy-PIN lock is running. */
+enum class PinMode { UNLOCK, SET, CHANGE, REMOVE }
+
+/**
+ * A real digital-lock for the privacy PIN (not a plain text field):
+ *  - masked numeric entry;
+ *  - SET / CHANGE require enter + confirm, with a clear mismatch error;
+ *  - verifying the current PIN (UNLOCK / CHANGE / REMOVE) applies the same
+ *    escalating lockout as the login screen ([LoginThrottle]);
+ *  - distinct Set / Change / Remove actions.
+ */
 @Composable
-private fun PinGateDialog(
-    create: Boolean,
+private fun PrivacyPinDialog(
+    mode: PinMode,
     verify: (String) -> Boolean,
-    onCreate: (String) -> Unit,
+    onSetNew: (String) -> Unit,
+    onRemove: () -> Unit,
     onPass: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var pin by remember { mutableStateOf("") }
+    // phase: "current" (verify existing) -> "new" -> "confirm".
+    var phase by remember { mutableStateOf(if (mode == PinMode.SET) "new" else "current") }
+    var entry by remember { mutableStateOf("") }
+    var newPin by remember { mutableStateOf("") }
     var err by remember { mutableStateOf<String?>(null) }
+    var wrongCount by remember { mutableStateOf(0) }
+    var lockedFor by remember { mutableStateOf(0) }
+
+    LaunchedEffect(lockedFor) {
+        while (lockedFor > 0) { kotlinx.coroutines.delay(1000); lockedFor -= 1 }
+    }
+
+    fun submit() {
+        if (lockedFor > 0) return
+        val v = entry
+        when (phase) {
+            "current" -> {
+                if (verify(v)) {
+                    wrongCount = 0; entry = ""; err = null
+                    when (mode) {
+                        PinMode.UNLOCK -> onPass()
+                        PinMode.REMOVE -> { onRemove(); onPass() }
+                        PinMode.CHANGE -> phase = "new"
+                        PinMode.SET -> {}
+                    }
+                } else {
+                    wrongCount += 1
+                    lockedFor = LoginThrottle.delaySeconds(wrongCount)
+                    entry = ""; err = "Wrong PIN"
+                }
+            }
+            "new" -> {
+                if (v.length in 4..8) { newPin = v; entry = ""; err = null; phase = "confirm" }
+                else err = "Use 4 to 8 digits"
+            }
+            "confirm" -> {
+                if (v == newPin) { onSetNew(v); onPass() }
+                else { err = "PINs didn't match — start again"; entry = ""; newPin = ""; phase = "new" }
+            }
+        }
+    }
+
+    val title = when {
+        phase == "current" && mode == PinMode.UNLOCK -> "Unlock Privacy & Safety"
+        phase == "current" && mode == PinMode.CHANGE -> "Enter current PIN"
+        phase == "current" && mode == PinMode.REMOVE -> "Enter PIN to remove"
+        phase == "new" -> "Choose a new PIN (4-8 digits)"
+        phase == "confirm" -> "Re-enter the new PIN"
+        else -> "Privacy PIN"
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (create) "Set a Privacy PIN (4-8 digits)" else "Enter Privacy PIN") },
+        title = { Text(title) },
         text = {
             Column {
                 OutlinedTextField(
-                    // Digits only; 4-8 enforced on confirm.
-                    value = pin, onValueChange = { v -> pin = v.filter { it.isDigit() }.take(8); err = null },
+                    value = entry,
+                    onValueChange = { v -> if (lockedFor <= 0) { entry = v.filter { it.isDigit() }.take(8); err = null } },
                     singleLine = true,
+                    enabled = lockedFor <= 0,
                     visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                         keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword),
                 )
-                err?.let { Text(it, color = CmRed, fontFamily = Nunito, fontSize = 12.sp) }
+                if (lockedFor > 0) {
+                    Text("Too many tries — wait " + LoginThrottle.format(lockedFor),
+                        color = CmRed, fontFamily = Nunito, fontSize = 12.sp)
+                } else err?.let {
+                    Text(it, color = CmRed, fontFamily = Nunito, fontSize = 12.sp)
+                }
             }
         },
         confirmButton = {
-            TextButton(onClick = {
-                if (create) {
-                    if (pin.length in 4..8) { onCreate(pin); onPass() } else err = "Use 4 to 8 digits"
-                } else {
-                    if (verify(pin)) onPass() else err = "Wrong PIN"
-                }
-            }) { Text(if (create) "Set" else "Unlock") }
+            val label = when (phase) {
+                "current" -> if (mode == PinMode.REMOVE) "Remove" else "Unlock"
+                "new" -> "Next"
+                else -> if (mode == PinMode.CHANGE) "Change" else "Set"
+            }
+            TextButton(onClick = { submit() }, enabled = lockedFor <= 0) { Text(label) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )

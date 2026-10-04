@@ -308,6 +308,14 @@ fun AppNav() {
                     data = updated
                 }
             },
+            onRemovePrivacyPin = {
+                val p = pin; val cur = data
+                if (p != null && cur != null) {
+                    val updated = cur.copy(settings = cur.settings.copy(privacyPin = null))
+                    org.cmchat.app.vault.VaultIO.save(manager, p, updated)
+                    data = updated
+                }
+            },
             onSessionWindow = { enabled ->
                 val p = pin; val cur = data
                 if (p != null && cur != null) {

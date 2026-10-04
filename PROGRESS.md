@@ -20,7 +20,29 @@ continue.
 - Release signing: not set up yet (release APK is unsigned). Stable-key
   signing via GitHub secrets is a later step; see "Signing TODO" below.
 
-## Bridges (obfs4/Snowflake) + QR contact exchange (latest)
+## Left-anchored header · privacy-PIN digi-lock · rotation hot-loop (latest)
+Commit `ui: left-anchored compact header; privacy PIN digi-lock; fix rotation
+hot-loop + log spam`.
+- **Header:** Circle header rebuilt left-anchored and compact — logo + engine
+  line on one row (knock "+" far right), then "Me:" status + minimise/exit pill,
+  then the stay-unlocked tick; top padding 14→8dp and the tall centred stack
+  removed, freeing vertical space. `ui/screens/CircleScreen.kt`.
+- **Privacy PIN = real digital lock:** replaced the plain field with
+  `PrivacyPinDialog` (`SettingsScreen.kt`). Masked numeric entry; SET and CHANGE
+  require enter + confirm with a mismatch error; verifying the current PIN
+  (UNLOCK/CHANGE/REMOVE) uses the same escalating `LoginThrottle` lockout as
+  login; distinct Set / Change / Remove actions; the section still only opens
+  after the confirm-lock passes. Added `onRemovePrivacyPin` through AppNav.
+- **Rotation hot-loop:** the only looping caller was the debug Self-Test's
+  lifecycle-mash (`SelfTest.mashLifecycle` calls `requestNewAddress` 100× with no
+  delay); normal use only triggers it from the "Request new address" button.
+  Hardened `ServerController.requestNewAddress` to claim the 60s debounce window
+  SYNCHRONOUSLY at the gate (so a burst collapses to ONE rotation instead of
+  launching a coroutine per call), reset the window on a genuine failure so a
+  real retry still works, and collapse debounced logging to one line every 2s
+  ("rotation debounced x<n>") instead of one line per call.
+
+## Bridges (obfs4/Snowflake) + QR contact exchange
 Commit `feat: pluggable-transport bridges (obfs4/snowflake), QR contact
 exchange, honest stealth wording`.
 - **Pluggable transports:** added `com.netzarchitekten:IPtProxy:5.5.1` (bundles

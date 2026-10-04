@@ -51,6 +51,11 @@ object ServerController {
     /** Debounce rotation so it can never fire in a tight loop. */
     @Volatile private var lastRotateMs = 0L
     private const val MIN_ROTATE_INTERVAL_MS = 60_000L
+    /** Collapse debounced-rotation logging so a tight loop can't flood the log. */
+    private val rotateLock = Any()
+    private var debouncedCount = 0L
+    private var lastDebounceLogMs = 0L
+    private const val DEBOUNCE_LOG_INTERVAL_MS = 2_000L
 
     // ---- incoming-connection DoS limits ------------------------------------
     /** Max simultaneous incoming onion connections; extras are dropped. */
@@ -149,10 +154,27 @@ object ServerController {
      * address-update to contacts. Manual (triggered from My Server).
      */
     fun requestNewAddress(onNew: (OnionPublish) -> Unit) {
-        // Debounce: at most one rotation per interval, never in a tight loop.
+        // Debounce at the GATE: claim the 60s window SYNCHRONOUSLY, so a burst of
+        // calls (rapid taps, or the adversarial self-test) collapses to ONE real
+        // rotation instead of launching a coroutine per call. Debounced calls are
+        // only counted here and logged at most once per DEBOUNCE_LOG_INTERVAL_MS
+        // as "rotation debounced x<n>", so a tight loop can never flood the log.
         val now = System.currentTimeMillis()
-        if (now - lastRotateMs < MIN_ROTATE_INTERVAL_MS) {
-            org.cmchat.app.diag.Diag.i("onion", "rotation debounced"); return
+        synchronized(rotateLock) {
+            if (now - lastRotateMs < MIN_ROTATE_INTERVAL_MS) {
+                debouncedCount++
+                if (now - lastDebounceLogMs >= DEBOUNCE_LOG_INTERVAL_MS) {
+                    lastDebounceLogMs = now
+                    org.cmchat.app.diag.Diag.i("onion", "rotation debounced x$debouncedCount")
+                }
+                return
+            }
+            // Passing the gate: claim the window now, and flush any pending count.
+            lastRotateMs = now
+            if (debouncedCount > 0) {
+                org.cmchat.app.diag.Diag.i("onion", "rotation debounced x$debouncedCount (suppressed)")
+                debouncedCount = 0
+            }
         }
         scope.launch {
             // Single-flight: skip if a publish/rotate is already running.
@@ -160,11 +182,12 @@ object ServerController {
                 org.cmchat.app.diag.Diag.i("onion", "rotation skipped (publish in flight)"); return@launch
             }
             try {
-                lastRotateMs = System.currentTimeMillis()
                 val control = TorService.controlConnection() ?: run {
+                    lastRotateMs = 0L  // genuine failure — allow an immediate retry
                     _status.value = ServerStatus.Failed("Tor not connected"); return@launch
                 }
                 val server = serverSocket ?: run {
+                    lastRotateMs = 0L
                     _status.value = ServerStatus.Failed("server not running"); return@launch
                 }
                 val faceName = (status.value as? ServerStatus.Online)?.faceName ?: ""
@@ -188,6 +211,7 @@ object ServerController {
                         runCatching { TorService.controlConnection()?.delOnion(oldId) }
                     }
                 }.onFailure {
+                    lastRotateMs = 0L  // genuine failure — allow an immediate retry
                     org.cmchat.app.diag.Diag.e("onion", "address rotation failed", it)
                 }
             } finally {
