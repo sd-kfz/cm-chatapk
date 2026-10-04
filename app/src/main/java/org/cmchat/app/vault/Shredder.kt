@@ -30,6 +30,9 @@ object Shredder {
                 add(File(dataDir, "databases"))
                 add(File(dataDir, "shared_prefs"))
             }
+            // tor-android's working dir (cached consensus/descriptors/state/cookie
+            // + the bridge torrc). getDir("TorService") = <dataDir>/app_TorService.
+            runCatching { ctx.getDir("TorService", Context.MODE_PRIVATE) }.getOrNull()?.let { add(it) }
         }
         targets.forEach { shredContents(it) }
     }

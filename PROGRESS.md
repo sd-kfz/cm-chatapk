@@ -20,7 +20,22 @@ continue.
 - Release signing: not set up yet (release APK is unsigned). Stable-key
   signing via GitHub secrets is a later step; see "Signing TODO" below.
 
-## Resilience + traffic cloaking + onboarding (latest)
+## Disk audit + Tor-cache wipe (latest)
+Commit `fix: wipe tor-android on-disk cache (consensus/descriptors/state) on
+exit + Shredder/Wipe`.
+- Audit finding: tor-android's DataDirectory (`getDir("TorService")` =
+  `/data/data/<pkg>/app_TorService/`, holding cached consensus/descriptors,
+  state, control cookie + our bridge torrc) persisted after exit and was NOT
+  covered by Shredder. No messages/keys/onion-key are there (onion is an
+  in-memory ADD_ONION; onion key only in the encrypted vault), but it revealed
+  "Tor was used."
+- Fix: `tor/TorFiles.kt` wipes that dir; called from `TorService.teardown()`
+  (every Exit/stop, async so onDestroy doesn't block; reconnects use restartTor
+  and keep the cache mid-session), from `Shredder.shredAll` (duress), and from
+  Wipe Everything. Everything else audited clean: no SharedPreferences anywhere,
+  vault encrypted, messages/logs/keys RAM-only, crash file debug-only + scrubbed.
+
+## Resilience + traffic cloaking + onboarding
 Commit `feat: traffic padding+jitter+cover traffic, network-change
 auto-reconnect, onboarding wizard + help, battery/doze robustness, i18n-ready
 strings, polish`.

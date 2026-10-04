@@ -301,6 +301,11 @@ class TorService : Service() {
         runCatching { stopService(Intent(this, GpTorService::class.java)) }
         gpService = null
         _status.value = TorStatus.Offline
+        // Anti-forensics: wipe tor-android's on-disk cache (consensus/descriptors/
+        // state/cookie + our bridge torrc) so a stopped engine leaves no trace that
+        // Tor was used. Reconnects use restartTor() (not teardown) so a live
+        // session keeps its cache. Async so onDestroy never blocks on disk I/O.
+        runCatching { TorFiles.wipeAsync(applicationContext) }
         if (instance === this) instance = null
     }
 

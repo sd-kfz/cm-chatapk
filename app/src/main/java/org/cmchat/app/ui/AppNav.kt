@@ -116,6 +116,7 @@ fun AppNav() {
                     org.cmchat.app.diag.CrashCatcher.delete(context)
                     runCatching { context.cacheDir.deleteRecursively() }
                     runCatching { context.codeCacheDir.deleteRecursively() }
+                    runCatching { org.cmchat.app.tor.TorFiles.wipe(context) }
                     runCatching {
                         context.startActivity(
                             Intent(Intent.ACTION_DELETE, Uri.parse("package:${context.packageName}"))
