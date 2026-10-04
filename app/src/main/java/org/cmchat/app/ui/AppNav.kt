@@ -222,9 +222,12 @@ fun AppNav() {
             val threads by ChatStore.threads.collectAsState()
             val real = data?.contacts?.takeIf { it.isNotEmpty() }
                 ?.map {
+                    val t = it.cmId?.let { id -> threads[id] }
                     Contact(it.name, Color(it.colorArgb),
-                        unread = it.cmId?.let { id -> threads[id]?.unread } ?: false,
-                        cmId = it.cmId)
+                        unread = t?.unread ?: false,
+                        cmId = it.cmId,
+                        lastSeenMs = t?.peerLastSeen,
+                        missed = t?.messages?.any { m -> m.missed } == true)
                 }
                 ?: emptyList()   // real empty state (no fake sample contacts)
             // Decoy chat: a fake contact; tapping it silently Exits + wipes RAM.
@@ -237,6 +240,7 @@ fun AppNav() {
             } else real
             CircleScreen(
                 contacts = contacts,
+                myTag = data?.faces?.firstOrNull()?.name ?: "—",
                 onOpenChat = {
                     if (it.cmId == DECOY_CM_ID) org.cmchat.app.LifecycleController.exit(context)
                     else nav = Nav.Chat(it.name, it.cmId)

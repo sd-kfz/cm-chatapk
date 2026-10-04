@@ -20,7 +20,31 @@ continue.
 - Release signing: not set up yet (release APK is unsigned). Stable-key
   signing via GitHub secrets is a later step; see "Signing TODO" below.
 
-## Disk audit + Tor-cache wipe (latest)
+## Front screen rebuilt in HUD style (latest)
+Commit `ui: rebuild front screen in HUD style — crisp blue/red wordmark, centred
+Me status, online/offline states`.
+- `ui/screens/CircleScreen.kt` rebuilt to the server-panel HUD: faint cyan grid
+  + red dashed radar arc background, corner-tick card frames, red-LED monospace
+  clock (time + date, top-right), purple reticle dot, cyan section header
+  "01 | ● CONTACTS" with "N recent" meta, purple-gradient bottom button, teal
+  glowing status dots.
+- Crisp two-colour wordmark: "CM-C" #35c6f2 + "hat" #ff3b3b, weight 800,
+  letter-spacing 0.5, TIGHT glow only (single 3px shadow per span, solid fill —
+  no wide fuzzy bloom). LOGIN screen logo left unchanged.
+- Centred status block (focal): "Engine: <state>" small (Online = teal) with
+  "Me: Invisible" larger beneath (Invisible = cyan), corner-ticked.
+- Online/offline states: offline → grey wordmark (no glow), LED clock dimmed to
+  "--:--:--", faint engine label, dimmed contact rows, bottom button becomes
+  "Reconnect" (TorService.retry); online → "+ Add contact".
+- Contact rows: avatar initial + name + sub-line (teal dot if last-seen recent,
+  dim otherwise; "Missed message" red italic + orange unread dot). Honest note:
+  there is no per-contact presence in the protocol, so the dot/"N recent" use
+  last-seen recency (our only signal), not a fabricated online state.
+- Preserved: invisible toggle, knock accept/decline cards, tools dock,
+  stay-unlocked tick, Settings, minimise/exit pill (same behaviour). All text is
+  literal/short and translation-ready; `sp` sizing keeps it responsive.
+
+## Disk audit + Tor-cache wipe
 Commit `fix: wipe tor-android on-disk cache (consensus/descriptors/state) on
 exit + Shredder/Wipe`.
 - Audit finding: tor-android's DataDirectory (`getDir("TorService")` =
