@@ -74,7 +74,8 @@ fun SettingsScreen(
 
             GroupHeader("Tags")
             Setting("Tag (Identity)")
-            Setting("My CMC-ID / QR", onClick = onOpenMyId)
+            Setting("My CMC-ID / QR", onClick = onOpenMyId,
+                hint = "Your address + QR for friends to add you.")
 
             GroupHeader("Chats")
             GeneralTimerRow()
@@ -148,7 +149,8 @@ fun SettingsScreen(
                 hint = "Choose the app's language.")
             Setting("How to use (A–Z)", onClick = onHelp,
                 hint = "Plain-language guide to everything in the app.")
-            Setting("About / Version", onClick = onAbout)
+            Setting("About / Version", onClick = onAbout,
+                hint = "App version and credits.")
             Spacer(Modifier.height(4.dp))
         }
 

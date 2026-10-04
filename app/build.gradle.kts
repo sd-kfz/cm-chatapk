@@ -24,14 +24,17 @@ android {
         }
     }
 
-    // Optional stable-key signing: active only when CI (or a local build) sets
-    // CMCHAT_KEYSTORE to an existing keystore path. Nothing secret is committed;
-    // without it, release builds are simply unsigned.
+    // Stable-key signing: active only when CI (or a local build) sets
+    // CMCHAT_KEYSTORE to an existing keystore path. Nothing secret is committed.
+    // Used for BOTH debug and release so the published debug APKs carry a STABLE
+    // signature across CI runs — they install/upgrade in place (same signer as
+    // earlier release builds), fixing "App not installed". Without the key, debug
+    // falls back to Android's auto debug key and release is unsigned.
     val ksPath = System.getenv("CMCHAT_KEYSTORE")
     val hasKeystore = ksPath != null && file(ksPath).exists()
     signingConfigs {
         if (hasKeystore) {
-            create("release") {
+            create("stable") {
                 storeFile = file(ksPath!!)
                 storePassword = System.getenv("CMCHAT_KEYSTORE_PASSWORD")
                 keyAlias = System.getenv("CMCHAT_KEY_ALIAS")
@@ -55,6 +58,12 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Stable signer (when configured) so published debug APKs upgrade in
+            // place. FLAG_SECURE is disabled in debug (see MainActivity) so these
+            // test builds can be screenshotted.
+            if (hasKeystore) signingConfig = signingConfigs.getByName("stable")
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
@@ -62,7 +71,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
-            if (hasKeystore) signingConfig = signingConfigs.getByName("release")
+            if (hasKeystore) signingConfig = signingConfigs.getByName("stable")
         }
     }
 

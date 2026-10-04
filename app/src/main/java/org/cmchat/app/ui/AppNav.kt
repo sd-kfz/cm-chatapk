@@ -29,6 +29,18 @@ import org.cmchat.app.vault.VaultData
 /** Sentinel id for the decoy chat row (never a real contact). */
 private const val DECOY_CM_ID = "__decoy__"
 
+/**
+ * Unwrap the Activity from a Compose LocalContext. LocalContext.current is often
+ * a ContextWrapper (ContextThemeWrapper), so a direct `as? Activity` cast fails
+ * and silently no-ops — which is why Minimise/Exit didn't work. Walk the base
+ * context chain to find the real Activity.
+ */
+private tailrec fun findActivity(c: android.content.Context?): android.app.Activity? = when (c) {
+    is android.app.Activity -> c
+    is android.content.ContextWrapper -> findActivity(c.baseContext)
+    else -> null
+}
+
 private sealed class Nav {
     object Lock : Nav()
     object Circle : Nav()
@@ -240,26 +252,21 @@ fun AppNav() {
             } else real
             CircleScreen(
                 contacts = contacts,
-                myTag = data?.faces?.firstOrNull()?.name ?: "—",
                 onOpenChat = {
-                    if (it.cmId == DECOY_CM_ID) org.cmchat.app.LifecycleController.exit(context)
-                    else nav = Nav.Chat(it.name, it.cmId)
+                    if (it.cmId == DECOY_CM_ID) {
+                        // Decoy: instantly wipe ALL conversations (RAM + best-effort
+                        // remote burn), then open the clean decoy chat.
+                        MessageService.burnAll()
+                        nav = Nav.Chat(it.name, DECOY_CM_ID)
+                    } else nav = Nav.Chat(it.name, it.cmId)
                 },
                 onOpenSettings = { nav = Nav.Settings },
                 onKnock = { nav = Nav.Knock },
                 onOpenTool = { nav = Nav.Tool(it) },
-                onMinimise = { (context as? android.app.Activity)?.moveTaskToBack(true) },
+                onMinimise = { findActivity(context)?.moveTaskToBack(true) },
                 onExit = {
                     org.cmchat.app.LifecycleController.exit(context)
-                    (context as? android.app.Activity)?.finish()
-                },
-                onStayUnlocked = { enabled ->
-                    val p = pin; val cur = data
-                    if (p != null && cur != null) {
-                        val updated = cur.copy(settings = cur.settings.copy(sessionWindow = enabled))
-                        org.cmchat.app.vault.VaultIO.save(manager, p, updated)
-                        data = updated
-                    }
+                    findActivity(context)?.finish()
                 },
             )
         }

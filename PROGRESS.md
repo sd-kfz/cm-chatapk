@@ -20,7 +20,31 @@ continue.
 - Release signing: not set up yet (release APK is unsigned). Stable-key
   signing via GitHub secrets is a later step; see "Signing TODO" below.
 
-## Front screen rebuilt in HUD style (latest)
+## v1.1 — simple Surespot front screen + fixes (latest)
+Commit `v1.1: simple Surespot front screen, working minimise/exit, decoy wipes
+all, two debug APKs, debug screenshots, feature audit, safe cleanup`.
+- **Front screen simplified** (`CircleScreen.kt`): plain top bar (flower + crisp
+  blue/red "CM-Chat" wordmark, grey+no-glow offline) with ⚙/–/⏻ icon buttons;
+  one thin status line (Engine left / Me right); clean contact rows (avatar
+  initial + name + sub-line + dot); purple "+" FAB bottom-right. Removed the HUD
+  grid/radar/LED-clock/reticle/corner-ticks from this screen.
+- **Minimise/Exit fixed**: the real bug was `LocalContext` being a ContextWrapper,
+  so `as? Activity` returned null and the taps no-opped. Added `findActivity()`
+  unwrap in AppNav → minimise = `moveTaskToBack`, exit = `LifecycleController.exit`
+  + `finish()`.
+- **Decoy = wipe all**: tapping the decoy calls `MessageService.burnAll()` —
+  clears ALL conversations in RAM immediately + best-effort ERASE_CHAT to every
+  contact — then opens the clean decoy chat.
+- **Downloads**: CI now publishes ONLY `CM-Chat-arm64-debug.apk` +
+  `CM-Chat-arm32-debug.apk`; debug signed with the stable key (same signer as
+  earlier release builds → in-place upgrades). Notes tell users to uninstall an
+  older copy if install still fails.
+- **Screenshots**: FLAG_SECURE now release-only (debug builds screenshottable).
+- **Audit**: lock keyboard got a 0-9 row + "#" digit-pad toggle; honest
+  remote-burn wording added to Help; two missing setting hints filled. All other
+  audited features verified present (see report).
+
+## Front screen rebuilt in HUD style
 Commit `ui: rebuild front screen in HUD style — crisp blue/red wordmark, centred
 Me status, online/offline states`.
 - `ui/screens/CircleScreen.kt` rebuilt to the server-panel HUD: faint cyan grid

@@ -14,8 +14,12 @@ class MainActivity : ComponentActivity() {
         // Application context for background notifications (buzz listener).
         org.cmchat.app.settings.AppSettings.appContext = applicationContext
         org.cmchat.app.diag.CrashCatcher.install(this)
-        // No screenshots, blank in recents, no screen recording.
-        window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
+        // No screenshots, blank in recents, no screen recording — ALWAYS in
+        // release. In debug builds FLAG_SECURE is left OFF so test builds can be
+        // screenshotted; a shipped release build is never screenshottable.
+        if (!BuildConfig.DEBUG) {
+            window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
+        }
         setContent {
             CmChatTheme {
                 AppNav()

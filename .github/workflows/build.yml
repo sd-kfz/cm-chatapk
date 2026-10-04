@@ -88,35 +88,32 @@ jobs:
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
-      # Publish the signed per-ABI release APKs to a GitHub Release, leading with
-      # arm64 (recommended). x86_64 is built above for emulator testing but is
-      # intentionally NOT published here.
-      - name: Publish APKs to Release
+      # Publish ONLY the two debug APKs (arm64 + arm32), renamed. Debug builds are
+      # signed with the project's stable key (see build.gradle.kts) so they
+      # install/upgrade in place. Release / universal / x86_64 are built for CI
+      # coverage but NOT attached here.
+      - name: Publish debug APKs to Release
         if: success()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v0.1-build${{ github.run_number }}"
-          R=app/build/outputs/apk/release
+          D=app/build/outputs/apk/debug
+          cp "$D/app-arm64-v8a-debug.apk"   "$RUNNER_TEMP/CM-Chat-arm64-debug.apk"
+          cp "$D/app-armeabi-v7a-debug.apk" "$RUNNER_TEMP/CM-Chat-arm32-debug.apk"
           NOTES="$(cat <<'EOF'
-          **Recommended: `app-arm64-v8a-release.apk`**
+          **Download the ONE file for your phone:**
 
-          Most phones = arm64. Only use arm32 if arm64 won't install.
+          - **CM-Chat-arm64-debug.apk** — Modern phones (Ulefone Armor 22, Samsung, Moto G5s, basically any phone from the last several years).
+          - **CM-Chat-arm32-debug.apk** — Older 32-bit phones only.
 
-          - **arm64-v8a** — recommended for virtually all modern phones (~34 MB).
-          - **armeabi-v7a** — older 32-bit phones only (~32 MB).
-          - **universal** — fallback if you're unsure which to pick (larger, ~100 MB).
+          These are debug test builds signed with a stable key, so they install and upgrade in place.
 
-          Bridges (obfs4/Snowflake) are included in every build for its architecture.
-
-          _These are signed with an ephemeral CI key (a fresh key each build), so to
-          move between builds you may need to uninstall first. A stable signing key
-          is set up by the repo owner._
+          If install still fails, uninstall any older CM-Chat first.
           EOF
           )"
           gh release create "$TAG" \
-            "$R"/app-arm64-v8a-release*.apk \
-            "$R"/app-armeabi-v7a-release*.apk \
-            "$R"/app-universal-release*.apk \
+            "$RUNNER_TEMP/CM-Chat-arm64-debug.apk" \
+            "$RUNNER_TEMP/CM-Chat-arm32-debug.apk" \
             --title "CM-Chat $TAG" \
             --notes "$NOTES"

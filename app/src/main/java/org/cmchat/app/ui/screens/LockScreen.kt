@@ -314,7 +314,13 @@ private fun LetterKeyboard(
         }
     }
 
+    val digits = "1234567890".map { it.toString() }
+
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        // Dedicated 0-9 row so digits are reachable without leaving the letters.
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            digits.forEach { d -> Box(Modifier.weight(1f)) { key(d, { onChar(d) }) } }
+        }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             symbols.forEach { s -> Box(Modifier.weight(1f)) { key(s, { onChar(s) }) } }
         }
@@ -340,7 +346,8 @@ private fun LetterKeyboard(
             row4mid.forEach { c ->
                 Box(Modifier.weight(1f)) { key(if (upper) c.uppercase() else c, { onChar(c) }) }
             }
-            Box(Modifier.weight(1f)) { key("123", onToDigits, fg = CmBlue) }
+            // "#" returns to the digit pad (per spec).
+            Box(Modifier.weight(1f)) { key("#", onToDigits, fg = CmBlue) }
             Box(Modifier.weight(1.5f)) { key("⌫", onBackspace) }
         }
     }

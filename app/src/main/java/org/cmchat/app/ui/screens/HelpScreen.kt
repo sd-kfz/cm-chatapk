@@ -49,6 +49,9 @@ fun HelpScreen(onBack: () -> Unit) {
                 "shown when you go Online. Senders can't tell.")
             Entry("Messages vanish", "Each message can self-destruct after it's seen — pick a timer under \"Single " +
                 "Message\" in a chat. There are no delivery or read receipts, ever.")
+            Entry("Erase a chat (remote burn)", "\"Erase\" clears the conversation on your phone instantly and asks " +
+                "the other phone to erase it too. The remote wipe is best-effort: it only works if they're online on " +
+                "the real app and can't be guaranteed. The decoy chat erases ALL conversations at once the same way.")
             Entry("PIN (very important)", "Your PIN is the only key. There is NO reset and NO recovery — forget it " +
                 "and your data is gone. Keep it safe.")
             Entry("QR codes", "Everything is on-device. Showing or scanning a QR never goes through another app, and " +

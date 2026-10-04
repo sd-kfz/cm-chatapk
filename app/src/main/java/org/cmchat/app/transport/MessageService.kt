@@ -208,6 +208,24 @@ object MessageService {
     }
 
     /**
+     * Decoy / panic: INSTANTLY erase every conversation locally (RAM cleared
+     * immediately — not hidden) and fire the best-effort remote burn (ERASE_CHAT)
+     * to every known contact. Same effect as the per-chat Erase button applied to
+     * all chats at once. Remote burn only lands if the peer is online on the real
+     * app; it is never guaranteed.
+     */
+    fun burnAll() {
+        val c = crypto; val sec = mySec
+        val peers = contacts.values.toList()
+        // Clear local RAM first so the wipe is immediate even if sends are slow.
+        ChatStore.clearAll()
+        if (c == null || sec == null) return
+        peers.forEach { peer ->
+            scope.launch { runCatching { sendBox(c, sec, peer, FrameType.ERASE_CHAT, ByteArray(0)) } }
+        }
+    }
+
+    /**
      * Tell every contact my new CMC-ID after rotating my onion. Authenticated by
      * crypto_box from my identity key (only I can produce it) — the "signed"
      * address-update. Contacts auto-relink to the new onion.
