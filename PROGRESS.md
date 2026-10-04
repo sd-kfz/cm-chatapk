@@ -20,7 +20,31 @@ continue.
 - Release signing: not set up yet (release APK is unsigned). Stable-key
   signing via GitHub secrets is a later step; see "Signing TODO" below.
 
-## v1.1 — simple Surespot front screen + fixes (latest)
+## Replay protection + wire version; forward secrecy assessed (latest)
+Commit `security: replay protection + wire version bump; assess forward secrecy
+(flagged — needs a handshake layer, not shipped)`.
+- **Assessment:** messages were sealed with `crypto_box` using the STATIC
+  long-term identity keys directly (same X25519 shared secret forever) → no
+  ephemeral/session keys, NO forward secrecy, no replay protection.
+- **Wire version (v2):** every frame now carries
+  `[ver][type][sessionId(8)][seq(8)][payload]` inside the encrypted+padded blob
+  (`MessageService.wrap/unwrap`). An authenticated frame from a different version
+  sets `versionMismatch` → the front screen shows "update both apps". Both phones
+  must run this build.
+- **Replay protection:** `transport/ReplayGuard.kt` — per-(contact,session)
+  monotonic seq + 64-wide sliding window; duplicates / out-of-window frames are
+  rejected and the connection dropped, logged redacted in the Connection
+  diagnostic. SessionId resets per app-run so a reboot isn't a false replay.
+  Tests: `ReplayGuardTest` (in-order/dup/old/out-of-order/sessions),
+  `BoxAeadTest` (tampered ciphertext fails auth).
+- **Forward secrecy: FLAGGED, not shipped.** True ephemeral-ephemeral FS needs a
+  stateful handshake/prekey layer; bolting it onto the connectionless, RAM-only,
+  fire-and-forget transport is a deep, security-critical change that can't be
+  two-phone-verified here. Per the "don't ship a fragile ratchet / flag if
+  unsure" rule it's deferred with a concrete design (see report), not faked with
+  a static-seeded ratchet.
+
+## v1.1 — simple Surespot front screen + fixes
 Commit `v1.1: simple Surespot front screen, working minimise/exit, decoy wipes
 all, two debug APKs, debug screenshots, feature audit, safe cleanup`.
 - **Front screen simplified** (`CircleScreen.kt`): plain top bar (flower + crisp

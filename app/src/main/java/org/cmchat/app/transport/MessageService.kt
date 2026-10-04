@@ -69,6 +69,23 @@ object MessageService {
     /** Per-contact post-auth rate limit (drop a contact that floods us). */
     private val contactRate = RateLimiter(burst = 20, refillPerSec = 5.0)
 
+    /**
+     * Wire protocol version. Bumped whenever the framing/crypto changes so two
+     * peers on different builds detect the mismatch instead of failing silently.
+     * v2 = versioned header + replay counter (was unversioned static crypto_box).
+     */
+    const val WIRE_VERSION = 2
+
+    /** Random per-app-run id + monotonic counter -> anti-replay sequence space. */
+    @Volatile
+    private var sessionId: ByteArray = java.security.SecureRandom().generateSeed(8)
+    private val sendSeq = java.util.concurrent.atomic.AtomicLong(0)
+    private val replayGuard = ReplayGuard()
+
+    /** Set true when an authenticated frame from a DIFFERENT wire version arrives;
+     * the UI shows "Update both apps to the same version." */
+    val versionMismatch = MutableStateFlow(false)
+
     /** Cap pending knock requests so a knock flood can't grow RAM without bound. */
     private const val MAX_PENDING_KNOCKS = 20
 
@@ -113,7 +130,7 @@ object MessageService {
         if (c == null || myId == null || target == null) { onResult(false); return }
         scope.launch {
             val ok = runCatching {
-                val inner = framed(FrameType.KNOCK,
+                val inner = wrap(FrameType.KNOCK,
                     Messages.json.encodeToString(KnockPayload.serializer(), KnockPayload(myName, myId)).toByteArray())
                 sendRaw(target, c.sealedSeal(FramePad.pad(inner), target.identityPubKeyHex))
                 true
@@ -304,8 +321,18 @@ object MessageService {
                     org.cmchat.app.diag.ConnDiag.inc("knock padding malformed → dropped")
                     org.cmchat.app.diag.Diag.droppedFrame(); return
                 }
+                val p = unwrap(inner) ?: run {
+                    org.cmchat.app.diag.ConnDiag.inc("knock header malformed → dropped")
+                    org.cmchat.app.diag.Diag.droppedFrame(); return
+                }
+                if (p.version != WIRE_VERSION) {
+                    versionMismatch.value = true
+                    org.cmchat.app.diag.ConnDiag.inc("wire version mismatch (v${p.version}) → dropped")
+                    org.cmchat.app.diag.Diag.droppedFrame(); return
+                }
+                val type = p.type ?: run { org.cmchat.app.diag.Diag.droppedFrame(); return }
                 org.cmchat.app.diag.ConnDiag.inc("opened as KNOCK (anonymous sealed box)")
-                dispatchAnonymous(inner); return
+                dispatchAnonymous(type, p.body); return
             }
             // 2) crypto_box from a known contact: try each contact's key.
             for ((cmId, peer) in contacts) {
@@ -319,9 +346,24 @@ object MessageService {
                     org.cmchat.app.diag.ConnDiag.inc("padding malformed → dropped")
                     org.cmchat.app.diag.Diag.droppedFrame(); return
                 }
+                val p = unwrap(inner) ?: run {
+                    org.cmchat.app.diag.ConnDiag.inc("header malformed → dropped")
+                    org.cmchat.app.diag.Diag.droppedFrame(); return
+                }
+                if (p.version != WIRE_VERSION) {
+                    versionMismatch.value = true
+                    org.cmchat.app.diag.ConnDiag.inc("wire version mismatch (v${p.version}) → dropped")
+                    org.cmchat.app.diag.Diag.droppedFrame(); return
+                }
+                val type = p.type ?: run { org.cmchat.app.diag.Diag.droppedFrame(); return }
+                // Replay protection: reject duplicate / out-of-window sequence.
+                if (!replayGuard.check("$cmId:${p.sidHex}", p.seq)) {
+                    org.cmchat.app.diag.ConnDiag.inc("replay/old frame rejected → dropped")
+                    org.cmchat.app.diag.Diag.droppedFrame(); return
+                }
                 org.cmchat.app.diag.ConnDiag.inc("authenticated from ${org.cmchat.app.diag.Redact.onionShort(peer.onion)}")
-                if (buzzOnlyMode) dispatchBuzzOnly(cmId, inner)
-                else dispatchFromContact(cmId, peer, inner)
+                if (buzzOnlyMode) dispatchBuzzOnly(cmId, type)
+                else dispatchFromContact(cmId, peer, type, p.body)
                 return
             }
             // Couldn't decrypt with any key -> drop (count only, no content).
@@ -333,11 +375,9 @@ object MessageService {
         }
     }
 
-    private fun dispatchAnonymous(inner: ByteArray) {
-        if (inner.isEmpty()) return
-        val type = FrameType.fromCode(inner[0].toInt() and 0xff) ?: return
+    private fun dispatchAnonymous(type: FrameType, body: ByteArray) {
         if (type == FrameType.KNOCK) {
-            val kp = decodeKnock(inner) ?: return
+            val kp = decodeKnock(body) ?: return
             val cur = _incomingKnocks.value
             // Cap pending knocks (flood guard) and de-dup by cmId.
             if (cur.size >= MAX_PENDING_KNOCKS || cur.any { it.cmId == kp.cmId }) {
@@ -348,11 +388,8 @@ object MessageService {
         }
     }
 
-    private fun dispatchFromContact(chatCmId: String, peer: CmIdData, inner: ByteArray) {
-        if (inner.isEmpty()) return
-        val type = FrameType.fromCode(inner[0].toInt() and 0xff) ?: return
+    private fun dispatchFromContact(chatCmId: String, peer: CmIdData, type: FrameType, body: ByteArray) {
         org.cmchat.app.diag.ConnDiag.inc("dispatched $type")
-        val body = inner.copyOfRange(1, inner.size)
         when (type) {
             FrameType.MSG -> {
                 val t = runCatching {
@@ -404,9 +441,7 @@ object MessageService {
     }
 
     /** When the scout listener is alive, only a BUZZ does anything. */
-    private fun dispatchBuzzOnly(chatCmId: String, inner: ByteArray) {
-        if (inner.isEmpty()) return
-        val type = FrameType.fromCode(inner[0].toInt() and 0xff) ?: return
+    private fun dispatchBuzzOnly(chatCmId: String, type: FrameType) {
         if (type == FrameType.BUZZ) onBuzz(chatCmId)
     }
 
@@ -426,7 +461,7 @@ object MessageService {
     private fun sendBox(c: CryptoManager, mySecHex: String, peer: CmIdData, type: FrameType, payload: ByteArray) {
         // Pad the inner frame to a fixed size bucket BEFORE sealing, so the
         // on-wire size never reveals the real length or frame type.
-        val sealed = c.boxSeal(FramePad.pad(framed(type, payload)), peer.identityPubKeyHex, mySecHex)
+        val sealed = c.boxSeal(FramePad.pad(wrap(type, payload)), peer.identityPubKeyHex, mySecHex)
         sendRaw(peer, sealed)
     }
 
@@ -480,14 +515,37 @@ object MessageService {
         }
     }
 
-    private fun decodeKnock(inner: ByteArray): KnockPayload? = runCatching {
-        Messages.json.decodeFromString(KnockPayload.serializer(), String(inner, 1, inner.size - 1))
+    private fun decodeKnock(body: ByteArray): KnockPayload? = runCatching {
+        Messages.json.decodeFromString(KnockPayload.serializer(), String(body))
     }.getOrNull()
 
-    private fun framed(type: FrameType, payload: ByteArray): ByteArray {
-        val out = ByteArray(1 + payload.size)
-        out[0] = type.code.toByte()
-        payload.copyInto(out, 1)
+    // ---- wire framing: [ver(1)][type(1)][sessionId(8)][seq(8)][payload] -------
+    // The version lets mismatched builds be detected instead of failing silently;
+    // sessionId + seq drive replay protection (see ReplayGuard). This header is
+    // INSIDE the padded, encrypted frame — never visible on the wire.
+    private const val HDR = 18
+
+    private fun wrap(type: FrameType, payload: ByteArray): ByteArray {
+        val seq = sendSeq.getAndIncrement()
+        val out = ByteArray(HDR + payload.size)
+        out[0] = WIRE_VERSION.toByte()
+        out[1] = type.code.toByte()
+        sessionId.copyInto(out, 2)
+        for (i in 0 until 8) out[10 + i] = (seq ushr (56 - i * 8)).toByte()
+        payload.copyInto(out, HDR)
         return out
+    }
+
+    private data class Parsed(val version: Int, val type: FrameType?, val sidHex: String,
+                              val seq: Long, val body: ByteArray)
+
+    private fun unwrap(inner: ByteArray): Parsed? {
+        if (inner.size < HDR) return null
+        val version = inner[0].toInt() and 0xff
+        val type = FrameType.fromCode(inner[1].toInt() and 0xff)
+        val sidHex = inner.copyOfRange(2, 10).joinToString("") { "%02x".format(it) }
+        var seq = 0L
+        for (i in 0 until 8) seq = (seq shl 8) or (inner[10 + i].toLong() and 0xff)
+        return Parsed(version, type, sidHex, seq, inner.copyOfRange(HDR, inner.size))
     }
 }

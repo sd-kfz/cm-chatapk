@@ -69,6 +69,7 @@ fun CircleScreen(
     val notesOn by ToolsState.notesEnabled.collectAsState()
     val flashOn by ToolsState.flashlightEnabled.collectAsState()
     val invisible by org.cmchat.app.settings.AppSettings.invisibleMode.collectAsState()
+    val versionMismatch by MessageService.versionMismatch.collectAsState()
     val online = torStatus is TorStatus.Online
 
     Box(Modifier.fillMaxSize().background(CmBackground)) {
@@ -95,6 +96,15 @@ fun CircleScreen(
                 if (!nowInvisible) org.cmchat.app.chat.ChatStore.markMissedSeen()
             }
             Spacer(Modifier.height(10.dp))
+
+            if (versionMismatch) {
+                Text("A contact is on a different version — update both apps to the same version.",
+                    color = WordRed, fontFamily = Nunito, fontSize = 12.sp,
+                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                        .background(WordRed.copy(alpha = 0.12f)).padding(10.dp),
+                    textAlign = TextAlign.Center)
+                Spacer(Modifier.height(8.dp))
+            }
 
             if (torStatus is TorStatus.Starting || torStatus is TorStatus.Connecting) {
                 val bridged = org.cmchat.app.tor.Bridges.isEnabled()
