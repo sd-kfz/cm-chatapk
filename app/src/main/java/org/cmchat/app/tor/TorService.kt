@@ -35,6 +35,8 @@ sealed interface TorStatus {
     data class Connecting(val percent: Int) : TorStatus
     data object Online : TorStatus
     data object Offline : TorStatus
+    /** Watchdog gave up after the retry cap; needs a manual retry. */
+    data class Failed(val reason: String) : TorStatus
 }
 
 /**
@@ -55,6 +57,14 @@ class TorService : Service() {
         private const val CHANNEL_ID = "cm_net"
         private const val NOTIF_ID = 7001
 
+        /** Watchdog: if not 100% bootstrapped within this, tear down + restart. */
+        private const val BOOTSTRAP_TIMEOUT_MS = 60_000L
+        /** Total bootstrap attempts (1 initial + this many restarts) before Failed. */
+        private const val MAX_RESTARTS = 1
+        /** Restarts used this run; reset to 0 once Online or on a manual retry. */
+        @Volatile
+        private var restartsUsed = 0
+
         @Volatile
         private var instance: TorService? = null
 
@@ -66,6 +76,13 @@ class TorService : Service() {
         fun socksPort(): Int = instance?.gpService?.socksPort ?: 9050
 
         fun start(context: Context) {
+            // FAST REOPEN: a healthy running Tor is reused, never re-bootstrapped.
+            // If we already have a live instance that is Online (or still coming
+            // up), startForegroundService only re-delivers onStartCommand to that
+            // same instance — it does NOT run onCreate again, so there is never a
+            // second bootstrap. The explicit short-circuit avoids even that round
+            // trip when Tor is already up.
+            if (instance != null && status.value is TorStatus.Online) return
             // Only valid from a foreground context. On API 12+ a background start
             // throws ForegroundServiceStartNotAllowed — catch it (no crash); the
             // next foreground resume will start Tor.
@@ -78,6 +95,13 @@ class TorService : Service() {
             }
         }
 
+        /** Manual retry after a Failed state: reset the attempt cap and start. */
+        fun retry(context: Context) {
+            restartsUsed = 0
+            _status.value = TorStatus.Starting
+            instance?.let { runCatching { it.restartTor() } } ?: start(context)
+        }
+
         fun stop(context: Context) {
             context.stopService(Intent(context, TorService::class.java))
         }
@@ -87,6 +111,7 @@ class TorService : Service() {
     private var bound = false
     private var gpService: GpTorService? = null
     private var bootstrapJob: Job? = null
+    private var watchdogJob: Job? = null
 
     private val statusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -105,6 +130,7 @@ class TorService : Service() {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
             gpService = (binder as GpTorService.LocalBinder).service
             startBootstrapPolling()
+            startWatchdog()
         }
 
         override fun onServiceDisconnected(name: ComponentName) {
@@ -196,9 +222,10 @@ class TorService : Service() {
      */
     private fun teardown() {
         bootstrapJob?.cancel()
+        watchdogJob?.cancel()
         runCatching { LocalBroadcastManager.getInstance(this).unregisterReceiver(statusReceiver) }
         runCatching { org.cmchat.app.tor.ServerController.stop() }
-        runCatching { gpService?.torControlConnection?.shutdownTor("HALT") }
+        haltTorBounded()
         if (bound) {
             runCatching { unbindService(gpConnection) }
             bound = false
@@ -207,6 +234,72 @@ class TorService : Service() {
         gpService = null
         _status.value = TorStatus.Offline
         if (instance === this) instance = null
+    }
+
+    /**
+     * RELIABLE STOP: HALT the control port, but never let a stuck control
+     * connection (e.g. frozen at 95%) hang the caller. The HALT runs on a daemon
+     * thread we join for at most 1.5s; the unbind + stopService that follow in
+     * [teardown] kill the tor thread regardless, so stop always completes.
+     */
+    private fun haltTorBounded() {
+        val control = gpService?.torControlConnection ?: return
+        val t = Thread { runCatching { control.shutdownTor("HALT") } }.apply { isDaemon = true }
+        t.start()
+        runCatching { t.join(1500) }
+    }
+
+    /**
+     * Watchdog: if Tor is not 100% bootstrapped within [BOOTSTRAP_TIMEOUT_MS],
+     * tear the Guardian binding down and rebind ONCE. After [MAX_RESTARTS] the
+     * state becomes Failed and we stop, so the UI can offer a manual retry.
+     */
+    private fun startWatchdog() {
+        watchdogJob?.cancel()
+        watchdogJob = scope.launch {
+            val deadline = System.currentTimeMillis() + BOOTSTRAP_TIMEOUT_MS
+            while (isActive) {
+                when (status.value) {
+                    is TorStatus.Online -> { restartsUsed = 0; return@launch }
+                    is TorStatus.Failed -> return@launch
+                    else -> {}
+                }
+                if (System.currentTimeMillis() >= deadline) {
+                    if (restartsUsed >= MAX_RESTARTS) {
+                        org.cmchat.app.diag.Diag.w("watchdog",
+                            "Tor not bootstrapped after ${restartsUsed + 1} attempts; failing")
+                        _status.value = TorStatus.Failed("Tor failed to connect")
+                        teardown()
+                    } else {
+                        restartsUsed += 1
+                        org.cmchat.app.diag.Diag.w("watchdog",
+                            "Tor stuck <100% for ${BOOTSTRAP_TIMEOUT_MS}ms; restart #$restartsUsed")
+                        restartTor()
+                    }
+                    return@launch
+                }
+                delay(1000)
+            }
+        }
+    }
+
+    /**
+     * Tear down the Guardian binding (bounded HALT + unbind) and rebind a fresh
+     * one. onServiceConnected then restarts bootstrap polling and the watchdog,
+     * so this is a full one-shot restart without destroying our own foreground
+     * service (never two bootstraps at once — the old binding is gone first).
+     */
+    private fun restartTor() {
+        bootstrapJob?.cancel()
+        watchdogJob?.cancel()
+        runCatching { org.cmchat.app.tor.ServerController.stop() }
+        haltTorBounded()
+        if (bound) { runCatching { unbindService(gpConnection) }; bound = false }
+        runCatching { stopService(Intent(this, GpTorService::class.java)) }
+        gpService = null
+        _status.value = TorStatus.Starting
+        val intent = Intent(this, GpTorService::class.java)
+        bound = bindService(intent, gpConnection, Context.BIND_AUTO_CREATE)
     }
 
     private fun startBootstrapPolling() {

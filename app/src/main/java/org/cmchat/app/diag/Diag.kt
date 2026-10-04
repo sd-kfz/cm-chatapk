@@ -41,7 +41,10 @@ object Diag {
         add(Level.W, "transport", "dropped undecryptable frame (count=$n)")
     }
 
-    private fun add(level: Level, tag: String, message: String) {
+    private fun add(level: Level, tag: String, rawMessage: String) {
+        // Defence in depth: scrub any full onion address or key blob before it
+        // ever reaches the buffer or Logcat, no matter the call site.
+        val message = Redact.scrub(rawMessage)
         val entry = Entry(System.currentTimeMillis(), level, tag, message)
         synchronized(lock) {
             if (buffer.size >= MAX) buffer.removeFirst()

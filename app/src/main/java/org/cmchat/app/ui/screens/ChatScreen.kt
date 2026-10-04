@@ -227,11 +227,13 @@ fun ChatScreen(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp))
         }
 
-        // Per-message self-timer SELECTOR (one-off for the next message only,
-        // resets to OFF after send) + Buzz. A general timer set in Settings still
-        // applies to every message; a per-message pick overrides it just once.
+        // Single Message SELECTOR — the ONE "disappears after this message"
+        // concept. It is scoped to the ONE message being sent only (resets to OFF
+        // after send), NEVER the whole conversation. A general timer set in
+        // Settings still applies to every message; a per-message pick overrides
+        // it just once.
         Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Once:", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
+            Text("Single Message:", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
             Spacer(Modifier.width(6.dp))
             Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -257,6 +259,13 @@ fun ChatScreen(
                     color = if (buzzLeft > 0) CmTextDim else CmBackground,
                     fontFamily = Nunito, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             }
+        }
+
+        // Scope note: this applies to THIS message only, never the whole chat.
+        if (selfTimer != SelfTimer.OFF) {
+            Text("applies to this message only",
+                color = CmTextFaint, fontFamily = Nunito, fontSize = 10.sp,
+                modifier = Modifier.padding(start = 14.dp, top = 2.dp))
         }
 
         // Live counter once the body gets long (past ~9,000 of the 10,000 cap).

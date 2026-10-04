@@ -72,6 +72,20 @@ object MessageService {
     /** Cap pending knock requests so a knock flood can't grow RAM without bound. */
     private const val MAX_PENDING_KNOCKS = 20
 
+    /**
+     * Anti-forensics: drop the identity key material and contact table held in
+     * RAM. Called from the crash handler before the process dies, and safe to
+     * call anytime (the next configure() repopulates it).
+     */
+    fun zeroKeys() {
+        crypto = null
+        myPub = null
+        mySec = null
+        myCmId = null
+        contacts.clear()
+        names.clear()
+    }
+
     fun configure(
         crypto: CryptoManager,
         myDisplayName: String,
@@ -230,26 +244,34 @@ object MessageService {
      * Received bytes are only ever decrypted/parsed — never executed.
      */
     private fun handleIncoming(socket: Socket) {
-        val sealed = Transport.readFrame(socket.getInputStream()) ?: return
-        val c = crypto ?: return
-        val pub = myPub ?: return
-        val sec = mySec ?: return
+        // All parsing of REMOTE bytes is wrapped: any failure (truncated frame,
+        // malformed crypto, bad JSON, etc.) just drops this connection cleanly —
+        // it never throws up into the accept loop. Received bytes are only ever
+        // decrypted/parsed, never executed.
+        try {
+            val sealed = Transport.readFrame(socket.getInputStream()) ?: return
+            val c = crypto ?: return
+            val pub = myPub ?: return
+            val sec = mySec ?: return
 
-        // 1) KNOCK: anonymous sealed box, openable with my key alone.
-        c.sealedOpen(sealed, pub, sec)?.let { inner ->
-            dispatchAnonymous(inner); return
+            // 1) KNOCK: anonymous sealed box, openable with my key alone.
+            c.sealedOpen(sealed, pub, sec)?.let { inner ->
+                dispatchAnonymous(inner); return
+            }
+            // 2) crypto_box from a known contact: try each contact's key.
+            for ((cmId, peer) in contacts) {
+                val inner = c.boxOpen(sealed, peer.identityPubKeyHex, sec) ?: continue
+                // Per-contact (post-auth) rate limit — drop a contact that floods us.
+                if (!contactRate.allow(cmId)) { org.cmchat.app.diag.Diag.droppedFrame(); return }
+                if (buzzOnlyMode) dispatchBuzzOnly(cmId, inner)
+                else dispatchFromContact(cmId, peer, inner)
+                return
+            }
+            // Couldn't decrypt with any key -> drop (count only, no content).
+            org.cmchat.app.diag.Diag.droppedFrame()
+        } catch (_: Exception) {
+            org.cmchat.app.diag.Diag.droppedFrame()
         }
-        // 2) crypto_box from a known contact: try each contact's key.
-        for ((cmId, peer) in contacts) {
-            val inner = c.boxOpen(sealed, peer.identityPubKeyHex, sec) ?: continue
-            // Per-contact (post-auth) rate limit — drop a contact that floods us.
-            if (!contactRate.allow(cmId)) { org.cmchat.app.diag.Diag.droppedFrame(); return }
-            if (buzzOnlyMode) dispatchBuzzOnly(cmId, inner)
-            else dispatchFromContact(cmId, peer, inner)
-            return
-        }
-        // Couldn't decrypt with any key -> drop (count only, no content).
-        org.cmchat.app.diag.Diag.droppedFrame()
     }
 
     private fun dispatchAnonymous(inner: ByteArray) {

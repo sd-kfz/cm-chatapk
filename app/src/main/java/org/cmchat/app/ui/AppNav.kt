@@ -145,7 +145,7 @@ fun AppNav() {
             val updated = cur.copy(
                 contacts = cur.contacts.map { if (it.cmId == oldCmId) it.copy(cmId = newCmId) else it }
             )
-            runCatching { manager.save(p, updated) }
+            org.cmchat.app.vault.VaultIO.save(manager, p, updated)
             data = updated
         }
         // Persist an accepted knock as a contact in the vault.
@@ -161,7 +161,7 @@ fun AppNav() {
                     cmId = req.cmId,
                 )
                 val updated = cur.copy(contacts = cur.contacts + contact)
-                runCatching { manager.save(p, updated) }
+                org.cmchat.app.vault.VaultIO.save(manager, p, updated)
                 data = updated
             }
         }
@@ -189,7 +189,7 @@ fun AppNav() {
                             else it
                         }
                     )
-                    runCatching { manager.save(p, updated) }
+                    org.cmchat.app.vault.VaultIO.save(manager, p, updated)
                     data = updated
                 }
             }
@@ -246,7 +246,7 @@ fun AppNav() {
                     val p = pin; val cur = data
                     if (p != null && cur != null) {
                         val updated = cur.copy(settings = cur.settings.copy(sessionWindow = enabled))
-                        runCatching { manager.save(p, updated) }
+                        org.cmchat.app.vault.VaultIO.save(manager, p, updated)
                         data = updated
                     }
                 },
@@ -265,7 +265,7 @@ fun AppNav() {
                             if (it.cmId == n.cmId) it.copy(teamHour = value.ifEmpty { null }) else it
                         }
                     )
-                    runCatching { manager.save(p, updated) }
+                    org.cmchat.app.vault.VaultIO.save(manager, p, updated)
                     data = updated
                 }
             },
@@ -277,7 +277,7 @@ fun AppNav() {
                             if (it.cmId == n.cmId) it.copy(name = newName) else it
                         }
                     )
-                    runCatching { manager.save(p, updated) }
+                    org.cmchat.app.vault.VaultIO.save(manager, p, updated)
                     data = updated
                     nav = Nav.Chat(newName, n.cmId)
                 }
@@ -300,7 +300,7 @@ fun AppNav() {
                 val p = pin; val cur = data
                 if (p != null && cur != null) {
                     val updated = cur.copy(settings = cur.settings.copy(privacyPin = newPin))
-                    runCatching { manager.save(p, updated) }
+                    org.cmchat.app.vault.VaultIO.save(manager, p, updated)
                     data = updated
                 }
             },
@@ -308,7 +308,7 @@ fun AppNav() {
                 val p = pin; val cur = data
                 if (p != null && cur != null) {
                     val updated = cur.copy(settings = cur.settings.copy(sessionWindow = enabled))
-                    runCatching { manager.save(p, updated) }
+                    org.cmchat.app.vault.VaultIO.save(manager, p, updated)
                     data = updated
                 }
             },
@@ -323,7 +323,7 @@ fun AppNav() {
                 val p = pin; val cur = data
                 if (p != null && cur != null) {
                     val updated = cur.copy(settings = cur.settings.copy(language = tag))
-                    runCatching { manager.save(p, updated) }
+                    org.cmchat.app.vault.VaultIO.save(manager, p, updated)
                     data = updated
                 }
             },
@@ -361,7 +361,7 @@ fun AppNav() {
                                     else it
                                 }
                             )
-                            runCatching { manager.save(p, updated) }
+                            org.cmchat.app.vault.VaultIO.save(manager, p, updated)
                             data = updated
                             myCmId(updated)?.let { MessageService.sendAddressUpdate(it) }
                         }

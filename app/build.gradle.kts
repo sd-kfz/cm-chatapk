@@ -56,6 +56,8 @@ android {
 
     buildFeatures {
         compose = true
+        // Needed so BuildConfig.DEBUG can gate the debug-only self-attack harness.
+        buildConfig = true
     }
 }
 

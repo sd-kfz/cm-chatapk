@@ -20,6 +20,51 @@ continue.
 - Release signing: not set up yet (release APK is unsigned). Stable-key
   signing via GitHub secrets is a later step; see "Signing TODO" below.
 
+## Resilience + self-attack batch (latest)
+Commit `harden: self-attack test harness, crash anti-forensics, tor watchdog +
+reliable stop, fast reopen, off-main-thread, parser/memory bounds`.
+- **A — Single Message:** one concept only. The chat composer's per-message
+  self-destruct selector is now labelled "Single Message:" with a "applies to
+  this message only" note; `SelfTimer.displayLabel()` OFF reverted to a neutral
+  "Off" (no second "Single Message" label; the general/Settings timer is never
+  called that). `chat/ChatModels.kt`, `ui/screens/ChatScreen.kt`.
+- **B — Self-attack harness (DEBUG only):** `selftest/SelfTest.kt` +
+  `selftest/SelfTestLog.kt` (its OWN log, separate from the Tor log). Gated by
+  `BuildConfig.DEBUG` (enabled `buildConfig = true`). Four attacks: parser fuzz
+  (malformed/truncated/oversized/empty/random → `Transport.readFrame`), onion
+  flood (token-bucket burst + a real loopback socket flood: silent/garbage/
+  oversized-header/partial, concurrency cap), lifecycle mashing (100× stop +
+  address-rotate + presence toggles, thread-leak check), PIN abuse (throwaway
+  vault: 25 wrong PINs, escalating-lockout schedule, reversed-PIN duress). Run +
+  view from Diagnostics → "Self-Test" section. Findings: what attacked / what
+  broke / severity.
+- **C — Crash anti-forensics:** global uncaught handler (`diag/CrashCatcher.kt`)
+  zeros decrypted messages + key material (`MessageService.zeroKeys()`,
+  `ChatStore.clearAll()`, `ServerController.stop()`) before the process dies;
+  crash file is written ONLY in debug and SCRUBBED. `diag/Redact.kt` collapses
+  any full onion address / long hex key blob, applied in `Diag.add()` (defence
+  in depth) and at the onion-publish log site.
+- **D — Tor watchdog + reliable stop:** `TorService` watchdog restarts a
+  bootstrap stuck <100% for 60s ONCE, then `TorStatus.Failed` with a manual
+  "Retry" on the engine line. Stop/Exit HALTs on a bounded daemon thread (≤1.5s)
+  then unbinds, so it never hangs at 95%.
+- **E — Fast reopen:** `TorService.start()` short-circuits when Tor is already
+  Online (reuse, no second bootstrap); onion publish stays idempotent per key.
+- **F — Off the main thread:** Argon2id unlock/create run off-main in
+  `LockScreen` (busy state gates the keypad); all vault saves go through
+  `vault/VaultIO.kt` (single-thread IO lane, serialized).
+- **G — Parser/memory bounds:** `Transport.readFrame` validates length vs the
+  hard cap BEFORE allocating and wraps the body read, returning null on any
+  truncation instead of throwing; `MessageService.handleIncoming` wraps all
+  remote parsing and drops the connection cleanly. One bounded frame per
+  connection caps buffered data per peer.
+
+Self-test result on this build: all four attacks pass — every malformed/
+oversized/truncated/random frame is dropped with no crash, the flood limits and
+concurrency cap hold, lifecycle mashing leaves no stuck state or thread leak,
+and the PIN lockout + duress paths behave. The parser try/catch around the body
+read (G) is the one defect the fuzzer would have hit before this batch.
+
 ## Done
 - Project skeleton, theme, Nunito font, glowing CM-Chat logo.
 - Screens (visual, fake data): Circle (contacts), Chat (Cerberus/Timer

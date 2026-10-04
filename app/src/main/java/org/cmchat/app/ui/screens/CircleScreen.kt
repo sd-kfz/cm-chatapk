@@ -215,17 +215,29 @@ private fun DockTool(label: String, glyph: String, active: Boolean = false, onCl
 /** Engine status line under the logo: "Engine: Online / Starting / Offline …". */
 @Composable
 private fun EngineLine(status: TorStatus) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
     val (color, label) = when (status) {
         is TorStatus.Online -> CmGreen to "Online"
         is TorStatus.Connecting -> CmOrange to "Connecting ${status.percent}%"
         is TorStatus.Starting -> CmOrange to "Starting"
         is TorStatus.Offline -> CmTextDim to "Offline"
+        is TorStatus.Failed -> CmRed to "Failed"
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(7.dp).clip(CircleShape).background(color))
         Spacer(Modifier.width(6.dp))
         Text("Engine: $label", color = color, fontFamily = Nunito, fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold)
+        // Manual retry once the watchdog has given up.
+        if (status is TorStatus.Failed) {
+            Spacer(Modifier.width(10.dp))
+            Box(Modifier.clip(RoundedCornerShape(10.dp)).background(CmCard)
+                .clickable { TorService.retry(ctx) }
+                .padding(horizontal = 10.dp, vertical = 3.dp)) {
+                Text("Retry", color = CmBlue, fontFamily = Nunito, fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold)
+            }
+        }
     }
 }
 

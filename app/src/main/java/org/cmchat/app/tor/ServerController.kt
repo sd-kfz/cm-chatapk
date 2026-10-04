@@ -132,7 +132,7 @@ object ServerController {
                 }
                 result.onSuccess { pub ->
                     onPublished(pub)
-                    org.cmchat.app.diag.Diag.i("onion", "published ${pub.onion}")
+                    org.cmchat.app.diag.Diag.i("onion", "published ${org.cmchat.app.diag.Redact.onionShort(pub.onion)}")
                     _status.value = ServerStatus.Online(pub.onion, faceName, System.currentTimeMillis())
                 }.onFailure { e ->
                     org.cmchat.app.diag.Diag.e("onion", "publish failed", e)

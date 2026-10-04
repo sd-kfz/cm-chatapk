@@ -35,7 +35,16 @@ object Transport {
         d.flush()
     }
 
-    /** Reads one length-prefixed frame, or null on clean EOF / oversized frame. */
+    /**
+     * Reads one length-prefixed frame, or null on ANY problem: clean EOF, a
+     * non-positive or over-[MAX_FRAME_BYTES] length (rejected BEFORE allocating),
+     * or a truncated / interrupted body. A malformed or oversized frame therefore
+     * drops the connection cleanly (caller closes the socket) instead of throwing
+     * EOFException up the accept loop. The length is validated against the hard
+     * cap first, so a hostile "huge length" header never triggers a large
+     * allocation, and exactly one bounded frame is read per connection — so the
+     * data buffered for any one peer can never exceed MAX_FRAME_BYTES.
+     */
     fun readFrame(input: InputStream): ByteArray? {
         val d = DataInputStream(input)
         val len = try {
@@ -44,9 +53,13 @@ object Transport {
             return null
         }
         if (len <= 0 || len > MAX_FRAME_BYTES) return null
-        val buf = ByteArray(len)
-        d.readFully(buf)
-        return buf
+        return try {
+            val buf = ByteArray(len)
+            d.readFully(buf)
+            buf
+        } catch (_: Exception) {
+            null
+        }
     }
 
     /**

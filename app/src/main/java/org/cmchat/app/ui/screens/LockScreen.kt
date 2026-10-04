@@ -15,7 +15,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.cmchat.app.ui.components.CmChatLogo
 import org.cmchat.app.ui.theme.*
 import org.cmchat.app.vault.LoginThrottle
@@ -33,6 +36,7 @@ private const val MAX_PASSCODE = 128
 @Composable
 fun LockScreen(manager: VaultManager, onUnlocked: (String, VaultData, firstRun: Boolean) -> Unit) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
     // Recomputed after a duress wipe so the screen falls back to first-run.
     var epoch by remember { mutableStateOf(0) }
     val firstRun = remember(epoch) { manager.firstRunNeeded() }
@@ -47,6 +51,9 @@ fun LockScreen(manager: VaultManager, onUnlocked: (String, VaultData, firstRun: 
     var shift by remember(epoch) { mutableStateOf(Shift.OFF) }
     var wrongCount by remember(epoch) { mutableStateOf(0) }
     var lockedFor by remember(epoch) { mutableStateOf(0) }
+    // True while Argon2id runs off the main thread (unlock / create vault), so
+    // the UI stays responsive and the keypad is disabled meanwhile.
+    var busy by remember(epoch) { mutableStateOf(false) }
 
     LaunchedEffect(lockedFor, epoch) {
         while (lockedFor > 0) {
@@ -74,19 +81,28 @@ fun LockScreen(manager: VaultManager, onUnlocked: (String, VaultData, firstRun: 
                 }
             }
             Phase.UNLOCK -> {
-                when (val r = manager.unlock(entered)) {
-                    is UnlockResult.Success -> { wrongCount = 0; onUnlocked(entered, r.data, false) }
-                    UnlockResult.Duress -> {
-                        // Shredder PIN: erase ALL recoverable on-disk data + RAM,
-                        // then fall silently back to first-run.
-                        org.cmchat.app.guard.GuardController.wipeRamOnly()
-                        org.cmchat.app.vault.Shredder.shredAll(ctx)
-                        epoch += 1
-                    }
-                    UnlockResult.WrongPin -> {
-                        wrongCount += 1
-                        status = "Wrong PIN"
-                        lockedFor = LoginThrottle.delaySeconds(wrongCount)
+                // Argon2id is heavy — run it OFF the main thread, then resolve on
+                // main. `busy` gates the keypad so no second unlock can overlap.
+                if (busy) return
+                busy = true
+                scope.launch {
+                    val r = withContext(Dispatchers.Default) { manager.unlock(entered) }
+                    busy = false
+                    when (r) {
+                        is UnlockResult.Success -> { wrongCount = 0; onUnlocked(entered, r.data, false) }
+                        UnlockResult.Duress -> {
+                            // Shredder PIN: erase ALL recoverable on-disk data + RAM,
+                            // then fall silently back to first-run. Disk shred runs
+                            // off-main too.
+                            org.cmchat.app.guard.GuardController.wipeRamOnly()
+                            scope.launch(Dispatchers.IO) { org.cmchat.app.vault.Shredder.shredAll(ctx) }
+                            epoch += 1
+                        }
+                        UnlockResult.WrongPin -> {
+                            wrongCount += 1
+                            status = "Wrong PIN"
+                            lockedFor = LoginThrottle.delaySeconds(wrongCount)
+                        }
                     }
                 }
             }
@@ -134,13 +150,18 @@ fun LockScreen(manager: VaultManager, onUnlocked: (String, VaultData, firstRun: 
             Spacer(Modifier.height(20.dp))
             Box(
                 Modifier.clip(RoundedCornerShape(16.dp)).background(CmBlue)
-                    .clickable {
-                        val data = manager.createVault(firstPin, faceName)
-                        onUnlocked(firstPin, data, true)
+                    .clickable(enabled = !busy) {
+                        // createVault runs Argon2id — do it off the main thread.
+                        busy = true
+                        scope.launch {
+                            val data = withContext(Dispatchers.Default) { manager.createVault(firstPin, faceName) }
+                            busy = false
+                            onUnlocked(firstPin, data, true)
+                        }
                     }
                     .padding(horizontal = 28.dp, vertical = 12.dp),
             ) {
-                Text("Create", color = CmBackground, fontFamily = Nunito,
+                Text(if (busy) "Creating…" else "Create", color = CmBackground, fontFamily = Nunito,
                     fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
         } else {
@@ -154,14 +175,22 @@ fun LockScreen(manager: VaultManager, onUnlocked: (String, VaultData, firstRun: 
             MaskedDots(pin.length)
             Spacer(Modifier.height(16.dp))
             Text(
-                if (lockedFor > 0) "Try again in " + LoginThrottle.format(lockedFor) else status,
-                color = if (lockedFor > 0 || status.isNotEmpty()) CmRed else CmBackground,
+                when {
+                    busy -> "Unlocking…"
+                    lockedFor > 0 -> "Try again in " + LoginThrottle.format(lockedFor)
+                    else -> status
+                },
+                color = when {
+                    busy -> CmTextDim
+                    lockedFor > 0 || status.isNotEmpty() -> CmRed
+                    else -> CmBackground
+                },
                 fontFamily = Nunito, fontSize = 13.sp,
             )
             Spacer(Modifier.height(16.dp))
 
             if (!alpha) {
-                Keypad(enabled = lockedFor <= 0) { k ->
+                Keypad(enabled = lockedFor <= 0 && !busy) { k ->
                     when (k) {
                         "ABC" -> { alpha = true; usedAlpha = true }   // switch to letters
                         "<" -> if (pin.isNotEmpty()) pin = pin.dropLast(1)
@@ -173,7 +202,7 @@ fun LockScreen(manager: VaultManager, onUnlocked: (String, VaultData, firstRun: 
                 }
             } else {
                 LetterKeyboard(
-                    enabled = lockedFor <= 0,
+                    enabled = lockedFor <= 0 && !busy,
                     shift = shift,
                     onChar = { c ->
                         val ch = if (c.length == 1 && c[0].isLetter() && shift != Shift.OFF)
@@ -197,7 +226,7 @@ fun LockScreen(manager: VaultManager, onUnlocked: (String, VaultData, firstRun: 
             if (usedAlpha) {
                 Spacer(Modifier.height(14.dp))
                 Box(Modifier.clip(RoundedCornerShape(14.dp)).background(CmBlue)
-                    .then(if (lockedFor > 0 || pin.isEmpty()) Modifier
+                    .then(if (lockedFor > 0 || pin.isEmpty() || busy) Modifier
                           else Modifier.clickable { val e = pin; pin = ""; submitPin(e) })
                     .padding(horizontal = 40.dp, vertical = 12.dp)) {
                     Text("Enter", color = CmBackground, fontFamily = Nunito,

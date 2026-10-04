@@ -30,12 +30,15 @@ enum class SelfTimer(val label: String, val millis: Long?) {
 }
 
 /**
- * UI display text. OFF shows as "Single Message" (its behaviour is unchanged —
- * with OFF a message follows the global/general expiry; any other value is a
- * one-off per-message timer). `label` stays the wire value, so only the DISPLAYED
- * text changes.
+ * UI display text. OFF shows as a neutral "Off" (capitalised) — it is NOT the
+ * "Single Message" concept. "Single Message" is the per-message self-destruct
+ * selector in the chat composer, which applies ONLY to the one message being
+ * sent; there is no longer a second "Single Message" label anywhere. With OFF a
+ * message follows the global/general expiry; any other value is a one-off
+ * per-message timer. `label` stays the wire value, so only the DISPLAYED text
+ * changes.
  */
-fun SelfTimer.displayLabel(): String = if (this == SelfTimer.OFF) "Single Message" else label
+fun SelfTimer.displayLabel(): String = if (this == SelfTimer.OFF) "Off" else label
 
 /** A chat message. RAM-only; never written to disk. */
 data class ChatMessage(

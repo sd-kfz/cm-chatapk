@@ -1,41 +1,53 @@
 package org.cmchat.app.diag
 
 import android.content.Context
+import org.cmchat.app.BuildConfig
 import java.io.File
 
 /**
- * DEBUG-PHASE aid: the ONE thing allowed to touch disk besides the vault.
- * Installs a default uncaught-exception handler that writes a single crash
- * file to app-internal storage; on next launch the crash is shown on the
- * Diagnostics screen and deleted immediately. Wiped by every wipe path and by
- * uninstall.
+ * Global uncaught-exception handler with two jobs:
  *
- * IMPORTANT: set [ENABLED] = false (or delete this class) before any
- * real-safety release — it is the only on-disk exception trace. See
- * PROGRESS.md.
+ *  1) ANTI-FORENSICS (all builds): before the process dies, zero the decrypted
+ *     messages and in-memory key material so a crash can't leave plaintext
+ *     behind in a heap dump. The stack trace is SCRUBBED ([Redact]) so no full
+ *     onion address or key blob is ever written anywhere.
+ *
+ *  2) DEBUG-PHASE aid (debug builds only): write the scrubbed trace to one
+ *     app-internal file so the crash can be shown on the Diagnostics screen on
+ *     next launch, then deleted. This is the ONLY thing besides the vault that
+ *     touches disk, and it is compiled out of release by the [BuildConfig.DEBUG]
+ *     gate — a release build never writes a crash file.
  */
 object CrashCatcher {
 
+    /** Debug-only crash file is written only when this AND BuildConfig.DEBUG. */
     const val ENABLED = true
     private const val FILE = "last_crash.txt"
+    private val writeToDisk get() = ENABLED && BuildConfig.DEBUG
 
     fun install(context: Context) {
-        if (!ENABLED) return
         val app = context.applicationContext
         val prev = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, ex ->
-            runCatching {
+            // 1) Persist a SCRUBBED trace for debugging (debug builds only).
+            if (writeToDisk) runCatching {
                 val sw = java.io.StringWriter()
                 ex.printStackTrace(java.io.PrintWriter(sw))
-                crashFile(app).writeText("thread=${thread.name}\n$sw")
+                crashFile(app).writeText(Redact.scrub("thread=${thread.name}\n$sw"))
             }
+            // 2) Anti-forensics: zero decrypted messages + key material before we
+            //    hand off to the system handler that ends the process. Each is
+            //    isolated so one failure can't stop the others.
+            runCatching { org.cmchat.app.chat.ChatStore.clearAll() }
+            runCatching { org.cmchat.app.transport.MessageService.zeroKeys() }
+            runCatching { org.cmchat.app.tor.ServerController.stop() }
             prev?.uncaughtException(thread, ex)
         }
     }
 
-    /** Read (and delete) a crash from a previous run, if any. */
+    /** Read (and delete) a crash from a previous run, if any (debug only). */
     fun consume(context: Context): String? {
-        if (!ENABLED) return null
+        if (!writeToDisk) return null
         val f = crashFile(context)
         if (!f.exists()) return null
         val text = runCatching { f.readText() }.getOrNull()
