@@ -44,6 +44,20 @@ class Vault(private val crypto: CryptoManager, private val dir: File) {
         }
     }
 
+    /**
+     * Re-encrypt the vault under a NEW passcode. Loads the data with [oldPin],
+     * writes a FRESH salt, and re-seals the SAME data under [newPin]. Returns
+     * false (and changes nothing) if [oldPin] is wrong. On success the old
+     * passcode can no longer open the vault — a new salt + new Argon2id key.
+     */
+    fun changePin(oldPin: String, newPin: String): Boolean {
+        val data = load(oldPin) ?: return false
+        val salt = crypto.randomSalt()
+        saltFile.writeBytes(salt)
+        writeEncrypted(newPin, salt, data)
+        return true
+    }
+
     /** Best-effort wipe: overwrite then delete. Flash wear-levelling means
      * this is not a forensic guarantee, only that the plaintext key material
      * and ciphertext are cleared from the normal filesystem view. */

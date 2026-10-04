@@ -73,7 +73,11 @@ fun ChatScreen(
         if (chatCmId != null && !org.cmchat.app.settings.AppSettings.invisibleMode.value) {
             ChatStore.markRead(chatCmId)
         }
-        onDispose { if (MessageService.activeChatCmId == chatCmId) MessageService.activeChatCmId = null }
+        onDispose {
+            if (MessageService.activeChatCmId == chatCmId) MessageService.activeChatCmId = null
+            // Leaving the chat burns any view-once message that has been seen.
+            ChatStore.burnViewOnce(chatId)
+        }
     }
 
     // Screen-shake when a BUZZ for this chat arrives (optional vibration too).
@@ -227,17 +231,17 @@ fun ChatScreen(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp))
         }
 
-        // Single Message SELECTOR — the ONE "disappears after this message"
-        // concept. It is scoped to the ONE message being sent only (resets to OFF
-        // after send), NEVER the whole conversation. A general timer set in
-        // Settings still applies to every message; a per-message pick overrides
-        // it just once.
+        // Disappear SELECTOR — scoped to the ONE message being sent only (resets to
+        // OFF after send), NEVER the whole conversation. A general timer set in
+        // Settings still applies to every message; a per-message pick overrides it
+        // just once. "Single Message (view once)" is true burn-after-first-view;
+        // the rest are timed self-destructs.
         Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Single Message:", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
+            Text("Disappear:", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
             Spacer(Modifier.width(6.dp))
             Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                for (t in SelfTimer.entries) {
+                for (t in TIMER_CHOICES) {
                     val sel = t == selfTimer
                     Box(Modifier.clip(RoundedCornerShape(10.dp))
                         .background(if (sel) CmBlue else CmCard).clickable { selfTimer = t }
@@ -263,7 +267,10 @@ fun ChatScreen(
 
         // Scope note: this applies to THIS message only, never the whole chat.
         if (selfTimer != SelfTimer.OFF) {
-            Text("applies to this message only",
+            Text(
+                if (selfTimer == SelfTimer.VIEW_ONCE)
+                    "burns the moment it's read — this message only"
+                else "applies to this message only",
                 color = CmTextFaint, fontFamily = Nunito, fontSize = 10.sp,
                 modifier = Modifier.padding(start = 14.dp, top = 2.dp))
         }
@@ -312,6 +319,15 @@ fun ChatScreen(
 /** Chat body hard cap (min 1 enforced by disabling send when blank). */
 private const val MAX_BODY_CHARS = 10_000
 
+/**
+ * The curated per-message disappear options, in order: never, true view-once,
+ * then a few timed self-destructs. (The full [SelfTimer] set still backs the
+ * general timer in Settings; this is just the composer's short list.)
+ */
+private val TIMER_CHOICES = listOf(
+    SelfTimer.OFF, SelfTimer.VIEW_ONCE, SelfTimer.S30, SelfTimer.M5, SelfTimer.M30, SelfTimer.M60,
+)
+
 @Composable
 private fun Bubble(m: ChatMessage) {
     Row(Modifier.fillMaxWidth(),
@@ -331,7 +347,8 @@ private fun Bubble(m: ChatMessage) {
             // No delivery/read receipts. Only a small RED self-timer duration
             // (no countdown) under a timed message; it vanishes when it expires.
             if (m.selfTimer != SelfTimer.OFF) {
-                Text(m.selfTimer.label, color = CmRed, fontFamily = Nunito, fontSize = 10.sp,
+                Text(if (m.selfTimer == SelfTimer.VIEW_ONCE) "👁 view once" else m.selfTimer.label,
+                    color = CmRed, fontFamily = Nunito, fontSize = 10.sp,
                     modifier = Modifier.padding(top = 2.dp, end = 4.dp))
             }
         }

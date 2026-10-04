@@ -127,6 +127,57 @@ class CryptoManager(private val ls: LazySodium) {
         return if (ok) plain else null
     }
 
+    // ---- forward-secrecy primitives (X25519 DH, BLAKE2b KDF, XChaCha AEAD) ----
+    private val dhNative get() = ls as com.goterl.lazysodium.interfaces.DiffieHellman.Native
+    private val genericHash get() = ls as com.goterl.lazysodium.interfaces.GenericHash.Native
+    private val aeadNative get() = ls as com.goterl.lazysodium.interfaces.AEAD.Native
+
+    val AEAD_NONCE_BYTES = 24   // XChaCha20-Poly1305 IETF npub
+    private val AEAD_ABYTES = 16
+
+    fun randomBytes(n: Int): ByteArray = ls.randomBytesBuf(n)
+
+    /** A fresh X25519 keypair (hex pub, hex sec), e.g. for an ephemeral or prekey. */
+    fun newX25519Keypair(): Pair<String, String> = newIdentityKeypair()
+
+    /** Raw X25519 Diffie-Hellman: scalarmult(mySecret, theirPublic) -> 32 bytes. */
+    fun dh(theirPubHex: String, mySecHex: String): ByteArray {
+        val out = ByteArray(32)
+        val ok = dhNative.cryptoScalarMult(out, hexToBytes(mySecHex), hexToBytes(theirPubHex))
+        check(ok) { "scalarmult failed" }
+        return out
+    }
+
+    /** BLAKE2b KDF -> 32-byte key from arbitrary input material. */
+    fun kdf32(input: ByteArray): ByteArray {
+        val out = ByteArray(KEY_BYTES)
+        val ok = genericHash.cryptoGenericHash(out, out.size, input, input.size.toLong())
+        check(ok) { "kdf failed" }
+        return out
+    }
+
+    /** XChaCha20-Poly1305 AEAD seal with associated data. Returns ciphertext||tag. */
+    fun aeadSeal(plain: ByteArray, key32: ByteArray, nonce24: ByteArray, aad: ByteArray): ByteArray {
+        val c = ByteArray(plain.size + AEAD_ABYTES)
+        val ok = aeadNative.cryptoAeadXChaCha20Poly1305IetfEncrypt(
+            c, null, plain, plain.size.toLong(), aad, aad.size.toLong(), null, nonce24, key32,
+        )
+        check(ok) { "aead seal failed" }
+        return c
+    }
+
+    /** XChaCha20-Poly1305 AEAD open; null if auth fails (tampered / wrong key). */
+    fun aeadOpen(cipher: ByteArray, key32: ByteArray, nonce24: ByteArray, aad: ByteArray): ByteArray? {
+        if (cipher.size < AEAD_ABYTES) return null
+        val m = ByteArray(cipher.size - AEAD_ABYTES)
+        val ok = aeadNative.cryptoAeadXChaCha20Poly1305IetfDecrypt(
+            m, null, null, cipher, cipher.size.toLong(), aad, aad.size.toLong(), nonce24, key32,
+        )
+        return if (ok) m else null
+    }
+
+    fun toHexPublic(b: ByteArray): String = toHex(b)
+
     private fun toHex(b: ByteArray): String =
         b.joinToString("") { "%02x".format(it) }
 

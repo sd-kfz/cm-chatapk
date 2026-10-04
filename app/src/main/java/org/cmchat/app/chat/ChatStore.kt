@@ -63,8 +63,29 @@ object ChatStore {
 
     fun setState(chatId: String, msgId: String, state: MsgState) {
         update(chatId) { t ->
-            t.copy(messages = t.messages.map { if (it.id == msgId) it.copy(state = state) else it })
+            t.copy(messages = t.messages.mapNotNull { m ->
+                when {
+                    m.id != msgId -> m
+                    // View-once (single message): the sender's own copy is removed
+                    // once it's on its way — best-effort "removed on sender's side
+                    // after send". There's nothing to show afterwards.
+                    state == MsgState.SENT && m.selfTimer == SelfTimer.VIEW_ONCE -> null
+                    else -> m.copy(state = state)
+                }
+            })
         }
+    }
+
+    /**
+     * View-once burn: drop every INCOMING view-once message that has already been
+     * seen. Called when leaving a chat, so a single-view message the recipient has
+     * now read is gone and never shown again. (Outgoing view-once copies are
+     * removed on send; see [setState].)
+     */
+    fun burnViewOnce(chatId: String) = update(chatId) { t ->
+        t.copy(messages = t.messages.filterNot {
+            !it.mine && it.selfTimer == SelfTimer.VIEW_ONCE && it.seenAt != null
+        })
     }
 
     fun erase(chatId: String) = update(chatId) { ChatThread(teamHour = it.teamHour) }

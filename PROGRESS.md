@@ -20,7 +20,61 @@ continue.
 - Release signing: not set up yet (release APK is unsigned). Stable-key
   signing via GitHub secrets is a later step; see "Signing TODO" below.
 
-## Replay protection + wire version; forward secrecy assessed (latest)
+## Forward-secrecy CORE + 3 settings + true view-once (latest)
+Commit `security: forward secrecy (signed prekey + X3DH + per-message ratchet);
+implement Change PIN / Identity / Verify Integrity; true view-once Single Message`.
+
+- **Forward secrecy — crypto CORE shipped & proven; live transport cutover
+  deliberately NOT shipped.** `crypto/Fs.kt` is a stateless, handshake-free
+  X3DH-style frame crypto that fits the connectionless model: per-message fresh
+  ephemeral X25519 combined with the recipient's short-lived prekey + both
+  identity keys (`DH1=eph×prekey`, `DH2=myId×prekey`, `DH3=eph×recipientId`,
+  `key=BLAKE2b(INFO||DH1||DH2||DH3)`), then XChaCha20-Poly1305 AEAD with the
+  ephemeral pubkey + prekey-id as AAD. Identity keys authenticate only; the
+  ephemeral is dropped after send and the prekey rotates, so a later compromise
+  of either identity key can't re-derive past message keys. Primitives added to
+  `CryptoManager` (raw X25519 DH, BLAKE2b KDF, XChaCha AEAD); DH outputs + derived
+  keys zeroed in `finally`. **Proven by `FsTest` (6 loopback tests):** round-trip;
+  identity-key theft WITHOUT the prekey secret can't decrypt; each message uses a
+  fresh independent ephemeral; tampered frame fails AEAD; wrong sender identity
+  fails auth; a message against a rotated-past prekey still decrypts if its secret
+  is still in the recent window.
+- **Why the live cutover is NOT wired yet (honest flag).** Replacing the live
+  content `crypto_box` with `Fs.seal/open` needs a prekey STORE (vault-persisted)
+  + rotation + a DISTRIBUTION path so a sender can fetch the recipient's current
+  signed prekey. The transport is one-shot fire-and-forget (connect, write one
+  frame, close) with NO request/response, so prekey distribution means either a
+  new round-trip on the socket or push/knock-carried prekeys — a deep change to
+  the delivery path that cannot be two-phone-verified in this environment, and a
+  bad cutover would silently break delivery. Per the hard rule ("if it can't be
+  cleanly loopback-tested or risks breaking delivery, STOP and tell me rather than
+  ship it fragile"), the proven core ships now; the cutover is staged. WIRE_VERSION
+  stays at 2 (framing unchanged); it bumps when the live FS frame lands.
+- **True view-once Single Message** (`SelfTimer.VIEW_ONCE`): burn-after-first-view,
+  a distinct option (no millis), separate from the timed values. The composer
+  "Disappear:" selector now reads Off · Single Message (view once) · 30s · 5m ·
+  30m · 1h. Burn logic in `ChatStore`: the sender's own copy is dropped the moment
+  it's marked `SENT` (best-effort "removed on sender's side after send"); the
+  recipient's copy is burned on leaving the chat once it's been seen
+  (`burnViewOnce`, called from `ChatScreen` onDispose) — one not yet seen (arrived
+  while Invisible) survives until the user goes Online. Proven by `ViewOnceTest`
+  (5 tests). General timer cycle excludes view-once (time-based only).
+- **Change PIN** (`Vault.changePin` / `VaultManager.changePin`): loads with the old
+  passcode, writes a FRESH salt, re-encrypts the same data under the new passcode
+  (Argon2id) — no data lost, old passcode stops working. Settings dialog verifies
+  current → choose new (6–128, not a palindrome) → confirm; both Argon2id steps run
+  off the main thread (async callbacks, "Working…" state) and the in-RAM session
+  pin is swapped on success. Proven by `VaultTest.change_pin_...`.
+- **Tag (Identity)**: wired the dead stub to the existing My CMC-ID / QR screen
+  (own CMC-ID/onion + copy + QR, display only).
+- **Verify App Integrity** (`IntegrityScreen` + `AppIntegrity`): shows the running
+  package's signing-cert SHA-256 fingerprint + version/build, read locally via
+  PackageManager (API 24–28 fallback), with a one-line plain explanation (compare
+  with a friend to confirm the genuine, unmodified build). Copy button; nothing
+  leaves the device.
+- Builds: debug arm64 + arm32 + release(R8) all green; full unit suite green.
+
+## Replay protection + wire version; forward secrecy assessed
 Commit `security: replay protection + wire version bump; assess forward secrecy
 (flagged — needs a handshake layer, not shipped)`.
 - **Assessment:** messages were sealed with `crypto_box` using the STATIC

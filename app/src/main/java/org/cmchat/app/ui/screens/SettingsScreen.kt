@@ -42,10 +42,23 @@ fun SettingsScreen(
     onCreatePrivacyPin: (String) -> Unit = {},
     onRemovePrivacyPin: () -> Unit = {},
     onSessionWindow: (Boolean) -> Unit = {},
+    onOpenIntegrity: () -> Unit = {},
+    verifyVaultPin: (String, (Boolean) -> Unit) -> Unit = { _, cb -> cb(false) },
+    onChangeVaultPin: (String, String, (Boolean) -> Unit) -> Unit = { _, _, cb -> cb(false) },
 ) {
     var textSize by remember { mutableStateOf(0f) }
     var privacyUnlocked by remember { mutableStateOf(false) }
     var askMode by remember { mutableStateOf<PinMode?>(null) }
+    var showChangePin by remember { mutableStateOf(false) }
+
+    if (showChangePin) {
+        ChangePinDialog(
+            verifyCurrent = verifyVaultPin,
+            onChange = onChangeVaultPin,
+            onDone = { showChangePin = false },
+            onDismiss = { showChangePin = false },
+        )
+    }
 
     askMode?.let { mode ->
         PrivacyPinDialog(
@@ -73,7 +86,8 @@ fun SettingsScreen(
             .padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
 
             GroupHeader("Tags")
-            Setting("Tag (Identity)")
+            Setting("Tag (Identity)", onClick = onOpenMyId,
+                hint = "Your CMC-ID / onion + QR (display only).")
             Setting("My CMC-ID / QR", onClick = onOpenMyId,
                 hint = "Your address + QR for friends to add you.")
 
@@ -143,8 +157,10 @@ fun SettingsScreen(
                 hint = "Watch each step of reaching a contact, live.")
             Setting("RAM diagnostics", onClick = onRamDiag,
                 hint = "See which features use the most memory.")
-            Setting("Verify App Integrity")
-            Setting("Change PIN")
+            Setting("Verify App Integrity", onClick = onOpenIntegrity,
+                hint = "Check the app's signature + version.")
+            Setting("Change PIN", onClick = { showChangePin = true },
+                hint = "Change the passcode that unlocks the app.")
             Setting("Language", onClick = onLanguage,
                 hint = "Choose the app's language.")
             Setting("How to use (A–Z)", onClick = onHelp,
@@ -294,6 +310,108 @@ private fun PrivacyPinDialog(
     )
 }
 
+/**
+ * Change the VAULT passcode (the one that unlocks the app) — distinct from the
+ * numeric Privacy PIN above. Flow: verify current → choose new → confirm. Both
+ * the verify and the re-encrypt run Argon2id, so they go through async callbacks
+ * ([verifyCurrent]/[onChange] hand back the result on the main thread) and the
+ * dialog shows "Working…" while they run. The new passcode is validated with the
+ * same rule as first-run ([VaultManager.isValidNewPin]): 6–128 chars, not a
+ * palindrome. No data is lost; afterwards only the new passcode opens the vault.
+ */
+@Composable
+private fun ChangePinDialog(
+    verifyCurrent: (String, (Boolean) -> Unit) -> Unit,
+    onChange: (String, String, (Boolean) -> Unit) -> Unit,
+    onDone: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var phase by remember { mutableStateOf("current") }   // current -> new -> confirm
+    var current by remember { mutableStateOf("") }
+    var entry by remember { mutableStateOf("") }
+    var newPin by remember { mutableStateOf("") }
+    var err by remember { mutableStateOf<String?>(null) }
+    var working by remember { mutableStateOf(false) }
+    var wrongCount by remember { mutableStateOf(0) }
+    var lockedFor by remember { mutableStateOf(0) }
+
+    LaunchedEffect(lockedFor) {
+        while (lockedFor > 0) { kotlinx.coroutines.delay(1000); lockedFor -= 1 }
+    }
+
+    fun submit() {
+        if (working || lockedFor > 0) return
+        when (phase) {
+            "current" -> {
+                working = true; err = null
+                val tried = entry
+                verifyCurrent(tried) { ok ->
+                    working = false
+                    if (ok) { current = tried; entry = ""; wrongCount = 0; phase = "new" }
+                    else {
+                        wrongCount += 1
+                        lockedFor = LoginThrottle.delaySeconds(wrongCount)
+                        entry = ""; err = "Wrong passcode"
+                    }
+                }
+            }
+            "new" -> when {
+                !org.cmchat.app.vault.VaultManager.isValidNewPin(entry) ->
+                    err = "6–128 characters, not a palindrome"
+                entry == current -> err = "Choose a different passcode"
+                else -> { newPin = entry; entry = ""; err = null; phase = "confirm" }
+            }
+            "confirm" -> {
+                if (entry != newPin) {
+                    err = "Didn't match — start again"; entry = ""; newPin = ""; phase = "new"
+                } else {
+                    working = true; err = null
+                    onChange(current, newPin) { ok ->
+                        working = false
+                        if (ok) onDone()
+                        else { err = "Could not change passcode"; entry = ""; newPin = ""; phase = "new" }
+                    }
+                }
+            }
+        }
+    }
+
+    val title = when (phase) {
+        "current" -> "Enter current passcode"
+        "new" -> "Choose a new passcode"
+        else -> "Re-enter the new passcode"
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!working) onDismiss() },
+        title = { Text(title) },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = entry,
+                    onValueChange = { v -> if (!working && lockedFor <= 0) { entry = v.take(128); err = null } },
+                    singleLine = true,
+                    enabled = !working && lockedFor <= 0,
+                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Password),
+                )
+                when {
+                    working -> Text("Working…", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
+                    lockedFor > 0 -> Text("Too many tries — wait " + LoginThrottle.format(lockedFor),
+                        color = CmRed, fontFamily = Nunito, fontSize = 12.sp)
+                    else -> err?.let { Text(it, color = CmRed, fontFamily = Nunito, fontSize = 12.sp) }
+                }
+            }
+        },
+        confirmButton = {
+            val label = when (phase) { "current" -> "Next"; "new" -> "Next"; else -> "Change" }
+            TextButton(onClick = { submit() }, enabled = !working && lockedFor <= 0) { Text(label) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !working) { Text("Cancel") } },
+    )
+}
+
 @Composable
 private fun ShredderRow() {
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CmCard).padding(14.dp)) {
@@ -375,8 +493,12 @@ private fun GeneralTimerRow() {
     val t by org.cmchat.app.settings.AppSettings.generalTimer.collectAsState()
     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CmCard)
         .clickable {
+            // The general timer is time-based only — view-once is a per-message
+            // choice, so it's excluded from this cycle.
             val all = org.cmchat.app.chat.SelfTimer.entries
-            org.cmchat.app.settings.AppSettings.generalTimer.value = all[(t.ordinal + 1) % all.size]
+                .filter { it != org.cmchat.app.chat.SelfTimer.VIEW_ONCE }
+            val i = all.indexOf(t).coerceAtLeast(0)
+            org.cmchat.app.settings.AppSettings.generalTimer.value = all[(i + 1) % all.size]
         }
         .padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
         Text("General timer (all messages)", color = CmText, fontFamily = Nunito, fontSize = 14.sp,

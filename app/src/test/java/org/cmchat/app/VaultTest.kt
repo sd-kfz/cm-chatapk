@@ -62,6 +62,27 @@ class VaultTest {
     }
 
     @Test
+    fun change_pin_reencrypts_and_old_pin_stops_working() {
+        val (m, _) = newManager()
+        m.createVault(pin = "135790", faceName = "Wanderer")
+
+        // Wrong current passcode -> no change; the old one still opens the vault.
+        assertFalse(m.changePin("000000", "246802"))
+        assertTrue(m.unlock("135790") is UnlockResult.Success)
+
+        // Correct change: old passcode stops working, new one opens the SAME data.
+        assertTrue(m.changePin("135790", "246802"))
+        assertEquals(UnlockResult.WrongPin, m.unlock("135790"))
+        val ok = m.unlock("246802")
+        assertTrue(ok is UnlockResult.Success)
+        assertEquals("Wanderer", (ok as UnlockResult.Success).data.faces.single().name)
+
+        // An invalid new passcode (too short) is rejected and changes nothing.
+        assertFalse(m.changePin("246802", "12321"))
+        assertTrue(m.unlock("246802") is UnlockResult.Success)
+    }
+
+    @Test
     fun crypto_secretbox_open_fails_on_tampered_blob() {
         val ls = LazySodiumJava(SodiumJava())
         val crypto = CryptoManager(ls)

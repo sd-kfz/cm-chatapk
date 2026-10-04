@@ -10,10 +10,16 @@ enum class MsgState { SENDING, SENT, OFFLINE }
 
 /**
  * Self-destruct durations, shared by the per-message timer and the general
- * timer. OFF = never. A message disappears this long after it is SEEN.
+ * timer. OFF = never. A timed message disappears this long after it is SEEN.
+ *
+ * VIEW_ONCE is NOT a duration: it is true burn-after-first-view. It carries no
+ * millis (so the time-based [SelfTimerRules] ignores it) and is burned
+ * explicitly — the sender's own copy once it's on its way, the recipient's copy
+ * once they've seen it and left the chat. See [ChatStore].
  */
 enum class SelfTimer(val label: String, val millis: Long?) {
     OFF("off", null),
+    VIEW_ONCE("view-once", null),
     S30("30s", 30_000L),
     M5("5m", 5 * 60_000L),
     M10("10m", 10 * 60_000L),
@@ -38,7 +44,14 @@ enum class SelfTimer(val label: String, val millis: Long?) {
  * per-message timer. `label` stays the wire value, so only the DISPLAYED text
  * changes.
  */
-fun SelfTimer.displayLabel(): String = if (this == SelfTimer.OFF) "Off" else label
+fun SelfTimer.displayLabel(): String = when (this) {
+    SelfTimer.OFF -> "Off"
+    SelfTimer.VIEW_ONCE -> "Single Message (view once)"
+    else -> label
+}
+
+/** True if this message self-destructs on first view (no timer). */
+val SelfTimer.isViewOnce: Boolean get() = this == SelfTimer.VIEW_ONCE
 
 /** A chat message. RAM-only; never written to disk. */
 data class ChatMessage(

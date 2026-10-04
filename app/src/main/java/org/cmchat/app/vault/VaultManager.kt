@@ -52,6 +52,18 @@ class VaultManager(val crypto: CryptoManager, dir: File) {
 
     fun save(pin: String, data: VaultData) = vault.save(pin, data)
 
+    /**
+     * Change the vault passcode: verify [oldPin] by decrypting, then re-encrypt
+     * the data under [newPin] with a fresh salt. Returns false (no change) if the
+     * new passcode is invalid ([isValidNewPin]) or the old one is wrong. After a
+     * success only [newPin] opens the vault; no data is lost. Runs Argon2id twice
+     * (load + re-seal), so callers MUST invoke this off the main thread.
+     */
+    fun changePin(oldPin: String, newPin: String): Boolean {
+        if (!isValidNewPin(newPin)) return false
+        return vault.changePin(oldPin, newPin)
+    }
+
     fun wipe() = vault.wipe()
 
     companion object {

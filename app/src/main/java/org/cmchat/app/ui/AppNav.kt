@@ -8,6 +8,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.cmchat.app.chat.ChatStore
 import org.cmchat.app.crypto.CmId
 import org.cmchat.app.tor.ServerController
@@ -57,6 +60,7 @@ private sealed class Nav {
     object About : Nav()
     object Language : Nav()
     object RamDiag : Nav()
+    object Integrity : Nav()
     data class Tool(val which: String) : Nav()
 }
 
@@ -70,6 +74,7 @@ private fun myCmId(data: VaultData?): String? {
 fun AppNav() {
     val context = LocalContext.current
     val manager = remember { SecurityFactory.create(context.filesDir) }
+    val scope = rememberCoroutineScope()
 
     var nav by remember { mutableStateOf<Nav>(Nav.Lock) }
     var data by remember { mutableStateOf<VaultData?>(null) }
@@ -350,6 +355,23 @@ fun AppNav() {
                     data = updated
                 }
             },
+            onOpenIntegrity = { nav = Nav.Integrity },
+            // Argon2id runs on a background dispatcher; the result is handed back on
+            // the main thread. On a successful change we swap the in-RAM pin so the
+            // session keeps saving under the new passcode.
+            verifyVaultPin = { entered, cb ->
+                scope.launch {
+                    val ok = withContext(Dispatchers.Default) { manager.verify(entered) }
+                    cb(ok)
+                }
+            },
+            onChangeVaultPin = { old, new, cb ->
+                scope.launch {
+                    val ok = withContext(Dispatchers.Default) { manager.changePin(old, new) }
+                    if (ok) pin = new
+                    cb(ok)
+                }
+            },
         )
         Nav.Diagnostics -> org.cmchat.app.ui.screens.DiagnosticsScreen(onBack = { nav = Nav.Settings })
         Nav.Onboarding -> org.cmchat.app.ui.screens.OnboardingScreen(onDone = {
@@ -383,6 +405,7 @@ fun AppNav() {
             },
         )
         Nav.MyId -> MyIdScreen(cmId = myCmId(data), onBack = { nav = Nav.Settings })
+        Nav.Integrity -> org.cmchat.app.ui.screens.IntegrityScreen(onBack = { nav = Nav.Settings })
         Nav.Bridges -> org.cmchat.app.ui.screens.BridgesScreen(
             currentMode = data?.settings?.bridgeMode ?: "off",
             currentLines = data?.settings?.bridgeLines ?: "",
