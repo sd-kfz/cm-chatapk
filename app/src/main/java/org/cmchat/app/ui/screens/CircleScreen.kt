@@ -116,14 +116,14 @@ fun CircleScreen(
                 MinimiseExitPill(onMinimise = onMinimise, onExit = onExit)
             }
 
-            // Centred status block — the focal element.
-            Spacer(Modifier.height(22.dp))
-            CentredStatus(online, torStatus, invisible) {
+            // Status line — single compact row: Engine far-left, Me far-right.
+            Spacer(Modifier.height(20.dp))
+            StatusRow(online, torStatus, invisible) {
                 val nowInvisible = !invisible
                 org.cmchat.app.settings.AppSettings.invisibleMode.value = nowInvisible
                 if (!nowInvisible) org.cmchat.app.chat.ChatStore.markMissedSeen()
             }
-            Spacer(Modifier.height(22.dp))
+            Spacer(Modifier.height(20.dp))
 
             if (torStatus is TorStatus.Starting || torStatus is TorStatus.Connecting) {
                 val bridged = org.cmchat.app.tor.Bridges.isEnabled()
@@ -259,7 +259,7 @@ private fun ReticleDot() {
 }
 
 @Composable
-private fun CentredStatus(online: Boolean, status: TorStatus, invisible: Boolean, onToggleMe: () -> Unit) {
+private fun StatusRow(online: Boolean, status: TorStatus, invisible: Boolean, onToggleMe: () -> Unit) {
     val engineLabel = when (status) {
         is TorStatus.Online -> "Online"
         is TorStatus.Connecting -> "Connecting ${status.percent}%"
@@ -267,31 +267,32 @@ private fun CentredStatus(online: Boolean, status: TorStatus, invisible: Boolean
         is TorStatus.Offline -> "Offline"
         is TorStatus.Failed -> if (status.reason == "bridges") "Failed (bridges)" else "Failed"
     }
-    Column(
+    // Single compact line: "Engine: <state>" pinned far-left, "Me: <state>"
+    // pinned far-right. No stacking. Me is tappable to toggle Invisible/Online.
+    Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
             .cornerTicks(if (online) HudCyan.copy(alpha = 0.6f) else HudFrame)
-            .padding(vertical = 14.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Engine: ", color = CmTextDim, fontFamily = Nunito, fontSize = 13.sp)
+            Text("Engine: ", color = CmTextDim, fontFamily = Nunito, fontSize = 14.sp)
             Text(engineLabel,
                 color = if (online) HudTeal else HudGrey.copy(alpha = 0.7f),
-                fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                fontFamily = Nunito, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
         }
-        Spacer(Modifier.height(8.dp))
-        // "Me: Invisible" — focal, tappable to toggle.
+        Spacer(Modifier.weight(1f))
         Row(verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable { onToggleMe() }
-                .padding(horizontal = 12.dp, vertical = 4.dp)) {
-            Text("Me: ", color = CmTextDim, fontFamily = Nunito, fontSize = 18.sp)
+                .padding(horizontal = 8.dp, vertical = 4.dp)) {
+            Text("Me: ", color = CmTextDim, fontFamily = Nunito, fontSize = 14.sp)
             Text(if (invisible) "Invisible" else "Online",
                 color = when {
                     !online -> HudGrey
                     invisible -> HudCyan
                     else -> HudTeal
                 },
-                fontFamily = Nunito, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                fontFamily = Nunito, fontSize = 14.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
