@@ -22,7 +22,6 @@ import org.cmchat.app.ui.screens.LockScreen
 import org.cmchat.app.ui.screens.MyIdScreen
 import org.cmchat.app.ui.screens.MyServerScreen
 import org.cmchat.app.ui.screens.SettingsScreen
-import org.cmchat.app.ui.screens.sampleCircle
 import org.cmchat.app.ui.theme.CmGreen
 import org.cmchat.app.vault.SecurityFactory
 import org.cmchat.app.vault.VaultData
@@ -39,6 +38,8 @@ private sealed class Nav {
     object MyId : Nav()
     object Bridges : Nav()
     object Connection : Nav()
+    object Onboarding : Nav()
+    object Help : Nav()
     object Knock : Nav()
     object Diagnostics : Nav()
     object About : Nav()
@@ -210,10 +211,11 @@ fun AppNav() {
             org.cmchat.app.settings.AppSettings.lastUnlockMs = System.currentTimeMillis()
             // Load bridge config BEFORE starting Tor so it's in the torrc at launch.
             org.cmchat.app.tor.Bridges.configure(unlocked.settings.bridgeMode, unlocked.settings.bridgeLines)
+            org.cmchat.app.transport.CoverTraffic.setEnabled(unlocked.settings.coverTraffic)
             TorService.start(context)
             org.cmchat.app.guard.GuardController.init(context)
-            nav = Nav.Circle
-            if (firstRun) showReviewSettings = true
+            // Brand-new users get the one-time onboarding wizard first.
+            if (firstRun) nav = Nav.Onboarding else nav = Nav.Circle
         }
         Nav.Circle -> {
             val threads by ChatStore.threads.collectAsState()
@@ -223,7 +225,7 @@ fun AppNav() {
                         unread = it.cmId?.let { id -> threads[id]?.unread } ?: false,
                         cmId = it.cmId)
                 }
-                ?: sampleCircle
+                ?: emptyList()   // real empty state (no fake sample contacts)
             // Decoy chat: a fake contact; tapping it silently Exits + wipes RAM.
             val decoyOn by org.cmchat.app.settings.AppSettings.decoyEnabled.collectAsState()
             val decoyName by org.cmchat.app.settings.AppSettings.decoyName.collectAsState()
@@ -296,8 +298,18 @@ fun AppNav() {
             onWipeEverything = { showWipeConfirm = true },
             onOpenDiagnostics = { nav = Nav.Diagnostics },
             onOpenConnection = { nav = Nav.Connection },
+            onIgnoreBattery = {
+                runCatching {
+                    context.startActivity(
+                        Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                            Uri.parse("package:${context.packageName}"))
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                }
+            },
             onExit = { org.cmchat.app.LifecycleController.exit(context) },
             onAbout = { nav = Nav.About },
+            onHelp = { nav = Nav.Help },
             onLanguage = { nav = Nav.Language },
             onRamDiag = { nav = Nav.RamDiag },
             privacyPinSet = data?.settings?.privacyPin != null,
@@ -328,6 +340,17 @@ fun AppNav() {
             },
         )
         Nav.Diagnostics -> org.cmchat.app.ui.screens.DiagnosticsScreen(onBack = { nav = Nav.Settings })
+        Nav.Onboarding -> org.cmchat.app.ui.screens.OnboardingScreen(onDone = {
+            val p = pin; val cur = data
+            if (p != null && cur != null) {
+                val updated = cur.copy(settings = cur.settings.copy(onboardingSeen = true))
+                org.cmchat.app.vault.VaultIO.save(manager, p, updated)
+                data = updated
+            }
+            nav = Nav.Circle
+            showReviewSettings = true
+        })
+        Nav.Help -> org.cmchat.app.ui.screens.HelpScreen(onBack = { nav = Nav.Settings })
         Nav.Connection -> org.cmchat.app.ui.screens.ConnectionScreen(
             contacts = data?.contacts?.mapNotNull { c -> c.cmId?.let { id -> c.name to id } } ?: emptyList(),
             onLinkTest = { cmId -> MessageService.linkTest(cmId) },
@@ -364,6 +387,15 @@ fun AppNav() {
                 // Reset the retry cap and restart Tor so the new config applies.
                 TorService.retry(context)
                 nav = Nav.Settings
+            },
+            onToggleCover = { on ->
+                org.cmchat.app.transport.CoverTraffic.setEnabled(on)
+                val p = pin; val cur = data
+                if (p != null && cur != null) {
+                    val updated = cur.copy(settings = cur.settings.copy(coverTraffic = on))
+                    org.cmchat.app.vault.VaultIO.save(manager, p, updated)
+                    data = updated
+                }
             },
             onBack = { nav = Nav.Settings },
         )

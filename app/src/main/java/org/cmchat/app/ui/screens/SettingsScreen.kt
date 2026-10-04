@@ -31,8 +31,10 @@ fun SettingsScreen(
     onWipeEverything: () -> Unit = {},
     onOpenDiagnostics: () -> Unit = {},
     onOpenConnection: () -> Unit = {},
+    onIgnoreBattery: () -> Unit = {},
     onExit: () -> Unit = {},
     onAbout: () -> Unit = {},
+    onHelp: () -> Unit = {},
     onLanguage: () -> Unit = {},
     onRamDiag: () -> Unit = {},
     privacyPinSet: Boolean = false,
@@ -131,6 +133,8 @@ fun SettingsScreen(
             }
             ToolToggle("Metadata scrub (strip EXIF/GPS)", org.cmchat.app.settings.AppSettings.metadataScrub,
                 hint = "Removes hidden location/date from photos you send.")
+            Setting("Keep engine running in background", onClick = onIgnoreBattery,
+                hint = "Ask Android not to sleep the engine so messages still arrive.")
             SessionWindowRow(onSessionWindow)
             Setting("Diagnostics & troubleshoot", onClick = onOpenDiagnostics,
                 hint = "See what's happening if something isn't working.")
@@ -142,6 +146,8 @@ fun SettingsScreen(
             Setting("Change PIN")
             Setting("Language", onClick = onLanguage,
                 hint = "Choose the app's language.")
+            Setting("How to use (A–Z)", onClick = onHelp,
+                hint = "Plain-language guide to everything in the app.")
             Setting("About / Version", onClick = onAbout)
             Spacer(Modifier.height(4.dp))
         }

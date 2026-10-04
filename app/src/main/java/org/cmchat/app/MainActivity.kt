@@ -30,6 +30,8 @@ class MainActivity : ComponentActivity() {
         GuardController.touch()
         // Returning to the foreground resumes normal messaging (ends buzz-only).
         org.cmchat.app.LifecycleController.onAppForeground()
+        // Return from sleep/Doze: nudge the engine if the OS dropped it.
+        org.cmchat.app.tor.TorService.ensureHealthy(applicationContext)
     }
 
     // Backgrounded (minimised): re-lock + wipe vault-unlock material from RAM,

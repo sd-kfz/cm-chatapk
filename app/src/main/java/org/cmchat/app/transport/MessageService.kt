@@ -115,7 +115,7 @@ object MessageService {
             val ok = runCatching {
                 val inner = framed(FrameType.KNOCK,
                     Messages.json.encodeToString(KnockPayload.serializer(), KnockPayload(myName, myId)).toByteArray())
-                sendRaw(target, c.sealedSeal(inner, target.identityPubKeyHex))
+                sendRaw(target, c.sealedSeal(FramePad.pad(inner), target.identityPubKeyHex))
                 true
             }.getOrElse { org.cmchat.app.diag.Diag.e("knock", "send failed", it); false }
             org.cmchat.app.diag.Diag.i("knock", "sent=$ok")
@@ -139,6 +139,25 @@ object MessageService {
         }
         return true
     }
+
+    /**
+     * Cover traffic: send a decoy frame to a contact. It is padded + sealed by
+     * the same path as a real frame (so an observer can't tell them apart) and
+     * the receiver silently discards it. Random inner size within the base
+     * bucket so it looks like a short real message.
+     */
+    fun sendCover(chatCmId: String) {
+        val c = crypto; val sec = mySec; val peer = contacts[chatCmId] ?: return
+        if (c == null || sec == null) return
+        val junk = ByteArray((8..400).random()).also { java.security.SecureRandom().nextBytes(it) }
+        scope.launch {
+            runCatching { sendBox(c, sec, peer, FrameType.COVER, junk) }
+                .onFailure { org.cmchat.app.diag.Diag.e("cover", "send failed", it) }
+        }
+    }
+
+    /** Contacts currently known (for the cover-traffic picker). */
+    fun contactIds(): List<String> = contacts.keys.toList()
 
     /** Send a text message; updates [ChatStore] state to SENT or OFFLINE. */
     fun sendText(chatCmId: String, text: String, timer: SelfTimer) {
@@ -260,17 +279,26 @@ object MessageService {
             val pub = myPub ?: return
             val sec = mySec ?: return
 
-            // 1) KNOCK: anonymous sealed box, openable with my key alone.
-            c.sealedOpen(sealed, pub, sec)?.let { inner ->
+            // 1) KNOCK: anonymous sealed box, openable with my key alone. Strip
+            //    the uniform padding after decryption before dispatch.
+            c.sealedOpen(sealed, pub, sec)?.let { opened ->
+                val inner = FramePad.unpad(opened) ?: run {
+                    org.cmchat.app.diag.ConnDiag.inc("knock padding malformed → dropped")
+                    org.cmchat.app.diag.Diag.droppedFrame(); return
+                }
                 org.cmchat.app.diag.ConnDiag.inc("opened as KNOCK (anonymous sealed box)")
                 dispatchAnonymous(inner); return
             }
             // 2) crypto_box from a known contact: try each contact's key.
             for ((cmId, peer) in contacts) {
-                val inner = c.boxOpen(sealed, peer.identityPubKeyHex, sec) ?: continue
+                val opened = c.boxOpen(sealed, peer.identityPubKeyHex, sec) ?: continue
                 // Per-contact (post-auth) rate limit — drop a contact that floods us.
                 if (!contactRate.allow(cmId)) {
                     org.cmchat.app.diag.ConnDiag.inc("rejected: per-contact rate limit")
+                    org.cmchat.app.diag.Diag.droppedFrame(); return
+                }
+                val inner = FramePad.unpad(opened) ?: run {
+                    org.cmchat.app.diag.ConnDiag.inc("padding malformed → dropped")
                     org.cmchat.app.diag.Diag.droppedFrame(); return
                 }
                 org.cmchat.app.diag.ConnDiag.inc("authenticated from ${org.cmchat.app.diag.Redact.onionShort(peer.onion)}")
@@ -335,6 +363,7 @@ object MessageService {
             FrameType.KNOCK_ACCEPT -> ChatStore.touchPeer(chatCmId)
             FrameType.BUZZ -> onBuzz(chatCmId)
             FrameType.ADDR_UPDATE -> onAddressUpdate(chatCmId, peer, body)
+            FrameType.COVER -> org.cmchat.app.diag.ConnDiag.inc("cover frame discarded")
             else -> {}
         }
     }
@@ -377,7 +406,9 @@ object MessageService {
     // ---- wire helpers ------------------------------------------------------
 
     private fun sendBox(c: CryptoManager, mySecHex: String, peer: CmIdData, type: FrameType, payload: ByteArray) {
-        val sealed = c.boxSeal(framed(type, payload), peer.identityPubKeyHex, mySecHex)
+        // Pad the inner frame to a fixed size bucket BEFORE sealing, so the
+        // on-wire size never reveals the real length or frame type.
+        val sealed = c.boxSeal(FramePad.pad(framed(type, payload)), peer.identityPubKeyHex, mySecHex)
         sendRaw(peer, sealed)
     }
 
@@ -392,6 +423,9 @@ object MessageService {
             org.cmchat.app.diag.ConnDiag.out("FAILED: Tor offline")
             throw java.io.IOException("Tor offline")
         }
+        // Timing jitter: a small randomized delay so exact send time doesn't map
+        // 1:1 to typing/sending. Applies to every outbound frame (incl. cover).
+        runCatching { Thread.sleep((30..260).random().toLong()) }
         val t0 = System.currentTimeMillis()
         val sock = try {
             Transport.connectThroughTorRetry(

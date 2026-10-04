@@ -4,4 +4,30 @@
     <!-- Launcher label uses a Cyrillic capital Es (U+0421), which looks like
          "C" but sorts to the bottom of the app drawer. app_name stays Latin. -->
     <string name="launcher_label">СM-Chat</string>
+
+    <!-- Common UI -->
+    <string name="back">‹ Back</string>
+    <string name="skip">Skip</string>
+    <string name="next">Next</string>
+    <string name="done">Done</string>
+    <string name="cancel">Cancel</string>
+
+    <!-- First-run onboarding wizard (plain language) -->
+    <string name="ob_title_1">Welcome</string>
+    <string name="ob_body_1">Your private identity is ready. It lives only on this phone, locked by your PIN. No account, no phone number, no server knows who you are.</string>
+    <string name="ob_title_2">Your PIN is the only key</string>
+    <string name="ob_body_2">You just chose a PIN. It is the ONLY way in — there is no reset and no recovery. If you forget it, your data is gone for good. Tip: typing your PIN backwards is the panic wipe (the Shredder).</string>
+    <string name="ob_title_3">Engine, Online, Invisible</string>
+    <string name="ob_body_3">The Engine connects you over the Tor network. \"Online\" means friends can reach you. \"Invisible\" means you still receive messages but look offline to everyone. You always start Invisible — switch from the main screen when you\'re ready.</string>
+    <string name="ob_title_4">Add someone with a QR code</string>
+    <string name="ob_body_4">Tap the orange + on the main screen. Show your QR code or scan your friend\'s. You each add the other once — after that you can message privately.</string>
+    <string name="ob_title_5">Leaving and wiping</string>
+    <string name="ob_body_5">\"Exit\" clears everything from memory and logs you out. \"Wipe Everything\" in Settings deletes all data on this phone. And remember: your PIN typed backwards instantly and silently wipes everything.</string>
+
+    <!-- Help (A–Z) -->
+    <string name="help_title">How to use (A–Z)</string>
+
+    <!-- Plain error / empty states -->
+    <string name="err_generic">Something didn\'t work. Check your connection and try again.</string>
+    <string name="empty_circle">No contacts yet. Tap + to add someone with a QR code.</string>
 </resources>

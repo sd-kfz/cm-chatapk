@@ -68,6 +68,10 @@ fun ConnectionScreen(
                 if (published) CmGreen else CmTextDim)
             StateRow("Last self-test", lastSelf ?: "—", CmTextDim)
             StateRow("Bridges", bridgeMode.wire, if (bridgeMode == Bridges.Mode.OFF) CmTextDim else CmBlue)
+            val starts = TorService.serviceStarts
+            val upMin = if (TorService.serviceStartedAtMs > 0)
+                (System.currentTimeMillis() - TorService.serviceStartedAtMs) / 60000 else 0
+            StateRow("Engine service", "started ${starts}× · up ${upMin}m", CmTextDim)
         }
 
         Spacer(Modifier.height(8.dp))

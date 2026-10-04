@@ -68,6 +68,13 @@ class TorService : Service() {
         @Volatile
         private var instance: TorService? = null
 
+        /** Battery/background diagnostics: when the service last (re)started and
+         * how many times — a START_STICKY restart after an OS kill bumps this. */
+        @Volatile var serviceStartedAtMs = 0L
+            private set
+        @Volatile var serviceStarts = 0
+            private set
+
         /** The jtorctl control connection while Tor is running, else null. */
         fun controlConnection(): TorControlConnection? =
             instance?.gpService?.torControlConnection
@@ -100,6 +107,43 @@ class TorService : Service() {
             restartsUsed = 0
             _status.value = TorStatus.Starting
             instance?.let { runCatching { it.restartTor() } } ?: start(context)
+        }
+
+        /**
+         * A network change happened. If Tor is settled (Online/Offline/Failed),
+         * tear down and rebuild on the new network; if it is still coming up,
+         * leave it alone. Reuses the watchdog/teardown path.
+         */
+        fun onNetworkChanged() {
+            val inst = instance ?: return
+            when (status.value) {
+                is TorStatus.Starting, is TorStatus.Connecting -> { /* let it finish */ }
+                is TorStatus.Online -> {
+                    org.cmchat.app.diag.ConnDiag.sys("network changed — reconnecting Tor")
+                    restartsUsed = 0
+                    runCatching { inst.restartTor() }
+                }
+                is TorStatus.Offline, is TorStatus.Failed -> {
+                    org.cmchat.app.diag.ConnDiag.sys("network back — restarting Tor")
+                    restartsUsed = 0
+                    runCatching { inst.restartTor() }
+                }
+            }
+        }
+
+        /**
+         * On app resume (e.g. return from Doze): if the engine was running this
+         * session (instance != null) but has dropped to Offline/Failed, bring it
+         * back. Never starts Tor before first unlock or after an explicit exit
+         * (instance is null in both cases) — the unlock flow owns the first start.
+         */
+        fun ensureHealthy(context: Context) {
+            if (instance == null) return
+            val s = status.value
+            if (s is TorStatus.Offline || s is TorStatus.Failed) {
+                org.cmchat.app.diag.ConnDiag.sys("resume — ensuring engine is up")
+                retry(context)
+            }
         }
 
         fun stop(context: Context) {
@@ -145,6 +189,8 @@ class TorService : Service() {
         // start never races a dying old one.
         instance?.takeIf { it !== this }?.let { old -> runCatching { old.teardown() } }
         instance = this
+        serviceStartedAtMs = System.currentTimeMillis()
+        serviceStarts += 1
         // startForeground() is the LITERAL FIRST action, before any Tor work, so
         // we never trip ForegroundServiceDidNotStartInTime. The channel is created
         // inside goForeground() before the call.
@@ -160,6 +206,8 @@ class TorService : Service() {
         // and WE remain the single foreground service. No chained FGS, no race.
         // bindGuardian() first configures bridges into the torrc (fail-closed).
         bindGuardian()
+        // Auto-reconnect on WiFi<->data / signal changes.
+        NetworkMonitor.register(this) { onNetworkChanged() }
     }
 
     /**
@@ -241,6 +289,7 @@ class TorService : Service() {
     private fun teardown() {
         bootstrapJob?.cancel()
         watchdogJob?.cancel()
+        runCatching { NetworkMonitor.unregister() }
         runCatching { LocalBroadcastManager.getInstance(this).unregisterReceiver(statusReceiver) }
         runCatching { org.cmchat.app.tor.ServerController.stop() }
         runCatching { Bridges.stop() }

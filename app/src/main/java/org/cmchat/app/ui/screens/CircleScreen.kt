@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.sp
 import org.cmchat.app.tools.ToolsState
 import org.cmchat.app.tor.TorService
 import org.cmchat.app.tor.TorStatus
+import androidx.compose.ui.res.stringResource
 import org.cmchat.app.transport.MessageService
 import org.cmchat.app.ui.components.CmChatLogo
 import org.cmchat.app.ui.theme.*
@@ -142,7 +143,14 @@ fun CircleScreen(
             )
         }
 
-        LazyColumn(
+        if (contacts.isEmpty()) {
+            Box(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 28.dp),
+                contentAlignment = Alignment.Center) {
+                Text(stringResource(org.cmchat.app.R.string.empty_circle),
+                    color = CmTextFaint, fontFamily = Nunito, fontSize = 14.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            }
+        } else LazyColumn(
             Modifier.weight(1f).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {

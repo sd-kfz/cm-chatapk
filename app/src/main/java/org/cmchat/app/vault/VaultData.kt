@@ -48,6 +48,10 @@ data class VaultSettings(
     val bridgeMode: String = "off",
     /** User-pasted bridge lines, one per line (preferred over the built-ins). */
     val bridgeLines: String = "",
+    /** Cover traffic (decoy frames) to hide when you're really messaging. */
+    val coverTraffic: Boolean = false,
+    /** First-run onboarding wizard has been shown. */
+    val onboardingSeen: Boolean = false,
 )
 
 /** Everything persisted in the encrypted vault. Messages are NOT here. */

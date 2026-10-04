@@ -30,12 +30,14 @@ fun BridgesScreen(
     currentMode: String,
     currentLines: String,
     onSave: (modeWire: String, lines: String) -> Unit,
+    onToggleCover: (Boolean) -> Unit = {},
     onBack: () -> Unit,
 ) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     var mode by remember { mutableStateOf(Bridges.Mode.from(currentMode)) }
     var lines by remember { mutableStateOf(currentLines) }
     val torStatus by TorService.status.collectAsState()
+    val coverOn by org.cmchat.app.transport.CoverTraffic.enabled.collectAsState()
 
     Column(Modifier.fillMaxSize().background(CmBackground)) {
         Box(Modifier.fillMaxWidth().padding(16.dp)) {
@@ -101,6 +103,20 @@ fun BridgesScreen(
             Text("If bridges are on and can't connect, the app will NOT fall back to normal " +
                 "Tor — it shows \"Failed (bridges)\" instead, so your cloak is never bypassed.",
                 color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp)
+
+            // Cover traffic (decoy frames), off by default.
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CmCard)
+                .clickable { onToggleCover(!coverOn) }.padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Cover traffic", color = CmText, fontFamily = Nunito, fontSize = 14.sp)
+                    Text("Sends decoy traffic to hide when you're really messaging. " +
+                        "Uses more battery and data.",
+                        color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp)
+                }
+                Text(if (coverOn) "On" else "Off", color = if (coverOn) CmGreen else CmTextDim,
+                    fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            }
 
             Spacer(Modifier.height(4.dp))
             Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(CmBlue)

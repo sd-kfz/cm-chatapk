@@ -19,7 +19,11 @@ enum class FrameType(val code: Int) {
     BUZZ(12),
 
     /** Signed address-update: sender's new CMC-ID after rotating their onion. */
-    ADDR_UPDATE(13);
+    ADDR_UPDATE(13),
+
+    /** Cover traffic: a decoy frame, padded + sealed like any other, silently
+     * discarded by the receiver. Masks WHEN real messages happen. */
+    COVER(14);
 
     companion object {
         fun fromCode(code: Int): FrameType? = entries.firstOrNull { it.code == code }

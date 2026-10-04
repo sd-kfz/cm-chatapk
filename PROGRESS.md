@@ -20,7 +20,39 @@ continue.
 - Release signing: not set up yet (release APK is unsigned). Stable-key
   signing via GitHub secrets is a later step; see "Signing TODO" below.
 
-## Stable signing secrets + Connection diagnostic / Link Test (latest)
+## Resilience + traffic cloaking + onboarding (latest)
+Commit `feat: traffic padding+jitter+cover traffic, network-change
+auto-reconnect, onboarding wizard + help, battery/doze robustness, i18n-ready
+strings, polish`.
+- **A — traffic analysis resistance:** `transport/FramePad.kt` pads every inner
+  frame to a fixed size bucket (536 base, then 2048/8192/16384/32768/49152)
+  BEFORE sealing, so on-wire size never leaks length or frame type. Applied at
+  the seal/open chokepoint, so it covers ALL frame types (knock, message,
+  status, buzz, erase, addr-update, cover). Timing jitter (30–260ms) added in
+  `sendRaw`. Optional cover traffic (`transport/CoverTraffic.kt`, OFF by
+  default) toggle in Settings → Stealth: decoy `COVER` frames at random
+  20–90s intervals, padded+sealed identically and silently discarded by the
+  receiver. Unit test `FramePadTest` proves uniform buckets + round-trip.
+- **B — network-change auto-reconnect:** `tor/NetworkMonitor.kt` (default-network
+  callback, debounced) → `TorService.onNetworkChanged()` restarts Tor via the
+  existing teardown/watchdog on WiFi⇄data/signal changes; `ensureHealthy()` on
+  resume (Doze) nudges a dropped engine (never before unlock / after exit).
+  Every reconnect event logs to the Connection diagnostic.
+- **C — onboarding + help:** `OnboardingScreen` (5-page plain-language wizard,
+  skippable, shown once for new users, persisted `onboardingSeen`),
+  `HelpScreen` (A–Z plain help) from Settings. Real empty state on the Circle
+  (no more fake sample contacts) + plain error strings.
+- **D — battery/background:** FGS already START_STICKY; added service
+  start-count + uptime (shown in Connection diagnostic) and a Settings action to
+  request battery-optimisation exemption (`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`).
+  Recovers on next open.
+- **E — i18n foundation:** `res/values/strings.xml` now holds the onboarding /
+  help / common / empty-state strings, used via `stringResource`. (Full
+  externalisation of all pre-existing inline strings remains a mechanical
+  follow-up — see report.)
+- **F — polish:** empty states, consistent helper hints, dead-end audit.
+
+## Stable signing secrets + Connection diagnostic / Link Test
 Commit `feat: stable signing via secrets (no workflow change) + Connection
 diagnostic / Link Test with redaction`.
 - **Signing:** no workflow change needed — it already reads `KEYSTORE_BASE64`,
