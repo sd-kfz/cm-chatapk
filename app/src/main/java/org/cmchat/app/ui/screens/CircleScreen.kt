@@ -1,7 +1,6 @@
 package org.cmchat.app.ui.screens
 
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,7 +18,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontStyle
@@ -75,17 +73,15 @@ fun CircleScreen(
     Box(Modifier.fillMaxSize().background(CmBackground)) {
         Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
 
-            // ---- top bar: flower + wordmark .......... settings / minimise / exit
+            // ---- top bar: wordmark (letters only, left) .......... minimise / exit
+            // No logo image and no settings gear here — Settings lives under the "+".
             Spacer(Modifier.height(12.dp))
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Image(painterResource(R.drawable.ic_flower_foreground), contentDescription = null,
-                    modifier = Modifier.size(28.dp))
-                Spacer(Modifier.width(8.dp))
                 Wordmark(online)
                 Spacer(Modifier.weight(1f))
-                IconBtn("⚙", Grey) { onOpenSettings() }
-                IconBtn("–", Grey) { onMinimise() }
-                IconBtn("⏻", WordRed) { onExit() }
+                IconBtn(onClick = onMinimise) { MinimiseIcon() }
+                Spacer(Modifier.width(8.dp))
+                IconBtn(onClick = onExit) { PowerIcon() }
             }
 
             // ---- thin status line: Engine (left) .......... Me (right)
@@ -170,13 +166,30 @@ fun CircleScreen(
             }
         }
 
-        // ---- purple "+" FAB, bottom-right (add a contact)
-        Box(
-            Modifier.align(Alignment.BottomEnd).padding(20.dp)
-                .size(56.dp).clip(CircleShape).background(Purple).clickable { onKnock() },
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("+", color = Color.White, fontFamily = Nunito, fontSize = 30.sp, fontWeight = FontWeight.Bold)
+        // ---- purple "+" FAB, bottom-right — opens the actions menu (Add contact,
+        // Settings). Settings is NOT in the top bar; it lives here under the "+".
+        var menuOpen by remember { mutableStateOf(false) }
+        Box(Modifier.align(Alignment.BottomEnd).padding(20.dp)) {
+            Box(
+                Modifier.size(56.dp).clip(CircleShape).background(Purple)
+                    .clickable { menuOpen = true },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("+", color = Color.White, fontFamily = Nunito, fontSize = 30.sp, fontWeight = FontWeight.Bold)
+            }
+            androidx.compose.material3.DropdownMenu(
+                expanded = menuOpen,
+                onDismissRequest = { menuOpen = false },
+            ) {
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text("Add contact", fontFamily = Nunito) },
+                    onClick = { menuOpen = false; onKnock() },
+                )
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text("Settings", fontFamily = Nunito) },
+                    onClick = { menuOpen = false; onOpenSettings() },
+                )
+            }
         }
     }
 }
@@ -201,10 +214,55 @@ private fun Wordmark(online: Boolean) {
     }
 }
 
+/** A ≥40dp circular touch target wrapping a vector icon (not a font glyph). */
 @Composable
-private fun IconBtn(glyph: String, color: Color, onClick: () -> Unit) {
+private fun IconBtn(onClick: () -> Unit, content: @Composable () -> Unit) {
     Box(Modifier.size(40.dp).clip(CircleShape).clickable { onClick() }, contentAlignment = Alignment.Center) {
-        Text(glyph, color = color, fontFamily = Nunito, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        content()
+    }
+}
+
+/** MINIMISE — a single horizontal white line (SVG "M5 12h14"). */
+@Composable
+private fun MinimiseIcon() {
+    androidx.compose.foundation.Canvas(Modifier.size(22.dp)) {
+        val s = size.minDimension / 24f
+        drawLine(
+            color = Color.White,
+            start = Offset(5f * s, 12f * s),
+            end = Offset(19f * s, 12f * s),
+            strokeWidth = 2.2f * s,
+            cap = androidx.compose.ui.graphics.StrokeCap.Round,
+        )
+    }
+}
+
+/** EXIT — a red power/off symbol: open ring + vertical stem through the top. */
+@Composable
+private fun PowerIcon() {
+    androidx.compose.foundation.Canvas(Modifier.size(22.dp)) {
+        val s = size.minDimension / 24f
+        val stroke = androidx.compose.ui.graphics.drawscope.Stroke(
+            width = 2.2f * s, cap = androidx.compose.ui.graphics.StrokeCap.Round,
+        )
+        // Ring: a circle open at the top (gap centred on the vertical stem).
+        val r = 7.5f * s
+        val cx = 12f * s; val cy = 12.5f * s
+        drawArc(
+            color = WordRed,
+            startAngle = -60f, sweepAngle = 300f, useCenter = false,
+            topLeft = Offset(cx - r, cy - r),
+            size = androidx.compose.ui.geometry.Size(2 * r, 2 * r),
+            style = stroke,
+        )
+        // Vertical stem (SVG "M12 3.5v8").
+        drawLine(
+            color = WordRed,
+            start = Offset(12f * s, 3.5f * s),
+            end = Offset(12f * s, 11.5f * s),
+            strokeWidth = 2.2f * s,
+            cap = androidx.compose.ui.graphics.StrokeCap.Round,
+        )
     }
 }
 
