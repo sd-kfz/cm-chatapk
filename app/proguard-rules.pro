@@ -23,6 +23,13 @@
 -keep class net.freehaven.tor.control.** { *; }
 -dontwarn org.torproject.**
 
+# IPtProxy (gomobile-generated JNI bindings for obfs4/snowflake). These are
+# driven via JNI + go.Seq reflection, so R8 must not rename or strip them.
+-keep class IPtProxy.** { *; }
+-keep class go.** { *; }
+-dontwarn IPtProxy.**
+-dontwarn go.**
+
 # ZXing.
 -keep class com.google.zxing.** { *; }
 -keep class com.journeyapps.** { *; }

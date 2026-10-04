@@ -132,8 +132,10 @@ fun CircleScreen(
             }
         }
         if (torStatus is TorStatus.Starting || torStatus is TorStatus.Connecting) {
+            val bridged = org.cmchat.app.tor.Bridges.isEnabled()
             Text(
-                "Connecting to Tor — the first launch can take 1–3 minutes.",
+                if (bridged) "Connecting through bridges… can take longer than normal."
+                else "Connecting to Tor — the first launch can take 1–3 minutes.",
                 color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp,
                 modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 8.dp),
             )
@@ -221,7 +223,7 @@ private fun EngineLine(status: TorStatus) {
         is TorStatus.Connecting -> CmOrange to "Connecting ${status.percent}%"
         is TorStatus.Starting -> CmOrange to "Starting"
         is TorStatus.Offline -> CmTextDim to "Offline"
-        is TorStatus.Failed -> CmRed to "Failed"
+        is TorStatus.Failed -> CmRed to if (status.reason == "bridges") "Failed (bridges)" else "Failed"
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(7.dp).clip(CircleShape).background(color))

@@ -20,7 +20,42 @@ continue.
 - Release signing: not set up yet (release APK is unsigned). Stable-key
   signing via GitHub secrets is a later step; see "Signing TODO" below.
 
-## Resilience + self-attack batch (latest)
+## Bridges (obfs4/Snowflake) + QR contact exchange (latest)
+Commit `feat: pluggable-transport bridges (obfs4/snowflake), QR contact
+exchange, honest stealth wording`.
+- **Pluggable transports:** added `com.netzarchitekten:IPtProxy:5.5.1` (bundles
+  lyrebird/obfs4proxy + snowflake as in-process Go clients). `tor/Bridges.kt`
+  runs the transport, then writes `UseBridges 1` + `ClientTransportPlugin <t>
+  socks5 127.0.0.1:<port>` + `Bridge` lines into tor-android's user torrc
+  (`TorService.getTorrc`) BEFORE Tor binds — so the FIRST connection already
+  goes through the bridge; there is no direct-Tor phase to leak.
+- **Fail closed:** `TorService.bindGuardian()` calls `Bridges.prepare()` first;
+  if an enabled transport (or the torrc write) fails it sets
+  `TorStatus.Failed("bridges")` and does NOT bind Tor — never a fallback to
+  direct Tor/clearnet. EngineLine shows "Failed (bridges)" with Retry.
+- **Honest status:** while connecting with bridges the Circle shows "Connecting
+  through bridges… can take longer than normal."
+- **Settings → Stealth (Bridges):** `ui/screens/BridgesScreen.kt` — Off / obfs4 /
+  Snowflake, a custom-bridge-lines box (custom wins over the built-in obfs4
+  fallback set), and plain wording: "Makes your Tor traffic look like normal web
+  traffic… Can be slower. It does NOT add message secrecy." Save persists
+  `bridgeMode`/`bridgeLines` to the vault and restarts Tor via the existing
+  watchdog/teardown (`TorService.retry`).
+- **ABIs trimmed** to arm64-v8a, armeabi-v7a, x86_64 (dropped 32-bit x86).
+- **QR contact exchange:** already present — `MyIdScreen` renders your CMC-ID as
+  a QR fully offline; `KnockScreen` scans a CMC-ID with the camera (zxing;
+  permission requested only when Scan is tapped; no frames stored) and feeds the
+  existing knock/first-contact flow. Added a "Show my QR" button beside "Scan
+  their QR" for discoverability.
+- **APK size:** debug ~48 MB → ~108 MB, release ~100 MB (the obfs4+snowflake Go
+  runtime is ~60 MB across three ABIs). Per-ABI splits could cut an arm64-only
+  APK back to ~45 MB if wanted.
+- **Caveat:** CI-green and the wiring is correct, but actual bridge CONNECTIVITY
+  can't be verified from the build environment (no device, no Tor egress) — must
+  be tested on a real phone. Snowflake defaults (broker/STUN) can rot; obfs4 with
+  user-supplied bridges is the reliable path.
+
+## Resilience + self-attack batch
 Commit `harden: self-attack test harness, crash anti-forensics, tor watchdog +
 reliable stop, fast reopen, off-main-thread, parser/memory bounds`.
 - **A — Single Message:** one concept only. The chat composer's per-message

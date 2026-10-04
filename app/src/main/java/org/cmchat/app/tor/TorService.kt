@@ -158,8 +158,26 @@ class TorService : Service() {
         // guarantees the 5s crash. We therefore ONLY BIND it (BIND_AUTO_CREATE) —
         // binding runs its onCreate -> starts the tor thread on its own worker —
         // and WE remain the single foreground service. No chained FGS, no race.
+        // bindGuardian() first configures bridges into the torrc (fail-closed).
+        bindGuardian()
+    }
+
+    /**
+     * Configure bridges into the torrc (if enabled) and bind the Guardian Tor
+     * service. FAIL CLOSED: if bridges are enabled but the pluggable transport
+     * can't start, we set Failed("bridges") and do NOT bind — Tor never makes a
+     * direct connection, so the cloak can't be bypassed. Returns whether bound.
+     */
+    private fun bindGuardian(): Boolean {
+        val ready = runCatching { Bridges.prepare(this) }
+            .getOrElse { org.cmchat.app.diag.Diag.e("bridges", "prepare failed", it); false }
+        if (!ready) {
+            _status.value = TorStatus.Failed(if (Bridges.isEnabled()) "bridges" else "config")
+            return false
+        }
         val intent = Intent(this, GpTorService::class.java)
         bound = bindService(intent, gpConnection, Context.BIND_AUTO_CREATE)
+        return bound
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -225,6 +243,7 @@ class TorService : Service() {
         watchdogJob?.cancel()
         runCatching { LocalBroadcastManager.getInstance(this).unregisterReceiver(statusReceiver) }
         runCatching { org.cmchat.app.tor.ServerController.stop() }
+        runCatching { Bridges.stop() }
         haltTorBounded()
         if (bound) {
             runCatching { unbindService(gpConnection) }
@@ -268,7 +287,8 @@ class TorService : Service() {
                     if (restartsUsed >= MAX_RESTARTS) {
                         org.cmchat.app.diag.Diag.w("watchdog",
                             "Tor not bootstrapped after ${restartsUsed + 1} attempts; failing")
-                        _status.value = TorStatus.Failed("Tor failed to connect")
+                        _status.value = TorStatus.Failed(
+                            if (Bridges.isEnabled()) "bridges" else "Tor failed to connect")
                         teardown()
                     } else {
                         restartsUsed += 1
@@ -298,8 +318,8 @@ class TorService : Service() {
         runCatching { stopService(Intent(this, GpTorService::class.java)) }
         gpService = null
         _status.value = TorStatus.Starting
-        val intent = Intent(this, GpTorService::class.java)
-        bound = bindService(intent, gpConnection, Context.BIND_AUTO_CREATE)
+        // Re-prepares bridges (so a mode change takes effect) then rebinds.
+        bindGuardian()
     }
 
     private fun startBootstrapPolling() {

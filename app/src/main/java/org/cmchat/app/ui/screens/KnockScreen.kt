@@ -21,7 +21,12 @@ import org.cmchat.app.crypto.CmId
 import org.cmchat.app.ui.theme.*
 
 @Composable
-fun KnockScreen(myCmId: String?, onSend: (cmId: String, nickname: String) -> Unit, onBack: () -> Unit) {
+fun KnockScreen(
+    myCmId: String?,
+    onSend: (cmId: String, nickname: String) -> Unit,
+    onBack: () -> Unit,
+    onShowMyQr: () -> Unit = {},
+) {
     var cmId by remember { mutableStateOf("") }
     var nickname by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
@@ -48,11 +53,21 @@ fun KnockScreen(myCmId: String?, onSend: (cmId: String, nickname: String) -> Uni
                 label = { Text("Their CMC-ID (cmc1:…)", color = CmTextDim) },
                 singleLine = false, colors = colors, modifier = Modifier.fillMaxWidth(),
             )
-            Box(Modifier.clip(RoundedCornerShape(14.dp)).background(CmCard)
-                .clickable { scanLauncher.launch(ScanOptions().setOrientationLocked(true)) }
-                .padding(horizontal = 16.dp, vertical = 12.dp)) {
-                Text("Scan QR", color = CmBlue, fontFamily = Nunito, fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Box(Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).background(CmCard)
+                    .clickable { scanLauncher.launch(ScanOptions().setOrientationLocked(true)) }
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    contentAlignment = Alignment.Center) {
+                    Text("Scan their QR", color = CmBlue, fontFamily = Nunito, fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold)
+                }
+                Box(Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).background(CmCard)
+                    .clickable { onShowMyQr() }
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    contentAlignment = Alignment.Center) {
+                    Text("Show my QR", color = CmBlue, fontFamily = Nunito, fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold)
+                }
             }
             OutlinedTextField(
                 value = nickname, onValueChange = { nickname = it.take(24) },

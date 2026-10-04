@@ -44,6 +44,10 @@ data class VaultSettings(
     val sessionWindow: Boolean = false,
     /** Selected UI language (BCP-47 tag); English until a locale is translated. */
     val language: String = "en",
+    /** Bridge mode: "off" | "obfs4" | "snowflake" (hide that Tor is in use). */
+    val bridgeMode: String = "off",
+    /** User-pasted bridge lines, one per line (preferred over the built-ins). */
+    val bridgeLines: String = "",
 )
 
 /** Everything persisted in the encrypted vault. Messages are NOT here. */

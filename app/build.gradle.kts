@@ -15,6 +15,13 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1"
+
+        // Ship only the ABIs we support. tor-android and IPtProxy both also
+        // carry a 32-bit x86 lib we don't need (no real 32-bit x86 phones);
+        // dropping it trims the APK and matches our supported-device list.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
     }
 
     // Optional stable-key signing: active only when CI (or a local build) sets
@@ -92,6 +99,11 @@ dependencies {
     // control-port library. All networking goes through Tor.
     implementation("info.guardianproject:tor-android:0.4.9.5")
     implementation("info.guardianproject:jtorctl:0.4.5.7")
+
+    // Pluggable transports (bridges): IPtProxy bundles lyrebird/obfs4proxy +
+    // snowflake as in-process Go clients for all ABIs. Used to hide that Tor is
+    // in use from a network observer. ~35 MB AAR (native libs per ABI).
+    implementation("com.netzarchitekten:IPtProxy:5.5.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
     // QR generate + scan for exchanging CM-IDs.

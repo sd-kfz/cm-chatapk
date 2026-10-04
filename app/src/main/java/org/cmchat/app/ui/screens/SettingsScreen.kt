@@ -26,6 +26,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onOpenMyServer: () -> Unit = {},
     onOpenMyId: () -> Unit = {},
+    onOpenBridges: () -> Unit = {},
     onWipeEverything: () -> Unit = {},
     onOpenDiagnostics: () -> Unit = {},
     onExit: () -> Unit = {},
@@ -101,8 +102,8 @@ fun SettingsScreen(
             GroupHeader("Server")
             Setting("My Server", onClick = onOpenMyServer,
                 hint = "Your own address that friends connect to.")
-            Setting("Bridges (obfs4 / Snowflake)", "coming",
-                hint = "Help connect where Tor is blocked.")
+            Setting("Stealth / Bridges (obfs4 · Snowflake)", onClick = onOpenBridges,
+                hint = "Hide that you use Tor from your network. Can be slower.")
 
             GroupHeader("Tools")
             ToolToggle("Tool: Calculator", org.cmchat.app.tools.ToolsState.calcEnabled)

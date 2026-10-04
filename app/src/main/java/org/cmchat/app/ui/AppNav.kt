@@ -37,6 +37,7 @@ private sealed class Nav {
     object Settings : Nav()
     object MyServer : Nav()
     object MyId : Nav()
+    object Bridges : Nav()
     object Knock : Nav()
     object Diagnostics : Nav()
     object About : Nav()
@@ -206,6 +207,8 @@ fun AppNav() {
             org.cmchat.app.settings.AppSettings.sessionWindowEnabled.value = unlocked.settings.sessionWindow
             org.cmchat.app.settings.Languages.selected.value = unlocked.settings.language
             org.cmchat.app.settings.AppSettings.lastUnlockMs = System.currentTimeMillis()
+            // Load bridge config BEFORE starting Tor so it's in the torrc at launch.
+            org.cmchat.app.tor.Bridges.configure(unlocked.settings.bridgeMode, unlocked.settings.bridgeLines)
             TorService.start(context)
             org.cmchat.app.guard.GuardController.init(context)
             nav = Nav.Circle
@@ -288,6 +291,7 @@ fun AppNav() {
             onBack = { nav = Nav.Circle },
             onOpenMyServer = { nav = Nav.MyServer },
             onOpenMyId = { nav = Nav.MyId },
+            onOpenBridges = { nav = Nav.Bridges },
             onWipeEverything = { showWipeConfirm = true },
             onOpenDiagnostics = { nav = Nav.Diagnostics },
             onExit = { org.cmchat.app.LifecycleController.exit(context) },
@@ -329,6 +333,25 @@ fun AppNav() {
             },
         )
         Nav.MyId -> MyIdScreen(cmId = myCmId(data), onBack = { nav = Nav.Settings })
+        Nav.Bridges -> org.cmchat.app.ui.screens.BridgesScreen(
+            currentMode = data?.settings?.bridgeMode ?: "off",
+            currentLines = data?.settings?.bridgeLines ?: "",
+            onSave = { modeWire, lines ->
+                org.cmchat.app.tor.Bridges.configure(modeWire, lines)
+                val p = pin; val cur = data
+                if (p != null && cur != null) {
+                    val updated = cur.copy(
+                        settings = cur.settings.copy(bridgeMode = modeWire, bridgeLines = lines)
+                    )
+                    org.cmchat.app.vault.VaultIO.save(manager, p, updated)
+                    data = updated
+                }
+                // Reset the retry cap and restart Tor so the new config applies.
+                TorService.retry(context)
+                nav = Nav.Settings
+            },
+            onBack = { nav = Nav.Settings },
+        )
         Nav.Knock -> KnockScreen(
             myCmId = myCmId(data),
             onSend = { cmId, _ ->
@@ -336,6 +359,7 @@ fun AppNav() {
                 nav = Nav.Circle
             },
             onBack = { nav = Nav.Circle },
+            onShowMyQr = { nav = Nav.MyId },
         )
         Nav.MyServer -> {
             val face = data?.faces?.firstOrNull()
