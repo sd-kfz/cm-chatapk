@@ -10,7 +10,6 @@
     <string name="skip">Skip</string>
     <string name="next">Next</string>
     <string name="done">Done</string>
-    <string name="cancel">Cancel</string>
 
     <!-- First-run onboarding wizard (plain language) -->
     <string name="ob_title_1">Welcome</string>
@@ -27,7 +26,6 @@
     <!-- Help (A–Z) -->
     <string name="help_title">How to use (A–Z)</string>
 
-    <!-- Plain error / empty states -->
-    <string name="err_generic">Something didn\'t work. Check your connection and try again.</string>
+    <!-- Plain empty states -->
     <string name="empty_circle">No contacts yet. Tap + to add someone with a QR code.</string>
 </resources>

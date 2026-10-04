@@ -267,11 +267,6 @@ object ServerController {
         ok to ms
     }
 
-    /** Never log the onion private-key blob; show presence only. */
-    private fun redact(key: String, value: String): String =
-        if (key.contains("PrivKey", true) || key.equals("PrivateKey", true))
-            "<${value.substringBefore(':')}:redacted>" else value
-
     private fun acceptLoop(server: ServerSocket) {
         scope.launch {
             while (!server.isClosed) {
