@@ -30,6 +30,7 @@ fun SettingsScreen(
     onOpenBridges: () -> Unit = {},
     onWipeEverything: () -> Unit = {},
     onOpenDiagnostics: () -> Unit = {},
+    onOpenConnection: () -> Unit = {},
     onExit: () -> Unit = {},
     onAbout: () -> Unit = {},
     onLanguage: () -> Unit = {},
@@ -133,6 +134,8 @@ fun SettingsScreen(
             SessionWindowRow(onSessionWindow)
             Setting("Diagnostics & troubleshoot", onClick = onOpenDiagnostics,
                 hint = "See what's happening if something isn't working.")
+            Setting("Connection test (Link Test)", onClick = onOpenConnection,
+                hint = "Watch each step of reaching a contact, live.")
             Setting("RAM diagnostics", onClick = onRamDiag,
                 hint = "See which features use the most memory.")
             Setting("Verify App Integrity")

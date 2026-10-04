@@ -38,6 +38,7 @@ private sealed class Nav {
     object MyServer : Nav()
     object MyId : Nav()
     object Bridges : Nav()
+    object Connection : Nav()
     object Knock : Nav()
     object Diagnostics : Nav()
     object About : Nav()
@@ -294,6 +295,7 @@ fun AppNav() {
             onOpenBridges = { nav = Nav.Bridges },
             onWipeEverything = { showWipeConfirm = true },
             onOpenDiagnostics = { nav = Nav.Diagnostics },
+            onOpenConnection = { nav = Nav.Connection },
             onExit = { org.cmchat.app.LifecycleController.exit(context) },
             onAbout = { nav = Nav.About },
             onLanguage = { nav = Nav.Language },
@@ -326,6 +328,11 @@ fun AppNav() {
             },
         )
         Nav.Diagnostics -> org.cmchat.app.ui.screens.DiagnosticsScreen(onBack = { nav = Nav.Settings })
+        Nav.Connection -> org.cmchat.app.ui.screens.ConnectionScreen(
+            contacts = data?.contacts?.mapNotNull { c -> c.cmId?.let { id -> c.name to id } } ?: emptyList(),
+            onLinkTest = { cmId -> MessageService.linkTest(cmId) },
+            onBack = { nav = Nav.Settings },
+        )
         Nav.About -> org.cmchat.app.ui.screens.AboutScreen(onBack = { nav = Nav.Settings })
         Nav.RamDiag -> org.cmchat.app.ui.screens.RamDiagnosticsScreen(onBack = { nav = Nav.Settings })
         Nav.Language -> org.cmchat.app.ui.screens.LanguageScreen(

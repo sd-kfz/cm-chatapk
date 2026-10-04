@@ -263,6 +263,7 @@ object ServerController {
         }.getOrElse { org.cmchat.app.diag.Diag.e("onion", "self-test failed", it); false }
         val ms = System.currentTimeMillis() - start
         org.cmchat.app.diag.Diag.i("onion", "self-test ${if (ok) "OK" else "FAIL"} ${ms}ms")
+        org.cmchat.app.diag.ConnDiag.recordSelfTest(ok, ms)
         ok to ms
     }
 
@@ -281,11 +282,13 @@ object ServerController {
                 // a per-contact limit applies post-auth in MessageService.
                 if (!acceptAllowed() || activeConns.get() >= MAX_CONCURRENT_CONN) {
                     runCatching { socket.close() }
+                    org.cmchat.app.diag.ConnDiag.inc("incoming dropped (rate-limited or over concurrency cap)")
                     org.cmchat.app.diag.Diag.droppedFrame()
                     continue
                 }
                 val handler = onIncoming
                 if (handler == null) { runCatching { socket.close() }; continue }
+                org.cmchat.app.diag.ConnDiag.inc("incoming connection accepted")
                 activeConns.incrementAndGet()
                 scope.launch {
                     try {

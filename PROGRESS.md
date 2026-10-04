@@ -20,7 +20,34 @@ continue.
 - Release signing: not set up yet (release APK is unsigned). Stable-key
   signing via GitHub secrets is a later step; see "Signing TODO" below.
 
-## Per-ABI APK splits (latest)
+## Stable signing secrets + Connection diagnostic / Link Test (latest)
+Commit `feat: stable signing via secrets (no workflow change) + Connection
+diagnostic / Link Test with redaction`.
+- **Signing:** no workflow change needed — it already reads `KEYSTORE_BASE64`,
+  `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`. A stable RSA-4096 / 10000-day
+  keystore (alias `cmchat`) was generated OUTSIDE the repo with two random
+  passwords and handed to the user as a base64 blob to paste into the secret.
+  The keystore is never committed (verified: git status shows only source).
+- **Connection diagnostic (`diag/ConnDiag.kt`) + `ui/screens/ConnectionScreen.kt`:**
+  its own RAM-only "Connection" section (separate from the Tor log and Self-Test
+  log). State summary at top (Engine, onion published?, last self-test + time,
+  bridges on/off). Logs every stage with a timestamp:
+  - OUTGOING (`MessageService.sendRaw` + `Transport.connectThroughTorRetry`
+    stage callbacks): resolve, SOCKS connect attempt N, "not reachable yet
+    (<reason>) … retry in Nms", TCP/SOCKS established, sealed frame ready, first
+    frame sent, CONNECTED(ms) / FAILED(<reason>: timeout / host unreachable /
+    descriptor not found / refused / SOCKS error).
+  - INCOMING (`ServerController.acceptLoop` + `MessageService.handleIncoming`):
+    connection accepted / dropped (rate-limit / cap), frame read (Nb), opened as
+    KNOCK / authenticated from <short>, per-contact rate-limit reject,
+    undecryptable → dropped, dispatched <type>, held (Invisible), knock
+    received / accepted / declined.
+  - "Run Link Test" (pick a contact → sends a real BUZZ probe over the full
+    Tor→onion path so BOTH phones log the stages live), "Copy log", "Clear".
+  - Redaction: every line goes through `Redact.scrub`; addresses shown only as a
+    6-char prefix (`rejtwm…`); message bodies and keys never logged.
+
+## Per-ABI APK splits
 Commit `build: per-ABI APK splits (arm64 primary, arm32 fallback), keep PT libs
 per split`.
 - `app/build.gradle.kts`: `splits { abi { … include arm64-v8a, armeabi-v7a,

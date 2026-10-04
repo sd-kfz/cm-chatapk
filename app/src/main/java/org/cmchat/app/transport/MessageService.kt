@@ -212,6 +212,7 @@ object MessageService {
     }
 
     fun acceptKnock(req: KnockRequest) {
+        org.cmchat.app.diag.ConnDiag.inc("knock accepted → added as contact")
         CmId.decode(req.cmId)?.let { contacts[req.cmId] = it }
         _incomingKnocks.value = _incomingKnocks.value.filterNot { it.cmId == req.cmId }
         onContactAccepted?.invoke(req)
@@ -230,6 +231,7 @@ object MessageService {
     }
 
     fun declineKnock(req: KnockRequest) {
+        org.cmchat.app.diag.ConnDiag.inc("knock declined")
         _incomingKnocks.value = _incomingKnocks.value.filterNot { it.cmId == req.cmId }
     }
 
@@ -249,27 +251,38 @@ object MessageService {
         // it never throws up into the accept loop. Received bytes are only ever
         // decrypted/parsed, never executed.
         try {
-            val sealed = Transport.readFrame(socket.getInputStream()) ?: return
+            val sealed = Transport.readFrame(socket.getInputStream())
+            if (sealed == null) {
+                org.cmchat.app.diag.ConnDiag.inc("no readable frame → dropped"); return
+            }
+            org.cmchat.app.diag.ConnDiag.inc("frame read (${sealed.size}b)")
             val c = crypto ?: return
             val pub = myPub ?: return
             val sec = mySec ?: return
 
             // 1) KNOCK: anonymous sealed box, openable with my key alone.
             c.sealedOpen(sealed, pub, sec)?.let { inner ->
+                org.cmchat.app.diag.ConnDiag.inc("opened as KNOCK (anonymous sealed box)")
                 dispatchAnonymous(inner); return
             }
             // 2) crypto_box from a known contact: try each contact's key.
             for ((cmId, peer) in contacts) {
                 val inner = c.boxOpen(sealed, peer.identityPubKeyHex, sec) ?: continue
                 // Per-contact (post-auth) rate limit — drop a contact that floods us.
-                if (!contactRate.allow(cmId)) { org.cmchat.app.diag.Diag.droppedFrame(); return }
+                if (!contactRate.allow(cmId)) {
+                    org.cmchat.app.diag.ConnDiag.inc("rejected: per-contact rate limit")
+                    org.cmchat.app.diag.Diag.droppedFrame(); return
+                }
+                org.cmchat.app.diag.ConnDiag.inc("authenticated from ${org.cmchat.app.diag.Redact.onionShort(peer.onion)}")
                 if (buzzOnlyMode) dispatchBuzzOnly(cmId, inner)
                 else dispatchFromContact(cmId, peer, inner)
                 return
             }
             // Couldn't decrypt with any key -> drop (count only, no content).
+            org.cmchat.app.diag.ConnDiag.inc("undecryptable with any contact key → dropped")
             org.cmchat.app.diag.Diag.droppedFrame()
         } catch (_: Exception) {
+            org.cmchat.app.diag.ConnDiag.inc("incoming error → connection dropped")
             org.cmchat.app.diag.Diag.droppedFrame()
         }
     }
@@ -281,7 +294,10 @@ object MessageService {
             val kp = decodeKnock(inner) ?: return
             val cur = _incomingKnocks.value
             // Cap pending knocks (flood guard) and de-dup by cmId.
-            if (cur.size >= MAX_PENDING_KNOCKS || cur.any { it.cmId == kp.cmId }) return
+            if (cur.size >= MAX_PENDING_KNOCKS || cur.any { it.cmId == kp.cmId }) {
+                org.cmchat.app.diag.ConnDiag.inc("KNOCK ignored (pending cap or duplicate)"); return
+            }
+            org.cmchat.app.diag.ConnDiag.inc("KNOCK received (pending accept)")
             _incomingKnocks.value = cur + KnockRequest(kp.displayName, kp.cmId)
         }
     }
@@ -289,6 +305,7 @@ object MessageService {
     private fun dispatchFromContact(chatCmId: String, peer: CmIdData, inner: ByteArray) {
         if (inner.isEmpty()) return
         val type = FrameType.fromCode(inner[0].toInt() and 0xff) ?: return
+        org.cmchat.app.diag.ConnDiag.inc("dispatched $type")
         val body = inner.copyOfRange(1, inner.size)
         when (type) {
             FrameType.MSG -> {
@@ -299,6 +316,7 @@ object MessageService {
                 // While Invisible, the message is held as "missed" (orange dot);
                 // the sender learns nothing, and it surfaces once we go Online.
                 val invisible = org.cmchat.app.settings.AppSettings.invisibleMode.value
+                if (invisible) org.cmchat.app.diag.ConnDiag.inc("held (Invisible): message kept as missed")
                 ChatStore.addTheirs(chatCmId, t.id, t.text, SelfTimer.fromLabel(t.selfTimer), missed = invisible)
                 // Generic "Notification" unless that chat is already on screen.
                 if (activeChatCmId != chatCmId) {
@@ -366,10 +384,48 @@ object MessageService {
     private fun sendRaw(peer: CmIdData, sealed: ByteArray) {
         // Fail closed: never attempt a connection unless Tor is up. Retry with
         // backoff so a send right after publish (descriptor still uploading)
-        // doesn't hard-fail. Onion-only guard lives in Transport.
-        if (TorService.status.value !is TorStatus.Online) throw java.io.IOException("Tor offline")
-        Transport.connectThroughTorRetry(TorService.socksPort(), peer.onion.removeSuffix(".onion"), 80)
-            .use { s -> Transport.writeFrame(s.getOutputStream(), sealed) }
+        // doesn't hard-fail. Onion-only guard lives in Transport. Every stage is
+        // logged to the Connection diagnostic (addresses redacted to a prefix).
+        val short = org.cmchat.app.diag.Redact.onionShort(peer.onion)
+        org.cmchat.app.diag.ConnDiag.out("resolve $short")
+        if (TorService.status.value !is TorStatus.Online) {
+            org.cmchat.app.diag.ConnDiag.out("FAILED: Tor offline")
+            throw java.io.IOException("Tor offline")
+        }
+        val t0 = System.currentTimeMillis()
+        val sock = try {
+            Transport.connectThroughTorRetry(
+                TorService.socksPort(), peer.onion.removeSuffix(".onion"), 80,
+                onStage = { org.cmchat.app.diag.ConnDiag.out(it) },
+            )
+        } catch (e: Exception) {
+            org.cmchat.app.diag.ConnDiag.out("FAILED: ${Transport.failureReason(e)}")
+            throw e
+        }
+        sock.use { s ->
+            org.cmchat.app.diag.ConnDiag.out("sealed frame ready (crypto_box, ${sealed.size}b)")
+            Transport.writeFrame(s.getOutputStream(), sealed)
+            org.cmchat.app.diag.ConnDiag.out("first frame sent (${sealed.size}b)")
+        }
+        org.cmchat.app.diag.ConnDiag.out("CONNECTED — frame delivered (${System.currentTimeMillis() - t0}ms)")
+    }
+
+    /**
+     * Link Test: a real end-to-end connectivity probe to one contact. Sends a
+     * lightweight BUZZ (no content) over the full Tor→onion path so BOTH phones
+     * log the stages — outgoing here, incoming on the contact's Connection log.
+     */
+    fun linkTest(cmId: String) {
+        val c = crypto; val sec = mySec; val peer = contacts[cmId]
+        if (c == null || sec == null || peer == null) {
+            org.cmchat.app.diag.ConnDiag.sys("Link Test: contact or engine not ready"); return
+        }
+        org.cmchat.app.diag.ConnDiag.sys("── Link Test → ${org.cmchat.app.diag.Redact.onionShort(peer.onion)} ──")
+        scope.launch {
+            val ok = runCatching { sendBox(c, sec, peer, FrameType.BUZZ, ByteArray(0)); true }
+                .getOrDefault(false)
+            org.cmchat.app.diag.ConnDiag.sys("Link Test result: ${if (ok) "CONNECTED" else "FAILED"}")
+        }
     }
 
     private fun decodeKnock(inner: ByteArray): KnockPayload? = runCatching {

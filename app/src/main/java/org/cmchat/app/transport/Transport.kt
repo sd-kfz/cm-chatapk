@@ -90,21 +90,42 @@ object Transport {
         port: Int,
         totalMs: Long = 90_000L,
         onProgress: (Long) -> Unit = {},
+        onStage: (String) -> Unit = {},
     ): Socket {
         val deadline = System.currentTimeMillis() + totalMs
         var wait = 2_000L
         var last: Exception? = null
+        var attempt = 0
         while (System.currentTimeMillis() < deadline) {
+            attempt++
+            onStage("SOCKS connect attempt $attempt")
             try {
-                return connectThroughTor(socksPort, onion, port, timeoutMs = 30_000)
+                val s = connectThroughTor(socksPort, onion, port, timeoutMs = 30_000)
+                onStage("TCP/SOCKS connection established")
+                return s
             } catch (e: Exception) {
                 last = e
                 onProgress(System.currentTimeMillis() - (deadline - totalMs))
+                onStage("not reachable yet (${failureReason(e)}) — descriptor may still be uploading; retry in ${wait}ms")
                 Thread.sleep(wait)
                 wait = (wait * 2).coerceAtMost(15_000L)
             }
         }
         throw last ?: java.io.IOException("onion unreachable after ${totalMs}ms")
+    }
+
+    /** Map a connection exception to a short, human failure reason for the log. */
+    fun failureReason(e: Throwable?): String {
+        val m = (e?.message ?: "").lowercase()
+        return when {
+            e is java.net.SocketTimeoutException || "timed out" in m || "timeout" in m -> "timeout"
+            "ttl expired" in m -> "descriptor not found"
+            "host unreachable" in m || "unreachable" in m -> "host unreachable"
+            "connection refused" in m || "refused" in m -> "refused"
+            "socks" in m -> "SOCKS error"
+            e is java.io.IOException && m.isNotBlank() -> m.take(40)
+            else -> e?.javaClass?.simpleName ?: "unknown"
+        }
     }
 
     /** v3 onion host: 56 base32 chars, with or without the ".onion" suffix. */
