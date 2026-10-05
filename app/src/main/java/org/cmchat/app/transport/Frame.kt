@@ -23,7 +23,13 @@ enum class FrameType(val code: Int) {
 
     /** Cover traffic: a decoy frame, padded + sealed like any other, silently
      * discarded by the receiver. Masks WHEN real messages happen. */
-    COVER(14);
+    COVER(14),
+
+    /** Forward secrecy, step 1: "send me a one-time prekey" (see SecureChannel). */
+    PREKEY_REQ(15),
+
+    /** Forward secrecy, step 2: the one-time prekey, bound to the request. */
+    PREKEY_RESP(16);
 
     companion object {
         fun fromCode(code: Int): FrameType? = entries.firstOrNull { it.code == code }

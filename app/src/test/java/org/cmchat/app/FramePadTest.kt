@@ -37,6 +37,12 @@ class FramePadTest {
     }
 
     @Test
+    fun the_largest_padded_frame_still_fits_the_wire_cap_after_forward_secret_sealing() {
+        val padded = FramePad.pad(ByteArray((FramePad.MAX_PLAIN - 4).toInt()))
+        assertTrue(padded.size + org.cmchat.app.crypto.Fs.OVERHEAD <= org.cmchat.app.transport.Transport.MAX_FRAME_BYTES)
+    }
+
+    @Test
     fun malformed_blobs_unpad_to_null() {
         assertNull(FramePad.unpad(ByteArray(2)))                 // too short for header
         // header claims a length longer than the blob -> rejected

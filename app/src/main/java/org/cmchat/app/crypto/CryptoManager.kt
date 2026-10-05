@@ -83,10 +83,12 @@ class CryptoManager(private val ls: LazySodium) {
     fun boxSeal(plain: ByteArray, peerPubKeyHex: String, mySecretKeyHex: String): ByteArray {
         val nonce = ls.randomBytesBuf(Box.NONCEBYTES)
         val cipher = ByteArray(plain.size + Box.MACBYTES)
-        val ok = boxNative.cryptoBoxEasy(
-            cipher, plain, plain.size.toLong(), nonce,
-            hexToBytes(peerPubKeyHex), hexToBytes(mySecretKeyHex),
-        )
+        val sk = hexToBytes(mySecretKeyHex)
+        val ok = try {
+            boxNative.cryptoBoxEasy(cipher, plain, plain.size.toLong(), nonce, hexToBytes(peerPubKeyHex), sk)
+        } finally {
+            sk.fill(0)                              // wipe the decoded secret copy
+        }
         check(ok) { "box seal failed" }
         return nonce + cipher
     }
@@ -97,10 +99,12 @@ class CryptoManager(private val ls: LazySodium) {
         val nonce = blob.copyOfRange(0, Box.NONCEBYTES)
         val cipher = blob.copyOfRange(Box.NONCEBYTES, blob.size)
         val plain = ByteArray(cipher.size - Box.MACBYTES)
-        val ok = boxNative.cryptoBoxOpenEasy(
-            plain, cipher, cipher.size.toLong(), nonce,
-            hexToBytes(peerPubKeyHex), hexToBytes(mySecretKeyHex),
-        )
+        val sk = hexToBytes(mySecretKeyHex)
+        val ok = try {
+            boxNative.cryptoBoxOpenEasy(plain, cipher, cipher.size.toLong(), nonce, hexToBytes(peerPubKeyHex), sk)
+        } finally {
+            sk.fill(0)                              // wipe the decoded secret copy
+        }
         return if (ok) plain else null
     }
 
@@ -120,33 +124,49 @@ class CryptoManager(private val ls: LazySodium) {
     fun sealedOpen(cipher: ByteArray, myPubKeyHex: String, mySecretKeyHex: String): ByteArray? {
         if (cipher.size < Box.SEALBYTES) return null
         val plain = ByteArray(cipher.size - Box.SEALBYTES)
-        val ok = boxNative.cryptoBoxSealOpen(
-            plain, cipher, cipher.size.toLong(),
-            hexToBytes(myPubKeyHex), hexToBytes(mySecretKeyHex),
-        )
+        val sk = hexToBytes(mySecretKeyHex)
+        val ok = try {
+            boxNative.cryptoBoxSealOpen(plain, cipher, cipher.size.toLong(), hexToBytes(myPubKeyHex), sk)
+        } finally {
+            sk.fill(0)                              // wipe the decoded secret copy
+        }
         return if (ok) plain else null
     }
 
     // ---- forward-secrecy primitives (X25519 DH, BLAKE2b KDF, XChaCha AEAD) ----
+    // Raw bytes throughout (never hex Strings) so every ephemeral / prekey secret
+    // and every derived value can be wiped with fill(0) the moment it's used.
     private val dhNative get() = ls as com.goterl.lazysodium.interfaces.DiffieHellman.Native
     private val genericHash get() = ls as com.goterl.lazysodium.interfaces.GenericHash.Native
     private val aeadNative get() = ls as com.goterl.lazysodium.interfaces.AEAD.Native
 
-    val AEAD_NONCE_BYTES = 24   // XChaCha20-Poly1305 IETF npub
     private val AEAD_ABYTES = 16
 
     fun randomBytes(n: Int): ByteArray = ls.randomBytesBuf(n)
 
-    /** A fresh X25519 keypair (hex pub, hex sec), e.g. for an ephemeral or prekey. */
-    fun newX25519Keypair(): Pair<String, String> = newIdentityKeypair()
-
-    /** Raw X25519 Diffie-Hellman: scalarmult(mySecret, theirPublic) -> 32 bytes. */
-    fun dh(theirPubHex: String, mySecHex: String): ByteArray {
-        val out = ByteArray(32)
-        val ok = dhNative.cryptoScalarMult(out, hexToBytes(mySecHex), hexToBytes(theirPubHex))
-        check(ok) { "scalarmult failed" }
-        return out
+    /** A fresh X25519 keypair as raw bytes (pub, sec). The caller wipes `sec`. */
+    fun x25519Keypair(): Pair<ByteArray, ByteArray> {
+        val pk = ByteArray(Box.PUBLICKEYBYTES)
+        val sk = ByteArray(Box.SECRETKEYBYTES)
+        check(boxNative.cryptoBoxKeypair(pk, sk)) { "keypair generation failed" }
+        return pk to sk
     }
+
+    /**
+     * Raw X25519: scalarmult(mySecret, theirPublic) -> 32 bytes, or null if
+     * libsodium rejects it (it refuses an all-zero result, i.e. a low-order /
+     * malformed public key). The caller wipes the returned secret.
+     */
+    fun x25519(mySec: ByteArray, theirPub: ByteArray): ByteArray? {
+        if (mySec.size != 32 || theirPub.size != 32) return null
+        val out = ByteArray(32)
+        if (dhNative.cryptoScalarMult(out, mySec, theirPub)) return out
+        out.fill(0)
+        return null
+    }
+
+    /** Hex -> raw bytes (identity keys are stored as hex). The caller wipes secrets. */
+    fun hexBytes(hex: String): ByteArray = hexToBytes(hex)
 
     /** BLAKE2b KDF -> 32-byte key from arbitrary input material. */
     fun kdf32(input: ByteArray): ByteArray {
@@ -175,8 +195,6 @@ class CryptoManager(private val ls: LazySodium) {
         )
         return if (ok) m else null
     }
-
-    fun toHexPublic(b: ByteArray): String = toHex(b)
 
     private fun toHex(b: ByteArray): String =
         b.joinToString("") { "%02x".format(it) }

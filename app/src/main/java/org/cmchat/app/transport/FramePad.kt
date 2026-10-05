@@ -20,10 +20,13 @@ object FramePad {
 
     // Plaintext size buckets. 536 is the base (fits a short message); larger
     // payloads round up to the next bucket. Kept below MAX_FRAME_BYTES minus the
-    // crypto_box overhead so the sealed frame always fits the wire cap.
+    // seal overhead so the sealed frame always fits the wire cap. The largest
+    // overhead is a forward-secret frame (Fs.OVERHEAD = 80 bytes: ephemeral key,
+    // prekey id, nonce, tag), so leave 128 bytes of headroom.
     private val BUCKETS = longArrayOf(536, 2048, 8192, 16384, 32768, 49152)
     private const val HEADER = 4
-    private val MAX_PLAIN = (Transport.MAX_FRAME_BYTES - 64).toLong()  // headroom for seal overhead
+    const val SEAL_HEADROOM = 128
+    val MAX_PLAIN = (Transport.MAX_FRAME_BYTES - SEAL_HEADROOM).toLong()
 
     private val rng = SecureRandom()
 

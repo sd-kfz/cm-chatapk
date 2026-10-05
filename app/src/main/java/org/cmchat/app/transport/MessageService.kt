@@ -17,14 +17,19 @@ import org.cmchat.app.crypto.CryptoManager
 import org.cmchat.app.tor.ServerController
 import org.cmchat.app.tor.TorService
 import org.cmchat.app.tor.TorStatus
+import java.io.IOException
 import java.net.Socket
+import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Frames over Tor. KNOCK is an anonymous sealed box (sender not yet known);
- * MSG/ACK/STATUS/ERASE_CHAT are crypto_box between two known identities.
- * Anything that won't open is dropped. Chats live only in [ChatStore] (RAM).
+ * Frames over Tor. Every frame to a contact (message, status, buzz, erase,
+ * address update, cover, knock-accept) goes over the forward-secret v3 handshake
+ * in [SecureChannel]: fetch a one-time prekey, X3DH, one AEAD frame. Only the
+ * anonymous KNOCK (to a not-yet-contact) is a sealed box. Anything that won't
+ * open is dropped. Chats live only in [ChatStore] (RAM).
  *
- * Real delivery needs Tor ONLINE on a device; CI verifies compile + crypto.
+ * Real delivery needs Tor ONLINE on a device; CI verifies compile + crypto, and
+ * the loopback tests run the full handshake over local sockets.
  */
 object MessageService {
 
@@ -43,11 +48,12 @@ object MessageService {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    private var crypto: CryptoManager? = null
-    private var myPub: String? = null
-    private var mySec: String? = null
     private var myName: String = ""
     private var myCmId: String? = null
+
+    /** The forward-secret channel for the active Face; null until configured. */
+    @Volatile
+    private var channel: SecureChannel? = null
 
     /**
      * Buzz-only mode: the app was swiped away but the scout listener is alive.
@@ -57,10 +63,11 @@ object MessageService {
     @Volatile
     var buzzOnlyMode: Boolean = false
 
-    /** cmId -> decoded peer (onion + identity pubkey). */
-    private val contacts = mutableMapOf<String, CmIdData>()
+    /** cmId -> decoded peer (onion + identity pubkey). Concurrent: read by the
+     * incoming-connection threads while the UI adds/relinks contacts. */
+    private val contacts = ConcurrentHashMap<String, CmIdData>()
     /** cmId -> contact nickname (only used if the user opts into showing it). */
-    private val names = mutableMapOf<String, String>()
+    private val names = ConcurrentHashMap<String, String>()
 
     /** The chat currently open in the foreground, or null. Set by ChatScreen. */
     @Volatile
@@ -72,15 +79,17 @@ object MessageService {
     /**
      * Wire protocol version. Bumped whenever the framing/crypto changes so two
      * peers on different builds detect the mismatch instead of failing silently.
-     * v2 = versioned header + replay counter (was unversioned static crypto_box).
+     * v3 = forward-secret handshake (v2 = static crypto_box + replay counter).
      */
-    const val WIRE_VERSION = 2
+    const val WIRE_VERSION = SecureChannel.WIRE_VERSION
 
-    /** Random per-app-run id + monotonic counter -> anti-replay sequence space. */
-    @Volatile
-    private var sessionId: ByteArray = java.security.SecureRandom().generateSeed(8)
-    private val sendSeq = java.util.concurrent.atomic.AtomicLong(0)
+    /** Per-app-run session id + per-peer counters, and the anti-replay windows.
+     * Process-lifetime, so re-configuring (e.g. a contact added) keeps them. */
+    private val codec = InnerCodec()
     private val replayGuard = ReplayGuard()
+
+    /** How long a sender waits for the contact's prekey reply over Tor. */
+    private const val HANDSHAKE_READ_TIMEOUT_MS = 30_000
 
     /** Set true when an authenticated frame from a DIFFERENT wire version arrives;
      * the UI shows "Update both apps to the same version." */
@@ -95,9 +104,7 @@ object MessageService {
      * call anytime (the next configure() repopulates it).
      */
     fun zeroKeys() {
-        crypto = null
-        myPub = null
-        mySec = null
+        channel = null
         myCmId = null
         contacts.clear()
         names.clear()
@@ -112,11 +119,9 @@ object MessageService {
         knownContactCmIds: List<String>,
         contactNames: Map<String, String> = emptyMap(),
     ) {
-        this.crypto = crypto
         this.myName = myDisplayName
-        this.myPub = myIdentityPubHex
-        this.mySec = myIdentitySecHex
         this.myCmId = myCmId
+        this.channel = SecureChannel(crypto, myIdentityPubHex, myIdentitySecHex, codec, replayGuard)
         contacts.clear()
         knownContactCmIds.forEach { id -> CmId.decode(id)?.let { contacts[id] = it } }
         names.clear(); names.putAll(contactNames)
@@ -126,13 +131,17 @@ object MessageService {
     // ---- outgoing ----------------------------------------------------------
 
     fun sendKnock(cmId: String, onResult: (Boolean) -> Unit) {
-        val c = crypto; val myId = myCmId; val target = CmId.decode(cmId)
-        if (c == null || myId == null || target == null) { onResult(false); return }
+        val ch = channel; val myId = myCmId; val target = CmId.decode(cmId)
+        if (ch == null || myId == null || target == null) { onResult(false); return }
         scope.launch {
             val ok = runCatching {
-                val inner = wrap(FrameType.KNOCK,
-                    Messages.json.encodeToString(KnockPayload.serializer(), KnockPayload(myName, myId)).toByteArray())
-                sendRaw(target, c.sealedSeal(FramePad.pad(inner), target.identityPubKeyHex))
+                val payload = Messages.json.encodeToString(KnockPayload.serializer(), KnockPayload(myName, myId))
+                    .toByteArray()
+                val sealed = ch.sealKnock(payload, target.identityPubKeyHex)
+                withTorConnection(target) { s ->
+                    Transport.writeFrame(s.getOutputStream(), sealed)
+                    org.cmchat.app.diag.ConnDiag.out("knock sent (anonymous sealed box, ${sealed.size}b)")
+                }
                 true
             }.getOrElse { org.cmchat.app.diag.Diag.e("knock", "send failed", it); false }
             org.cmchat.app.diag.Diag.i("knock", "sent=$ok")
@@ -146,29 +155,29 @@ object MessageService {
      * cooldown or not configured.
      */
     fun sendBuzz(chatCmId: String): Boolean {
-        val c = crypto; val sec = mySec; val peer = contacts[chatCmId]
-        if (c == null || sec == null || peer == null) return false
+        val peer = contacts[chatCmId]
+        if (channel == null || peer == null) return false
         if (!org.cmchat.app.buzz.BuzzPolicy.canSend(chatCmId)) return false
         org.cmchat.app.buzz.BuzzPolicy.markSent(chatCmId)
         scope.launch {
-            runCatching { sendBox(c, sec, peer, FrameType.BUZZ, ByteArray(0)) }
+            runCatching { sendSecure(peer, FrameType.BUZZ, ByteArray(0)) }
                 .onFailure { org.cmchat.app.diag.Diag.e("buzz", "send failed", it) }
         }
         return true
     }
 
     /**
-     * Cover traffic: send a decoy frame to a contact. It is padded + sealed by
-     * the same path as a real frame (so an observer can't tell them apart) and
-     * the receiver silently discards it. Random inner size within the base
-     * bucket so it looks like a short real message.
+     * Cover traffic: send a decoy frame to a contact. It goes through the exact
+     * same handshake + padding + sealing as a real frame (so an observer can't
+     * tell them apart) and the receiver silently discards it. Random inner size
+     * within the base bucket so it looks like a short real message.
      */
     fun sendCover(chatCmId: String) {
-        val c = crypto; val sec = mySec; val peer = contacts[chatCmId] ?: return
-        if (c == null || sec == null) return
+        val peer = contacts[chatCmId] ?: return
+        if (channel == null) return
         val junk = ByteArray((8..400).random()).also { java.security.SecureRandom().nextBytes(it) }
         scope.launch {
-            runCatching { sendBox(c, sec, peer, FrameType.COVER, junk) }
+            runCatching { sendSecure(peer, FrameType.COVER, junk) }
                 .onFailure { org.cmchat.app.diag.Diag.e("cover", "send failed", it) }
         }
     }
@@ -188,15 +197,15 @@ object MessageService {
 
     private fun sendTextResolved(chatCmId: String, text: String, timer: SelfTimer) {
         val msg = ChatStore.addMine(chatCmId, text, timer)
-        val c = crypto; val sec = mySec; val peer = contacts[chatCmId]
-        if (c == null || sec == null || peer == null) {
+        val peer = contacts[chatCmId]
+        if (channel == null || peer == null) {
             ChatStore.setState(chatCmId, msg.id, MsgState.OFFLINE); return
         }
         scope.launch {
             val ok = runCatching {
                 val payload = Messages.json.encodeToString(TextPayload.serializer(),
                     TextPayload(msg.id, text, timer.label)).toByteArray()
-                sendBox(c, sec, peer, FrameType.MSG, payload)
+                sendSecure(peer, FrameType.MSG, payload)
                 true
             }.getOrDefault(false)
             ChatStore.setState(chatCmId, msg.id, if (ok) MsgState.SENT else MsgState.OFFLINE)
@@ -204,14 +213,14 @@ object MessageService {
     }
 
     fun retry(chatCmId: String, msgId: String, text: String, timer: SelfTimer) {
-        val c = crypto; val sec = mySec; val peer = contacts[chatCmId] ?: return
-        if (c == null || sec == null) return
+        val peer = contacts[chatCmId] ?: return
+        if (channel == null) return
         ChatStore.setState(chatCmId, msgId, MsgState.SENDING)
         scope.launch {
             val ok = runCatching {
                 val payload = Messages.json.encodeToString(TextPayload.serializer(),
                     TextPayload(msgId, text, timer.label)).toByteArray()
-                sendBox(c, sec, peer, FrameType.MSG, payload); true
+                sendSecure(peer, FrameType.MSG, payload); true
             }.getOrDefault(false)
             ChatStore.setState(chatCmId, msgId, if (ok) MsgState.SENT else MsgState.OFFLINE)
         }
@@ -219,9 +228,9 @@ object MessageService {
 
     fun sendErase(chatCmId: String) {
         ChatStore.erase(chatCmId)
-        val c = crypto; val sec = mySec; val peer = contacts[chatCmId] ?: return
-        if (c == null || sec == null) return
-        scope.launch { runCatching { sendBox(c, sec, peer, FrameType.ERASE_CHAT, ByteArray(0)) } }
+        val peer = contacts[chatCmId] ?: return
+        if (channel == null) return
+        scope.launch { runCatching { sendSecure(peer, FrameType.ERASE_CHAT, ByteArray(0)) } }
     }
 
     /**
@@ -232,36 +241,35 @@ object MessageService {
      * app; it is never guaranteed.
      */
     fun burnAll() {
-        val c = crypto; val sec = mySec
         val peers = contacts.values.toList()
         // Clear local RAM first so the wipe is immediate even if sends are slow.
         ChatStore.clearAll()
-        if (c == null || sec == null) return
+        if (channel == null) return
         peers.forEach { peer ->
-            scope.launch { runCatching { sendBox(c, sec, peer, FrameType.ERASE_CHAT, ByteArray(0)) } }
+            scope.launch { runCatching { sendSecure(peer, FrameType.ERASE_CHAT, ByteArray(0)) } }
         }
     }
 
     /**
      * Tell every contact my new CMC-ID after rotating my onion. Authenticated by
-     * crypto_box from my identity key (only I can produce it) — the "signed"
-     * address-update. Contacts auto-relink to the new onion.
+     * my identity key inside the forward-secret frame (only I can produce it) —
+     * the "signed" address-update. Contacts auto-relink to the new onion.
      */
     fun sendAddressUpdate(newCmId: String) {
-        val c = crypto ?: return; val sec = mySec ?: return
+        if (channel == null) return
         myCmId = newCmId
         val payload = newCmId.toByteArray()
         contacts.values.toList().forEach { peer ->
-            scope.launch { runCatching { sendBox(c, sec, peer, FrameType.ADDR_UPDATE, payload) } }
+            scope.launch { runCatching { sendSecure(peer, FrameType.ADDR_UPDATE, payload) } }
         }
     }
 
     fun sendStatus(word: String, colorArgb: Long) {
-        val c = crypto ?: return; val sec = mySec ?: return
+        if (channel == null) return
         val payload = Messages.json.encodeToString(StatusPayload.serializer(),
             StatusPayload(word, colorArgb)).toByteArray()
-        contacts.values.forEach { peer ->
-            scope.launch { runCatching { sendBox(c, sec, peer, FrameType.STATUS, payload) } }
+        contacts.values.toList().forEach { peer ->
+            scope.launch { runCatching { sendSecure(peer, FrameType.STATUS, payload) } }
         }
     }
 
@@ -270,15 +278,15 @@ object MessageService {
         CmId.decode(req.cmId)?.let { contacts[req.cmId] = it }
         _incomingKnocks.value = _incomingKnocks.value.filterNot { it.cmId == req.cmId }
         onContactAccepted?.invoke(req)
-        // Tell them we accepted (crypto_box, now that we know their key).
-        val c = crypto; val sec = mySec; val peer = contacts[req.cmId]
+        // Tell them we accepted (forward-secret, now that we know their key).
+        val peer = contacts[req.cmId]
         val myId = myCmId
-        if (c != null && sec != null && peer != null && myId != null) {
+        if (channel != null && peer != null && myId != null) {
             scope.launch {
                 runCatching {
                     val payload = Messages.json.encodeToString(KnockPayload.serializer(),
                         KnockPayload(myName, myId)).toByteArray()
-                    sendBox(c, sec, peer, FrameType.KNOCK_ACCEPT, payload)
+                    sendSecure(peer, FrameType.KNOCK_ACCEPT, payload)
                 }
             }
         }
@@ -293,99 +301,65 @@ object MessageService {
 
     /**
      * Handle one incoming connection SYNCHRONOUSLY (ServerController owns the
-     * socket lifecycle, the concurrency cap and the socket read timeout, and
-     * closes the socket afterward). We read exactly ONE length-bounded frame,
-     * then authenticate it (open) BEFORE doing any further work; a frame that
-     * opens with no key is dropped without allocating or acting on anything.
-     * Received bytes are only ever decrypted/parsed — never executed.
+     * socket lifecycle, the concurrency cap and the per-read timeout, and closes
+     * the socket afterward). [SecureWire.receive] reads one length-bounded frame
+     * and authenticates it BEFORE doing anything else: an anonymous knock, or a
+     * prekey request from a known contact — answered with a one-time prekey, then
+     * exactly one forward-secret frame is read and opened. Everything else is
+     * dropped. Received bytes are only ever decrypted/parsed — never executed.
      */
     private fun handleIncoming(socket: Socket) {
-        // All parsing of REMOTE bytes is wrapped: any failure (truncated frame,
-        // malformed crypto, bad JSON, etc.) just drops this connection cleanly —
-        // it never throws up into the accept loop. Received bytes are only ever
-        // decrypted/parsed, never executed.
+        // Any failure (truncated frame, malformed crypto, bad JSON, a peer that
+        // resets mid-handshake) just drops this connection cleanly — it never
+        // throws up into the accept loop.
         try {
-            val sealed = Transport.readFrame(socket.getInputStream())
-            if (sealed == null) {
-                org.cmchat.app.diag.ConnDiag.inc("no readable frame → dropped"); return
+            val ch = channel ?: return
+            val known = HashMap<String, String>().also { m ->
+                for ((id, peer) in contacts) m[id] = peer.identityPubKeyHex
             }
-            org.cmchat.app.diag.ConnDiag.inc("frame read (${sealed.size}b)")
-            val c = crypto ?: return
-            val pub = myPub ?: return
-            val sec = mySec ?: return
-
-            // 1) KNOCK: anonymous sealed box, openable with my key alone. Strip
-            //    the uniform padding after decryption before dispatch.
-            c.sealedOpen(sealed, pub, sec)?.let { opened ->
-                val inner = FramePad.unpad(opened) ?: run {
-                    org.cmchat.app.diag.ConnDiag.inc("knock padding malformed → dropped")
-                    org.cmchat.app.diag.Diag.droppedFrame(); return
+            val r = SecureWire.receive(
+                ch, socket.getInputStream(), socket.getOutputStream(), known,
+                allow = { contactRate.allow(it) },
+                onStage = { org.cmchat.app.diag.ConnDiag.inc(it) },
+            )
+            when (r) {
+                is SecureWire.Received.Knock -> {
+                    org.cmchat.app.diag.ConnDiag.inc("opened as KNOCK (anonymous sealed box)")
+                    dispatchAnonymous(r.body)
                 }
-                val p = unwrap(inner) ?: run {
-                    org.cmchat.app.diag.ConnDiag.inc("knock header malformed → dropped")
-                    org.cmchat.app.diag.Diag.droppedFrame(); return
+                is SecureWire.Received.Message -> {
+                    val peer = contacts[r.cmId] ?: return
+                    org.cmchat.app.diag.ConnDiag.inc(
+                        "forward-secret frame opened from ${org.cmchat.app.diag.Redact.onionShort(peer.onion)}")
+                    if (buzzOnlyMode) dispatchBuzzOnly(r.cmId, r.type)
+                    else dispatchFromContact(r.cmId, peer, r.type, r.body)
                 }
-                if (p.version != WIRE_VERSION) {
+                SecureWire.Received.VersionMismatch -> {
                     versionMismatch.value = true
-                    org.cmchat.app.diag.ConnDiag.inc("wire version mismatch (v${p.version}) → dropped")
-                    org.cmchat.app.diag.Diag.droppedFrame(); return
+                    org.cmchat.app.diag.ConnDiag.inc("wire version mismatch → dropped (update both apps)")
+                    org.cmchat.app.diag.Diag.droppedFrame()
                 }
-                val type = p.type ?: run { org.cmchat.app.diag.Diag.droppedFrame(); return }
-                org.cmchat.app.diag.ConnDiag.inc("opened as KNOCK (anonymous sealed box)")
-                dispatchAnonymous(type, p.body); return
+                is SecureWire.Received.Dropped -> {
+                    // Static reason strings only — never keys, contents or addresses.
+                    org.cmchat.app.diag.ConnDiag.inc("${r.reason} → dropped")
+                    org.cmchat.app.diag.Diag.droppedFrame()
+                }
             }
-            // 2) crypto_box from a known contact: try each contact's key.
-            for ((cmId, peer) in contacts) {
-                val opened = c.boxOpen(sealed, peer.identityPubKeyHex, sec) ?: continue
-                // Per-contact (post-auth) rate limit — drop a contact that floods us.
-                if (!contactRate.allow(cmId)) {
-                    org.cmchat.app.diag.ConnDiag.inc("rejected: per-contact rate limit")
-                    org.cmchat.app.diag.Diag.droppedFrame(); return
-                }
-                val inner = FramePad.unpad(opened) ?: run {
-                    org.cmchat.app.diag.ConnDiag.inc("padding malformed → dropped")
-                    org.cmchat.app.diag.Diag.droppedFrame(); return
-                }
-                val p = unwrap(inner) ?: run {
-                    org.cmchat.app.diag.ConnDiag.inc("header malformed → dropped")
-                    org.cmchat.app.diag.Diag.droppedFrame(); return
-                }
-                if (p.version != WIRE_VERSION) {
-                    versionMismatch.value = true
-                    org.cmchat.app.diag.ConnDiag.inc("wire version mismatch (v${p.version}) → dropped")
-                    org.cmchat.app.diag.Diag.droppedFrame(); return
-                }
-                val type = p.type ?: run { org.cmchat.app.diag.Diag.droppedFrame(); return }
-                // Replay protection: reject duplicate / out-of-window sequence.
-                if (!replayGuard.check("$cmId:${p.sidHex}", p.seq)) {
-                    org.cmchat.app.diag.ConnDiag.inc("replay/old frame rejected → dropped")
-                    org.cmchat.app.diag.Diag.droppedFrame(); return
-                }
-                org.cmchat.app.diag.ConnDiag.inc("authenticated from ${org.cmchat.app.diag.Redact.onionShort(peer.onion)}")
-                if (buzzOnlyMode) dispatchBuzzOnly(cmId, type)
-                else dispatchFromContact(cmId, peer, type, p.body)
-                return
-            }
-            // Couldn't decrypt with any key -> drop (count only, no content).
-            org.cmchat.app.diag.ConnDiag.inc("undecryptable with any contact key → dropped")
-            org.cmchat.app.diag.Diag.droppedFrame()
         } catch (_: Exception) {
             org.cmchat.app.diag.ConnDiag.inc("incoming error → connection dropped")
             org.cmchat.app.diag.Diag.droppedFrame()
         }
     }
 
-    private fun dispatchAnonymous(type: FrameType, body: ByteArray) {
-        if (type == FrameType.KNOCK) {
-            val kp = decodeKnock(body) ?: return
-            val cur = _incomingKnocks.value
-            // Cap pending knocks (flood guard) and de-dup by cmId.
-            if (cur.size >= MAX_PENDING_KNOCKS || cur.any { it.cmId == kp.cmId }) {
-                org.cmchat.app.diag.ConnDiag.inc("KNOCK ignored (pending cap or duplicate)"); return
-            }
-            org.cmchat.app.diag.ConnDiag.inc("KNOCK received (pending accept)")
-            _incomingKnocks.value = cur + KnockRequest(kp.displayName, kp.cmId)
+    private fun dispatchAnonymous(body: ByteArray) {
+        val kp = decodeKnock(body) ?: return
+        val cur = _incomingKnocks.value
+        // Cap pending knocks (flood guard) and de-dup by cmId.
+        if (cur.size >= MAX_PENDING_KNOCKS || cur.any { it.cmId == kp.cmId }) {
+            org.cmchat.app.diag.ConnDiag.inc("KNOCK ignored (pending cap or duplicate)"); return
         }
+        org.cmchat.app.diag.ConnDiag.inc("KNOCK received (pending accept)")
+        _incomingKnocks.value = cur + KnockRequest(kp.displayName, kp.cmId)
     }
 
     private fun dispatchFromContact(chatCmId: String, peer: CmIdData, type: FrameType, body: ByteArray) {
@@ -424,9 +398,9 @@ object MessageService {
     }
 
     /**
-     * A contact rotated their onion. The frame is authenticated (we opened it
-     * with [peer]'s identity key), so we trust the new cmId ONLY if it carries
-     * the same identity pubkey — then we re-link to the new onion and persist.
+     * A contact rotated their onion. The frame is authenticated (it opened under
+     * a key that needed [peer]'s identity), so we trust the new cmId ONLY if it
+     * carries the same identity pubkey — then we re-link to the new onion and persist.
      */
     private fun onAddressUpdate(oldCmId: String, peer: CmIdData, body: ByteArray) {
         val newCmId = runCatching { String(body) }.getOrNull() ?: return
@@ -458,14 +432,27 @@ object MessageService {
 
     // ---- wire helpers ------------------------------------------------------
 
-    private fun sendBox(c: CryptoManager, mySecHex: String, peer: CmIdData, type: FrameType, payload: ByteArray) {
-        // Pad the inner frame to a fixed size bucket BEFORE sealing, so the
-        // on-wire size never reveals the real length or frame type.
-        val sealed = c.boxSeal(FramePad.pad(wrap(type, payload)), peer.identityPubKeyHex, mySecHex)
-        sendRaw(peer, sealed)
+    /**
+     * Send ONE content frame to a contact over the forward-secret handshake:
+     * request a one-time prekey, verify it against their identity key, then send
+     * the X3DH-sealed frame. Throws on any failure, so callers mark the message
+     * OFFLINE (with retry) — a send never fails silently.
+     */
+    private fun sendSecure(peer: CmIdData, type: FrameType, payload: ByteArray) {
+        val ch = channel ?: throw IOException("engine not ready")
+        withTorConnection(peer) { s ->
+            // The sender now READS one frame (the prekey reply): never wait forever.
+            s.soTimeout = HANDSHAKE_READ_TIMEOUT_MS
+            SecureWire.send(
+                ch, s.getInputStream(), s.getOutputStream(), peer.identityPubKeyHex, type, payload,
+                onStage = { org.cmchat.app.diag.ConnDiag.out(it) },
+                onVersionMismatch = { versionMismatch.value = true },
+            )
+        }
     }
 
-    private fun sendRaw(peer: CmIdData, sealed: ByteArray) {
+    /** Open a Tor connection to [peer]'s onion, run [block] on it, then close it. */
+    private fun withTorConnection(peer: CmIdData, block: (Socket) -> Unit) {
         // Fail closed: never attempt a connection unless Tor is up. Retry with
         // backoff so a send right after publish (descriptor still uploading)
         // doesn't hard-fail. Onion-only guard lives in Transport. Every stage is
@@ -474,7 +461,7 @@ object MessageService {
         org.cmchat.app.diag.ConnDiag.out("resolve $short")
         if (TorService.status.value !is TorStatus.Online) {
             org.cmchat.app.diag.ConnDiag.out("FAILED: Tor offline")
-            throw java.io.IOException("Tor offline")
+            throw IOException("Tor offline")
         }
         // Timing jitter: a small randomized delay so exact send time doesn't map
         // 1:1 to typing/sending. Applies to every outbound frame (incl. cover).
@@ -489,27 +476,32 @@ object MessageService {
             org.cmchat.app.diag.ConnDiag.out("FAILED: ${Transport.failureReason(e)}")
             throw e
         }
-        sock.use { s ->
-            org.cmchat.app.diag.ConnDiag.out("sealed frame ready (crypto_box, ${sealed.size}b)")
-            Transport.writeFrame(s.getOutputStream(), sealed)
-            org.cmchat.app.diag.ConnDiag.out("first frame sent (${sealed.size}b)")
+        try {
+            sock.use { block(it) }
+        } catch (e: Exception) {
+            // HandshakeFailed carries a fixed, content-free reason; anything else
+            // is reduced to a short category. Never keys, contents or addresses.
+            val why = if (e is SecureWire.HandshakeFailed) e.message else Transport.failureReason(e)
+            org.cmchat.app.diag.ConnDiag.out("FAILED: $why")
+            throw e
         }
         org.cmchat.app.diag.ConnDiag.out("CONNECTED — frame delivered (${System.currentTimeMillis() - t0}ms)")
     }
 
     /**
      * Link Test: a real end-to-end connectivity probe to one contact. Sends a
-     * lightweight BUZZ (no content) over the full Tor→onion path so BOTH phones
-     * log the stages — outgoing here, incoming on the contact's Connection log.
+     * lightweight BUZZ (no content) over the full Tor→onion path and the whole
+     * forward-secret handshake, so BOTH phones log every stage — outgoing here,
+     * incoming on the contact's Connection log.
      */
     fun linkTest(cmId: String) {
-        val c = crypto; val sec = mySec; val peer = contacts[cmId]
-        if (c == null || sec == null || peer == null) {
+        val peer = contacts[cmId]
+        if (channel == null || peer == null) {
             org.cmchat.app.diag.ConnDiag.sys("Link Test: contact or engine not ready"); return
         }
         org.cmchat.app.diag.ConnDiag.sys("── Link Test → ${org.cmchat.app.diag.Redact.onionShort(peer.onion)} ──")
         scope.launch {
-            val ok = runCatching { sendBox(c, sec, peer, FrameType.BUZZ, ByteArray(0)); true }
+            val ok = runCatching { sendSecure(peer, FrameType.BUZZ, ByteArray(0)); true }
                 .getOrDefault(false)
             org.cmchat.app.diag.ConnDiag.sys("Link Test result: ${if (ok) "CONNECTED" else "FAILED"}")
         }
@@ -518,34 +510,4 @@ object MessageService {
     private fun decodeKnock(body: ByteArray): KnockPayload? = runCatching {
         Messages.json.decodeFromString(KnockPayload.serializer(), String(body))
     }.getOrNull()
-
-    // ---- wire framing: [ver(1)][type(1)][sessionId(8)][seq(8)][payload] -------
-    // The version lets mismatched builds be detected instead of failing silently;
-    // sessionId + seq drive replay protection (see ReplayGuard). This header is
-    // INSIDE the padded, encrypted frame — never visible on the wire.
-    private const val HDR = 18
-
-    private fun wrap(type: FrameType, payload: ByteArray): ByteArray {
-        val seq = sendSeq.getAndIncrement()
-        val out = ByteArray(HDR + payload.size)
-        out[0] = WIRE_VERSION.toByte()
-        out[1] = type.code.toByte()
-        sessionId.copyInto(out, 2)
-        for (i in 0 until 8) out[10 + i] = (seq ushr (56 - i * 8)).toByte()
-        payload.copyInto(out, HDR)
-        return out
-    }
-
-    private data class Parsed(val version: Int, val type: FrameType?, val sidHex: String,
-                              val seq: Long, val body: ByteArray)
-
-    private fun unwrap(inner: ByteArray): Parsed? {
-        if (inner.size < HDR) return null
-        val version = inner[0].toInt() and 0xff
-        val type = FrameType.fromCode(inner[1].toInt() and 0xff)
-        val sidHex = inner.copyOfRange(2, 10).joinToString("") { "%02x".format(it) }
-        var seq = 0L
-        for (i in 0 until 8) seq = (seq shl 8) or (inner[10 + i].toLong() and 0xff)
-        return Parsed(version, type, sidHex, seq, inner.copyOfRange(HDR, inner.size))
-    }
 }

@@ -20,7 +20,38 @@ continue.
 - Release signing: not set up yet (release APK is unsigned). Stable-key
   signing via GitHub secrets is a later step; see "Signing TODO" below.
 
-## Forward-secrecy CORE + 3 settings + true view-once (latest)
+## Forward secrecy LIVE — wire v3 (latest)
+Commit `security: forward secrecy (signed prekey + X3DH + per-message ratchet)`.
+- **Every contact frame** (message, status, buzz, erase, address update, cover,
+  knock-accept) now goes over a 3-frame handshake on its one Tor connection
+  (`transport/SecureChannel.kt`): PREKEY_REQ (crypto_box, fresh challenge) →
+  PREKEY_RESP (one-time X25519 prekey made for THIS connection, authenticated by
+  the recipient's identity key, echoing the challenge) → X3DH frame
+  (`crypto/Fs.kt`: fresh ephemeral; DH1 eph×prekey, DH2 senderId×prekey, DH3
+  eph×recipientId; BLAKE2b over all DHs + both identities + eph/prekey/id;
+  XChaCha20-Poly1305). Prekey wiped when the connection ends; ephemeral wiped
+  inside seal; DH outputs, KDF buffer, message key and decoded identity-secret
+  copies all zeroed.
+- **Design choices (flagged):** prekey fetched per message on the same connection
+  (no server → recipient always online at send time; a pre-published prekey can go
+  stale on restart and silently lose messages); prekey is one-time per connection
+  (rotation on every request, recent ones = in-flight connections); "signed" =
+  crypto_box MAC under the identity key, not Ed25519 (identities are X25519-only;
+  a signing key would change every CMC-ID); no symmetric chain — each message is a
+  full fresh X3DH, so keys are independent (stronger than a hash ratchet). KNOCK
+  stays an anonymous sealed box (not forward-secret; holds name + own CMC-ID).
+- WIRE_VERSION 3. v2 peers see "update both apps"; a v3 sender to a v2 peer gets no
+  prekey reply → message shows Offline/Retry + Connection log reason.
+- Also: per-peer sequence counters (no false replay rejects), contacts map now
+  concurrent, FramePad headroom 64→128 (FS overhead 80B), sender refuses frames over
+  the 64 KiB cap, client read timeout 30s.
+- Tests: `ForwardSecrecyTest` (16), `SecureWireTest` (6, real loopback sockets),
+  FramePad cap test; 6 deliberate mutants (drop DH1, skip challenge, no prekey wipe,
+  no eph wipe, no replay check, no version check) all caught. On-device: Diagnostics
+  → Self-test runs the handshake on the phone's own libsodium.
+- Not verifiable here: real Tor round trip between two phones — use Link Test.
+
+## Forward-secrecy CORE + 3 settings + true view-once
 Commit `security: forward secrecy (signed prekey + X3DH + per-message ratchet);
 implement Change PIN / Identity / Verify Integrity; true view-once Single Message`.
 

@@ -1,100 +1,165 @@
 package org.cmchat.app.crypto
 
+import java.security.MessageDigest
+
 /**
- * Forward-secrecy frame crypto — an X3DH-style agreement that needs NO
- * interactive handshake (fits the connectionless, one-shot-connection model).
+ * Forward-secret message crypto — an X3DH-style key agreement, done fresh for
+ * EVERY message. Raw bytes throughout so each secret can be wiped.
  *
- * To send, the sender generates a FRESH ephemeral X25519 key and combines three
- * Diffie-Hellmans against the recipient's short-lived PREKEY and both parties'
- * long-term IDENTITY keys:
- *   DH1 = eph       × recipientPrekey    (the forward-secret term)
- *   DH2 = myIdentity × recipientPrekey   (authenticates the sender)
- *   DH3 = eph       × recipientIdentity  (binds the recipient's identity)
- *   key = BLAKE2b(INFO || DH1 || DH2 || DH3)
- * The message is then AEAD-sealed (XChaCha20-Poly1305) under that key, with the
- * ephemeral pubkey + prekey id as associated data.
+ * Inputs per message:
+ *  - the sender's FRESH ephemeral X25519 key (made here, wiped right after use);
+ *  - the recipient's ONE-TIME prekey, fetched for this very message over the
+ *    same connection and authenticated by the recipient's identity key (see
+ *    transport/SecureChannel);
+ *  - both long-term identity keys, which only AUTHENTICATE — no message is ever
+ *    encrypted under an identity key.
  *
- * Forward secrecy: DH1 and DH3 both need the ephemeral private (deleted right
- * after send) and DH1/DH2 need the prekey private (deleted after the rotation
- * window). So a later compromise of EITHER identity key cannot re-derive the
- * key — the ephemeral and rotated prekey are gone. Identity keys only
- * authenticate; they never encrypt content directly.
+ *   DH1 = X25519(eph,      prekey)       forward secrecy (both halves ephemeral)
+ *   DH2 = X25519(senderId, prekey)       authenticates the sender
+ *   DH3 = X25519(eph,      recipientId)  binds the recipient
+ *   key = BLAKE2b-256(INFO || DH1 || DH2 || DH3 || senderIdPub || recipientIdPub
+ *                     || ephPub || prekeyPub || prekeyId)
  *
- * Each message uses a fresh ephemeral, so message keys are independent: a later
- * key reveals nothing about an earlier one. The derived key and all DH outputs
- * are zeroed immediately after use (ephemeral key material is generated locally
- * and dropped; JVM String keys can't be wiped in place — see report).
+ * The plaintext is sealed with XChaCha20-Poly1305 under that key, with the frame
+ * header (ephPub || prekeyId) as associated data, so the header can't be swapped.
+ * The KDF input binds both identities in sender→recipient order plus every
+ * public value of this exchange, so a frame can't be reflected or re-pointed.
+ *
+ * Why this is forward-secret: DH1 needs the ephemeral secret or the prekey
+ * secret. The ephemeral is wiped as soon as the key is derived; the prekey is
+ * one-time and wiped when its connection ends. After that, NOTHING that is kept
+ * — not even both identity secrets — can re-derive the key.
+ *
+ * Why each key is independent ("a later key can't derive an earlier one"):
+ * every message uses its own fresh ephemeral AND its own fresh prekey, so there
+ * is no chain between message keys at all — each one is a full DH ratchet step.
+ * A stolen message key opens that one message and nothing else, earlier or later.
+ *
+ * Wiping is best-effort on the JVM (the GC may have copied an array before it is
+ * zeroed, and JNA briefly marshals arrays into native memory); identity secrets
+ * also live in RAM as hex Strings from the vault, which can't be wiped in place.
  */
 object Fs {
 
-    private val INFO = "cmchat-x3dh-v3".toByteArray()
-    const val EPH = 32
+    private val INFO = "CM-Chat FS v3 | X3DH | XChaCha20-Poly1305".toByteArray(Charsets.US_ASCII)
+
+    const val KEY = 32
     const val PKID = 8
     const val NONCE = 24
-    const val HEADER = EPH + PKID + NONCE   // 64 bytes before the ciphertext
+    const val TAG = 16
+    /** [ephPub(32)][prekeyId(8)][nonce(24)] precede the AEAD ciphertext. */
+    const val HEADER = KEY + PKID + NONCE
+    /** Total bytes a forward-secret frame adds on top of its plaintext. */
+    const val OVERHEAD = HEADER + TAG
 
-    data class Parsed(val ephPubHex: String, val prekeyIdHex: String, val nonce: ByteArray, val cipher: ByteArray)
+    class Parsed(val ephPub: ByteArray, val prekeyId: ByteArray, val nonce: ByteArray, val cipher: ByteArray)
 
-    /** Build an FS frame: [ephPub(32)][prekeyId(8)][nonce(24)][AEAD ciphertext]. */
+    /**
+     * Seal [plain] for one recipient. Returns `ephPub || prekeyId || nonce ||
+     * ciphertext`, or null if the key agreement is refused (malformed prekey).
+     * The ephemeral secret is wiped before this returns, success or not.
+     * [ephemeral] is injectable only so tests can verify that wipe.
+     */
     fun seal(
-        crypto: CryptoManager, plain: ByteArray,
-        myIdSecHex: String, recipientIdPubHex: String,
-        recipientPrekeyPubHex: String, recipientPrekeyIdHex: String,
-    ): ByteArray {
-        val (ePubHex, eSecHex) = crypto.newX25519Keypair()
-        val key = deriveSend(crypto, myIdSecHex, recipientIdPubHex, recipientPrekeyPubHex, eSecHex)
+        c: CryptoManager, plain: ByteArray,
+        senderIdSec: ByteArray, senderIdPub: ByteArray, recipientIdPub: ByteArray,
+        prekeyPub: ByteArray, prekeyId: ByteArray,
+        ephemeral: Pair<ByteArray, ByteArray> = c.x25519Keypair(),
+    ): ByteArray? {
+        val (ephPub, ephSec) = ephemeral
+        val key: ByteArray?
         try {
-            val nonce = crypto.randomBytes(NONCE)
-            val ephRaw = hexBytes(ePubHex)
-            val pkidRaw = hexBytes(recipientPrekeyIdHex)
-            val cipher = crypto.aeadSeal(plain, key, nonce, ephRaw + pkidRaw)
-            return ephRaw + pkidRaw + nonce + cipher
+            key = senderKey(c, senderIdSec, senderIdPub, recipientIdPub, ephSec, ephPub, prekeyPub, prekeyId)
         } finally {
-            key.fill(0)
+            ephSec.fill(0)                      // the ephemeral private key is gone
+        }
+        if (key == null) return null
+        try {
+            val nonce = c.randomBytes(NONCE)
+            val header = ephPub + prekeyId
+            return header + nonce + c.aeadSeal(plain, key, nonce, header)
+        } finally {
+            key.fill(0)                         // and so is the message key
         }
     }
 
     fun parse(frame: ByteArray): Parsed? {
-        if (frame.size < HEADER) return null
-        val eph = frame.copyOfRange(0, EPH)
-        val pkid = frame.copyOfRange(EPH, EPH + PKID)
-        val nonce = frame.copyOfRange(EPH + PKID, HEADER)
-        val cipher = frame.copyOfRange(HEADER, frame.size)
-        return Parsed(hex(eph), hex(pkid), nonce, cipher)
+        if (frame.size < HEADER + TAG) return null
+        return Parsed(
+            ephPub = frame.copyOfRange(0, KEY),
+            prekeyId = frame.copyOfRange(KEY, KEY + PKID),
+            nonce = frame.copyOfRange(KEY + PKID, HEADER),
+            cipher = frame.copyOfRange(HEADER, frame.size),
+        )
     }
 
-    /** Try to open [p] as sent by the contact whose identity is [senderIdPubHex],
-     * using our own identity secret + the prekey secret for p.prekeyIdHex. Returns
-     * the plaintext or null (wrong contact / tampered / wrong prekey). */
+    /**
+     * Open [p] as the recipient, using the one-time prekey it was sealed to.
+     * Returns the plaintext, or null on ANY failure: a frame for a different
+     * prekey, a malformed ephemeral, the wrong sender, or a tampered byte.
+     */
     fun open(
-        crypto: CryptoManager, p: Parsed,
-        myIdSecHex: String, myPrekeySecHex: String, senderIdPubHex: String,
+        c: CryptoManager, p: Parsed,
+        recipientIdSec: ByteArray, recipientIdPub: ByteArray, senderIdPub: ByteArray,
+        prekeySec: ByteArray, prekeyPub: ByteArray, prekeyId: ByteArray,
     ): ByteArray? {
-        val key = deriveRecv(crypto, myIdSecHex, myPrekeySecHex, senderIdPubHex, p.ephPubHex)
+        if (!MessageDigest.isEqual(p.prekeyId, prekeyId)) return null
+        val key = recipientKey(c, recipientIdSec, recipientIdPub, senderIdPub, prekeySec, prekeyPub, prekeyId, p.ephPub)
+            ?: return null
         try {
-            return crypto.aeadOpen(p.cipher, key, p.nonce, hexBytes(p.ephPubHex) + hexBytes(p.prekeyIdHex))
+            return c.aeadOpen(p.cipher, key, p.nonce, p.ephPub + p.prekeyId)
         } finally {
             key.fill(0)
         }
     }
 
-    private fun deriveSend(c: CryptoManager, myIdSec: String, rIdPub: String, rPrekeyPub: String, eSec: String): ByteArray {
-        val dh1 = c.dh(rPrekeyPub, eSec)
-        val dh2 = c.dh(rPrekeyPub, myIdSec)
-        val dh3 = c.dh(rIdPub, eSec)
-        try { return c.kdf32(INFO + dh1 + dh2 + dh3) }
-        finally { dh1.fill(0); dh2.fill(0); dh3.fill(0) }
+    // ---- key derivation (internal so the loopback tests can inspect keys) ----
+
+    internal fun senderKey(
+        c: CryptoManager, senderIdSec: ByteArray, senderIdPub: ByteArray, recipientIdPub: ByteArray,
+        ephSec: ByteArray, ephPub: ByteArray, prekeyPub: ByteArray, prekeyId: ByteArray,
+    ): ByteArray? {
+        val dh1 = c.x25519(ephSec, prekeyPub)
+        val dh2 = c.x25519(senderIdSec, prekeyPub)
+        val dh3 = c.x25519(ephSec, recipientIdPub)
+        try {
+            if (dh1 == null || dh2 == null || dh3 == null) return null
+            return derive(c, dh1, dh2, dh3, senderIdPub, recipientIdPub, ephPub, prekeyPub, prekeyId)
+        } finally {
+            dh1?.fill(0); dh2?.fill(0); dh3?.fill(0)
+        }
     }
 
-    private fun deriveRecv(c: CryptoManager, myIdSec: String, myPrekeySec: String, sIdPub: String, sEphPub: String): ByteArray {
-        val dh1 = c.dh(sEphPub, myPrekeySec)
-        val dh2 = c.dh(sIdPub, myPrekeySec)
-        val dh3 = c.dh(sEphPub, myIdSec)
-        try { return c.kdf32(INFO + dh1 + dh2 + dh3) }
-        finally { dh1.fill(0); dh2.fill(0); dh3.fill(0) }
+    internal fun recipientKey(
+        c: CryptoManager, recipientIdSec: ByteArray, recipientIdPub: ByteArray, senderIdPub: ByteArray,
+        prekeySec: ByteArray, prekeyPub: ByteArray, prekeyId: ByteArray, ephPub: ByteArray,
+    ): ByteArray? {
+        val dh1 = c.x25519(prekeySec, ephPub)
+        val dh2 = c.x25519(prekeySec, senderIdPub)
+        val dh3 = c.x25519(recipientIdSec, ephPub)
+        try {
+            if (dh1 == null || dh2 == null || dh3 == null) return null
+            return derive(c, dh1, dh2, dh3, senderIdPub, recipientIdPub, ephPub, prekeyPub, prekeyId)
+        } finally {
+            dh1?.fill(0); dh2?.fill(0); dh3?.fill(0)
+        }
     }
 
-    private fun hex(b: ByteArray): String = b.joinToString("") { "%02x".format(it) }
-    private fun hexBytes(s: String): ByteArray =
-        ByteArray(s.length / 2) { s.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
+    internal fun derive(
+        c: CryptoManager, dh1: ByteArray, dh2: ByteArray, dh3: ByteArray,
+        senderIdPub: ByteArray, recipientIdPub: ByteArray,
+        ephPub: ByteArray, prekeyPub: ByteArray, prekeyId: ByteArray,
+    ): ByteArray? {
+        val parts = arrayOf(INFO, dh1, dh2, dh3, senderIdPub, recipientIdPub, ephPub, prekeyPub, prekeyId)
+        if (senderIdPub.size != KEY || recipientIdPub.size != KEY || ephPub.size != KEY ||
+            prekeyPub.size != KEY || prekeyId.size != PKID) return null
+        val input = ByteArray(parts.sumOf { it.size })
+        var o = 0
+        for (part in parts) { part.copyInto(input, o); o += part.size }
+        try {
+            return c.kdf32(input)
+        } finally {
+            input.fill(0)                       // the buffer holds the DH outputs
+        }
+    }
 }

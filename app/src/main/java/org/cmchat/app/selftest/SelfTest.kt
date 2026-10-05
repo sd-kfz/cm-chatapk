@@ -48,6 +48,7 @@ object SelfTest {
             runCatching { floodOnion() }.onFailure { crash("onion flood", it) }
             runCatching { mashLifecycle() }.onFailure { crash("lifecycle mashing", it) }
             runCatching { abusePin(app) }.onFailure { crash("PIN / unlock abuse", it) }
+            runCatching { forwardSecrecyLoopback(app) }.onFailure { crash("forward secrecy loopback", it) }
             SelfTestLog.record("Self-test", "finished", Severity.INFO)
             SelfTestLog.running.value = false
         }
@@ -220,6 +221,73 @@ object SelfTest {
             else -> SelfTestLog.record("lifecycle: rapid stop/rotate/presence",
                 "100x stop + address-rotate + presence toggles: no crash, debounce held, threads +$grew",
                 Severity.OK)
+        }
+    }
+
+    // ---- 5) forward secrecy on THIS phone's libsodium ----------------------
+    /**
+     * Runs the real v3 handshake (prekey request → verified one-time prekey →
+     * X3DH frame) between two throwaway identities over a loopback socket, using
+     * the device's own native libsodium — the unit tests in CI use the host one.
+     * Then checks a tampered frame and a replayed request are both refused.
+     * No Tor, no real keys, nothing written to disk.
+     */
+    private fun forwardSecrecyLoopback(context: Context) {
+        val crypto = SecurityFactory.create(java.io.File(context.cacheDir, "selftest-fs")).crypto
+        val (aPub, aSec) = crypto.newIdentityKeypair()
+        val (bPub, bSec) = crypto.newIdentityKeypair()
+        val alice = org.cmchat.app.transport.SecureChannel(crypto, aPub, aSec,
+            org.cmchat.app.transport.InnerCodec(), org.cmchat.app.transport.ReplayGuard())
+        val bob = org.cmchat.app.transport.SecureChannel(crypto, bPub, bSec,
+            org.cmchat.app.transport.InnerCodec(), org.cmchat.app.transport.ReplayGuard())
+        val contacts = mapOf("alice" to aPub)
+        val secret = Random.nextBytes(64)
+
+        // (a) full exchange over a real loopback socket
+        val server = Transport.openServer(0)
+        val got = java.util.concurrent.atomic.AtomicReference<Any?>()
+        val t = Thread {
+            runCatching {
+                server.accept().use { s ->
+                    s.soTimeout = 5_000
+                    got.set(org.cmchat.app.transport.SecureWire.receive(bob, s.getInputStream(), s.getOutputStream(), contacts))
+                }
+            }.onFailure { got.set(it) }
+        }.also { it.start() }
+        try {
+            Socket().use { c ->
+                c.connect(InetSocketAddress("127.0.0.1", server.localPort), 2_000)
+                c.soTimeout = 5_000
+                org.cmchat.app.transport.SecureWire.send(alice, c.getInputStream(), c.getOutputStream(), bPub,
+                    org.cmchat.app.transport.FrameType.MSG, secret)
+            }
+            t.join(6_000)
+        } finally {
+            runCatching { server.close() }
+        }
+        val r = got.get() as? org.cmchat.app.transport.SecureWire.Received.Message
+        if (r == null || !r.body.contentEquals(secret)) {
+            SelfTestLog.record("forward secrecy: handshake", "loopback message NOT delivered intact", Severity.HIGH)
+            return
+        }
+
+        // (b) tamper + replay, in memory
+        val client = alice.Client(bPub)
+        val first = bob.onFirstFrame(client.request, contacts)
+        val srv = (first as org.cmchat.app.transport.SecureChannel.First.Handshake).server
+        val pk = (client.verify(srv.response) as org.cmchat.app.transport.SecureChannel.Verdict.Ok).prekey
+        val frame = client.seal(pk, org.cmchat.app.transport.FrameType.MSG, secret)
+        frame[frame.size - 1] = (frame[frame.size - 1].toInt() xor 1).toByte()
+        val tamperRefused = srv.open(frame) is org.cmchat.app.transport.SecureChannel.Opened.Drop
+        val replayRefused = bob.onFirstFrame(client.request, contacts) is
+            org.cmchat.app.transport.SecureChannel.First.Drop
+        if (tamperRefused && replayRefused) {
+            SelfTestLog.record("forward secrecy: handshake",
+                "one-time prekey + X3DH delivered over loopback on this device's libsodium; tamper and replay refused",
+                Severity.OK)
+        } else {
+            SelfTestLog.record("forward secrecy: handshake",
+                "tamper refused=$tamperRefused, replay refused=$replayRefused", Severity.HIGH)
         }
     }
 
