@@ -48,7 +48,6 @@ fun ChatScreen(
     var renaming by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf(contactName) }
     var editingTeam by remember { mutableStateOf(false) }
-    var teamInput by remember { mutableStateOf(teamHour ?: "") }
 
     // Load the persisted Team clock into this thread when the chat opens.
     LaunchedEffect(chatId, teamHour) { ChatStore.setTeamHourValue(chatId, teamHour) }
@@ -72,6 +71,12 @@ fun ChatScreen(
         // Viewing the chat while Online clears the orange unread dot.
         if (chatCmId != null && !org.cmchat.app.settings.AppSettings.invisibleMode.value) {
             ChatStore.markRead(chatCmId)
+        }
+        // Opening the conversation clears the one-time blue Buzz marker (and
+        // re-arms "Once only" buzzes from this friend).
+        if (chatCmId != null) {
+            ChatStore.clearBuzzed(chatCmId)
+            org.cmchat.app.buzz.BuzzPolicy.onOpenedConversation(chatCmId)
         }
         onDispose {
             if (MessageService.activeChatCmId == chatCmId) MessageService.activeChatCmId = null
@@ -103,7 +108,7 @@ fun ChatScreen(
     Column(Modifier.fillMaxSize().background(CmBackground)
         .offset { IntOffset(shakeX.value.roundToInt(), 0) }) {
         Box(Modifier.fillMaxWidth().padding(14.dp)) {
-            Text("‹ Circle", color = CmBlue, fontFamily = Nunito, fontSize = 15.sp,
+            Text("‹ Friends", color = CmBlue, fontFamily = Nunito, fontSize = 15.sp,
                 modifier = Modifier.align(Alignment.CenterStart).clickable { onBack() })
             if (renaming && chatCmId != null) {
                 BasicTextField(
@@ -131,13 +136,7 @@ fun ChatScreen(
                 })
         }
 
-        // General timer (all messages), set in Settings: small red line.
         val generalTimer by org.cmchat.app.settings.AppSettings.generalTimer.collectAsState()
-        if (generalTimer != SelfTimer.OFF) {
-            Text("timer ${generalTimer.label}", color = CmRed, fontFamily = Nunito, fontSize = 11.sp,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp))
-        }
 
         // Last seen only — there is NO online indicator on friends, ever.
         Row(Modifier.fillMaxWidth().padding(bottom = 8.dp),
@@ -147,56 +146,73 @@ fun ChatScreen(
             }
         }
 
-        // Cerberus / Kill Timer bar — DISPLAY ONLY. Both are changed in Settings,
-        // never from the chat.
+        // Guardian bar — DISPLAY ONLY (Cerberus + Kill Timer are set in Settings).
+        // Left: the Cerberus eye with the message self-destruct TIMER pill beside
+        // it (the timer the next message will get). Right: the Kill Timer.
         val killDeadline by org.cmchat.app.guard.GuardController.killDeadline.collectAsState()
+        val cerberusMin by org.cmchat.app.guard.GuardController.cerberusMinutes.collectAsState()
+        val nextTimer = if (selfTimer != SelfTimer.OFF) selfTimer else generalTimer
         Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp).clip(RoundedCornerShape(14.dp))
-            .border(1.dp, CmTextFaint, RoundedCornerShape(14.dp)),
+            .border(1.dp, CmTextFaint.copy(alpha = 0.6f), RoundedCornerShape(14.dp)),
             verticalAlignment = Alignment.CenterVertically) {
-            Row(Modifier.weight(1f).padding(horizontal = 12.dp, vertical = 10.dp),
+            Row(Modifier.weight(1.4f).padding(horizontal = 10.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.Start, verticalAlignment = Alignment.CenterVertically) {
-                CerberusMark(on = cerberusOn, sizeDp = 40)
-                Spacer(Modifier.width(10.dp))
-                Text(if (cerberusOn) "Cerberus 90m" else "Cerberus off",
+                CerberusMark(on = cerberusOn, sizeDp = 34)
+                Spacer(Modifier.width(8.dp))
+                Text(if (cerberusOn) "Cerberus ${cerberusMin}m" else "Cerberus off",
                     color = if (cerberusOn) CmBlue else CmRed, fontFamily = Nunito,
-                    fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.width(8.dp))
+                TimerPill(nextTimer)
             }
-            Box(Modifier.width(1.dp).height(40.dp).background(CmTextFaint))
-            Box(Modifier.weight(1f).padding(11.dp), contentAlignment = Alignment.Center) {
-                val killLabel = killDeadline?.let {
-                    val secs = ((it - now) / 1000).coerceAtLeast(0)
-                    "Kill ${secs / 3600}h${(secs % 3600) / 60}m"
-                } ?: "Timer off"
+            Box(Modifier.width(1.dp).height(34.dp).background(CmTextFaint.copy(alpha = 0.6f)))
+            Box(Modifier.weight(1f).padding(9.dp), contentAlignment = Alignment.Center) {
+                val killLabel = killDeadline?.let { "Kill " + countdown(it - now) } ?: "Kill off"
                 Text(killLabel,
                     color = if (killDeadline != null) CmRed else CmTextDim,
-                    fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    fontFamily = Nunito, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             }
         }
 
-        // Team clock line (tap to edit; persisted per-contact in the vault).
-        Row(Modifier.fillMaxWidth().padding(top = 8.dp, start = 16.dp, end = 16.dp),
+        // Team Clock: a shared private clock for THIS conversation, ticking live.
+        // Setting it updates both phones (sent inside the encrypted chat).
+        val teamOffset = org.cmchat.app.chat.TeamClock.decode(thread.teamHour)
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp, start = 16.dp, end = 16.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(enabled = chatCmId != null) { editingTeam = true }
+            .padding(vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically) {
-            if (editingTeam && chatCmId != null) {
-                BasicTextField(
-                    value = teamInput, onValueChange = { teamInput = it.take(40) }, singleLine = true,
-                    textStyle = TextStyle(color = CmBlue, fontFamily = Nunito, fontSize = 12.sp),
-                    cursorBrush = SolidColor(CmBlue), modifier = Modifier.weight(1f),
-                )
-                Text("Save", color = CmGreen, fontFamily = Nunito, fontSize = 12.sp,
-                    modifier = Modifier.clickable {
-                        onSetTeamHour(teamInput.trim())
-                        ChatStore.setTeamHourValue(chatId, teamInput.trim().ifEmpty { null })
-                        editingTeam = false
-                    })
+            if (teamOffset != null) {
+                Text("Team Clock", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
+                Spacer(Modifier.width(8.dp))
+                Text(org.cmchat.app.chat.TeamClock.timeAt(now, teamOffset), color = CmBlue, fontFamily = Nunito,
+                    fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.width(6.dp))
+                Text(org.cmchat.app.chat.TeamClock.label(teamOffset), color = CmTextFaint, fontFamily = Nunito,
+                    fontSize = 11.sp)
             } else {
-                Text(
-                    thread.teamHour?.let { "Team clock: $it" } ?: "Set Team clock",
-                    color = if (thread.teamHour != null) CmBlue else CmTextDim,
-                    fontFamily = Nunito, fontSize = 12.sp,
-                    modifier = Modifier.clickable(enabled = chatCmId != null) {
-                        teamInput = thread.teamHour ?: ""; editingTeam = true
-                    })
+                Text("Set a Team Clock", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
             }
+        }
+        if (editingTeam && chatCmId != null) {
+            TeamClockDialog(
+                current = teamOffset,
+                now = now,
+                onSave = { off ->
+                    val v = org.cmchat.app.chat.TeamClock.encode(off)
+                    onSetTeamHour(v)
+                    ChatStore.setTeamHour(chatId, v, "You")
+                    MessageService.sendTeamClock(chatCmId, v)
+                    editingTeam = false
+                },
+                onTurnOff = {
+                    onSetTeamHour("")
+                    ChatStore.setTeamHour(chatId, null, "You")
+                    MessageService.sendTeamClock(chatCmId, "")
+                    editingTeam = false
+                },
+                onDismiss = { editingTeam = false },
+            )
         }
 
         val invisible by org.cmchat.app.settings.AppSettings.invisibleMode.collectAsState()
@@ -210,6 +226,9 @@ fun ChatScreen(
                 // prompt below); nothing of them is revealed yet.
                 if (invisible && m.missed) continue
                 when {
+                    m.alert -> Text("${m.text}  ·  ${stamp(m.createdAt)}", color = CmRedGlow, fontFamily = Nunito,
+                        fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                     m.system -> Text(m.text, color = CmTextFaint, fontFamily = Nunito, fontSize = 12.sp,
                         modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                     m.mine && m.state == MsgState.OFFLINE -> OfflineBubble(m, now, retryReadyAt[m.id]) {
@@ -313,6 +332,102 @@ fun ChatScreen(
                 Text("➤", color = if (canSend) CmBackground else CmTextDim, fontSize = 18.sp)
             }
         }
+    }
+}
+
+/** "Kill 1h23m" style countdown for the guardian bar. */
+private fun countdown(ms: Long): String {
+    val secs = (ms / 1000).coerceAtLeast(0)
+    return if (secs >= 3600) "${secs / 3600}h${(secs % 3600) / 60}m" else "${secs / 60}m${secs % 60}s"
+}
+
+/** Local date+time for an alert line, e.g. "9 Oct 14:05". */
+private fun stamp(ms: Long): String =
+    java.text.SimpleDateFormat("d MMM HH:mm", java.util.Locale.getDefault()).format(java.util.Date(ms))
+
+/** The message self-destruct timer, shown as a small pill beside the Cerberus eye. */
+@Composable
+private fun TimerPill(t: SelfTimer) {
+    val on = t != SelfTimer.OFF
+    val label = when (t) {
+        SelfTimer.OFF -> "timer off"
+        SelfTimer.VIEW_ONCE -> "view once"
+        else -> "timer ${t.label}"
+    }
+    Box(Modifier.clip(RoundedCornerShape(50))
+        .border(1.dp, if (on) CmRed else CmTextFaint, RoundedCornerShape(50))
+        .padding(horizontal = 8.dp, vertical = 3.dp)) {
+        Text(label, color = if (on) CmRed else CmTextDim, fontFamily = Nunito, fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold)
+    }
+}
+
+/**
+ * Pick the conversation's Team Clock: a UTC offset, in 1-hour steps (−/+) plus
+ * a :00/:15/:30/:45 chip, or "Use my time zone". Shows the resulting team time
+ * live. Save shares it with the friend; Turn off clears it on both phones.
+ */
+@Composable
+private fun TeamClockDialog(
+    current: Int?, now: Long,
+    onSave: (Int) -> Unit, onTurnOff: () -> Unit, onDismiss: () -> Unit,
+) {
+    val tc = org.cmchat.app.chat.TeamClock
+    var offset by remember { mutableStateOf(current ?: tc.deviceOffset(now)) }
+    val hours = Math.floorDiv(offset, 60)
+    val mins = Math.floorMod(offset, 60)
+    fun set(h: Int, m: Int) {
+        val v = h * 60 + m
+        if (tc.isValid(v)) offset = v
+    }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Team Clock") },
+        text = {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                Text("A shared clock for this chat. Both of you will see it.",
+                    color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
+                Spacer(Modifier.height(12.dp))
+                Text(tc.timeAt(now, offset), color = CmBlue, fontFamily = Nunito, fontSize = 34.sp,
+                    fontWeight = FontWeight.Bold)
+                Text(tc.label(offset), color = CmTextDim, fontFamily = Nunito, fontSize = 13.sp)
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    StepBtn("−") { set(hours - 1, mins) }
+                    Text("hour", color = CmTextDim, fontFamily = Nunito, fontSize = 13.sp,
+                        modifier = Modifier.padding(horizontal = 14.dp))
+                    StepBtn("+") { set(hours + 1, mins) }
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (m in listOf(0, 15, 30, 45)) {
+                        val sel = m == mins
+                        Box(Modifier.clip(RoundedCornerShape(10.dp)).background(if (sel) CmBlue else CmCard)
+                            .clickable { set(hours, m) }.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                            Text(":%02d".format(m), color = if (sel) CmBackground else CmTextDim,
+                                fontFamily = Nunito, fontSize = 13.sp)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                Text("Use my time zone", color = CmBlue, fontFamily = Nunito, fontSize = 13.sp,
+                    modifier = Modifier.clickable { offset = tc.deviceOffset(now) }.padding(6.dp))
+                if (current != null) {
+                    Text("Turn off", color = CmRed, fontFamily = Nunito, fontSize = 13.sp,
+                        modifier = Modifier.clickable { onTurnOff() }.padding(6.dp))
+                }
+            }
+        },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = { onSave(offset) }) { Text("Save") } },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun StepBtn(label: String, onClick: () -> Unit) {
+    Box(Modifier.size(44.dp).clip(RoundedCornerShape(12.dp)).background(CmCard).clickable { onClick() },
+        contentAlignment = Alignment.Center) {
+        Text(label, color = CmText, fontFamily = Nunito, fontSize = 20.sp, fontWeight = FontWeight.Bold)
     }
 }
 

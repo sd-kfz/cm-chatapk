@@ -116,7 +116,7 @@ class SecureWireTest {
                 val opened = crypto.boxOpen(req, alice.idPub, bob.idSec)!!
                 val challenge = InnerCodec().unwrap(FramePad.unpad(opened)!!)!!.body
                 val body = crypto.randomBytes(Fs.PKID) + crypto.x25519Keypair().first + challenge
-                val v4 = crypto.boxSeal(FramePad.pad(InnerCodec().wrap(FrameType.PREKEY_RESP, body, alice.idPub, 4)),
+                val v4 = crypto.boxSeal(FramePad.pad(InnerCodec().wrap(FrameType.PREKEY_RESP, body, alice.idPub, SecureChannel.WIRE_VERSION + 1)),
                     alice.idPub, bob.idSec)
                 Transport.writeFrame(s.getOutputStream(), v4)
             }) { aliceSends(it, "x".toByteArray()) { flagged = true } }

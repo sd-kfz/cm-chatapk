@@ -46,7 +46,7 @@ private const val WELCOME = """Please read this before you rely on CM-Chat.
 
 2. Both people must be online at the same time to exchange messages. There is no mailbox holding messages for you.
 
-3. Messages, files and statuses live only in memory. They are erased when the app is closed, wiped, or the process ends. Only the encrypted vault (your identity, Circle and settings) is ever written to disk.
+3. Messages live only in memory. They are erased when the app is closed, wiped, or the process ends. Only the encrypted vault (your identity, friends and settings) is ever written to disk.
 
 4. Your safety depends on your device. If your phone is unlocked, compromised, or taken while open, CM-Chat cannot protect you. Use the screen lock, Cerberus idle-wipe, the Kill Timer, and the reverse-PIN shredder.
 

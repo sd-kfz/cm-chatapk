@@ -10,6 +10,11 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Lets the user exempt the engine from battery optimisation (optional). -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Wipe Everything's last step opens the system UNINSTALL prompt for this app.
+         Since Android 9 the prompt silently refuses without this (normal,
+         install-time) permission. It cannot uninstall anything by itself — the
+         user must still confirm in Android's own dialog. -->
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
 
     <application
         android:allowBackup="false"

@@ -1,6 +1,7 @@
 package org.cmchat.app.vault
 
 import android.content.Context
+import kotlinx.coroutines.launch
 import java.io.File
 import java.security.SecureRandom
 
@@ -14,6 +15,37 @@ import java.security.SecureRandom
  * not a forensic guarantee) and then deletes.
  */
 object Shredder {
+
+    /**
+     * Set the moment the Shredder (duress) passcode is entered. While true the
+     * lock screen shows ONLY "Error: please restart the app." and accepts NO
+     * input — no new-PIN prompt, no uninstall prompt, nothing that hints at a
+     * wipe. RAM-only, so it lasts exactly until the process restarts.
+     */
+    val tripped = kotlinx.coroutines.flow.MutableStateFlow(false)
+
+    private val scope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
+
+    /**
+     * Duress: show the fake error immediately, then silently stop everything
+     * and erase. Order: flag (UI switches at once) → RAM + keys → engine off →
+     * disk shred (off the main thread).
+     */
+    fun trip(context: Context) {
+        val ctx = context.applicationContext
+        tripped.value = true
+        org.cmchat.app.guard.GuardController.wipeRamOnly()   // chats, tools, buzz, diag, notifications, server
+        org.cmchat.app.transport.MessageService.zeroKeys()
+        org.cmchat.app.transport.CoverTraffic.stop()
+        runCatching { org.cmchat.app.tor.BuzzListenerService.stop(ctx) }
+        runCatching { org.cmchat.app.tor.TorService.stop(ctx) }
+        // Process-level scope: the shred must finish even if the screen goes away.
+        scope.launch {
+            kotlinx.coroutines.delay(800)   // let Tor finish shutting down before shredding its dir
+            shredAll(ctx)
+        }
+    }
 
     /** Irreversibly erase all recoverable on-disk app data. */
     fun shredAll(context: Context) {

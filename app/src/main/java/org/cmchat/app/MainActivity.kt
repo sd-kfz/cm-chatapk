@@ -27,6 +27,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // Cerberus is an IDLE wipe: every real touch / key press is activity and
+    // resets its clock (it used to reset only on resume, so someone chatting
+    // non-stop could be wiped mid-conversation). Setting a timestamp is free.
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent?): Boolean {
+        GuardController.touch()
+        return super.dispatchTouchEvent(ev)
+    }
+
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        GuardController.touch()
+        return super.dispatchKeyEvent(event)
+    }
+
     // Reopening from recents / returning to the app counts as touching it,
     // which resets the Cerberus idle clock.
     override fun onResume() {

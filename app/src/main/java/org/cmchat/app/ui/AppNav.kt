@@ -18,7 +18,7 @@ import org.cmchat.app.tor.TorService
 import org.cmchat.app.tor.TorStatus
 import org.cmchat.app.transport.MessageService
 import org.cmchat.app.ui.screens.ChatScreen
-import org.cmchat.app.ui.screens.CircleScreen
+import org.cmchat.app.ui.screens.FriendsScreen
 import org.cmchat.app.ui.screens.Contact
 import org.cmchat.app.ui.screens.KnockScreen
 import org.cmchat.app.ui.screens.LockScreen
@@ -46,7 +46,7 @@ private tailrec fun findActivity(c: android.content.Context?): android.app.Activ
 
 private sealed class Nav {
     object Lock : Nav()
-    object Circle : Nav()
+    object Friends : Nav()
     data class Chat(val name: String, val cmId: String?) : Nav()
     object Settings : Nav()
     object MyServer : Nav()
@@ -70,8 +70,22 @@ private fun myCmId(data: VaultData?): String? {
     return CmId.encode(onion, face.publicKey)
 }
 
+/**
+ * Root: applies the app-wide text size (Settings → Text size) to EVERY screen
+ * and dialog by scaling the font scale in LocalDensity, then runs the nav.
+ */
 @Composable
 fun AppNav() {
+    val step by org.cmchat.app.settings.AppSettings.textSize.collectAsState()
+    val base = androidx.compose.ui.platform.LocalDensity.current
+    CompositionLocalProvider(
+        androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(
+            base.density, base.fontScale * org.cmchat.app.settings.AppSettings.textScale(step)),
+    ) { AppNavContent() }
+}
+
+@Composable
+private fun AppNavContent() {
     val context = LocalContext.current
     val manager = remember { SecurityFactory.create(context.filesDir) }
     val scope = rememberCoroutineScope()
@@ -82,6 +96,25 @@ fun AppNav() {
 
     val torStatus by TorService.status.collectAsState()
     var showWipeConfirm by remember { mutableStateOf(false) }
+    // Android 13+ only shows notifications (Buzz "Activity", new-message
+    // "Notification") if the app asks for POST_NOTIFICATIONS at runtime — the
+    // system never asks for a targetSdk-33+ app. Ask ONCE per run, after unlock;
+    // never nag (Android itself stops showing it after two denials).
+    var askedNotif by remember { mutableStateOf(false) }
+    val notifLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { }
+    LaunchedEffect(nav) {
+        if (nav == Nav.Friends && !askedNotif && android.os.Build.VERSION.SDK_INT >= 33 &&
+            androidx.core.content.ContextCompat.checkSelfPermission(context,
+                android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            askedNotif = true
+            runCatching { notifLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS) }
+        }
+    }
+
+    // Team Clock changes a friend made while the app was locked (no passcode in
+    // RAM to save the vault): applied right after the next unlock.
+    val pendingTeamClock = remember { mutableStateMapOf<String, String>() }
     var showReviewSettings by remember { mutableStateOf(false) }
 
     // Surface a crash from a previous run (debug-phase aid), then delete it.
@@ -122,23 +155,41 @@ fun AppNav() {
         AlertDialog(
             onDismissRequest = { showWipeConfirm = false },
             title = { Text("Wipe everything?") },
-            text = { Text("Deletes all app data (vault, keys, Circle, caches) and then asks Android to uninstall the app.") },
+            text = { Text("Shreds ALL app data on this phone (vault, keys, friends, settings, Tor " +
+                "cache) and then opens Android's uninstall prompt to remove the app itself.") },
             confirmButton = {
                 TextButton(onClick = {
                     showWipeConfirm = false
-                    manager.wipe()
-                    ChatStore.clearAll()
-                    org.cmchat.app.tools.ToolsState.clear()
-                    org.cmchat.app.diag.Diag.clear()
-                    org.cmchat.app.diag.CrashCatcher.delete(context)
-                    runCatching { context.cacheDir.deleteRecursively() }
-                    runCatching { context.codeCacheDir.deleteRecursively() }
-                    runCatching { org.cmchat.app.tor.TorFiles.wipe(context) }
-                    runCatching {
-                        context.startActivity(
-                            Intent(Intent.ACTION_DELETE, Uri.parse("package:${context.packageName}"))
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        )
+                    // Log out first so nothing decrypted stays on screen or in RAM.
+                    pin = null; data = null; nav = Nav.Lock
+                    scope.launch {
+                        // 1) stop the engine so nothing is still writing files…
+                        org.cmchat.app.transport.CoverTraffic.stop()
+                        ServerController.stop()
+                        org.cmchat.app.tor.BuzzListenerService.stop(context)
+                        TorService.stop(context)
+                        // 2) …wipe RAM…
+                        ChatStore.clearAll()
+                        org.cmchat.app.tools.ToolsState.clear()
+                        org.cmchat.app.buzz.BuzzPolicy.clear()
+                        org.cmchat.app.notify.Notifier.clearAll(context)
+                        MessageService.zeroKeys()
+                        org.cmchat.app.diag.Diag.clear()
+                        // 3) …shred EVERY file the app owns (vault, salt, prefs,
+                        //    caches, Tor's working dir, crash file)…
+                        withContext(Dispatchers.IO) {
+                            kotlinx.coroutines.delay(800)   // let Tor finish shutting down
+                            org.cmchat.app.diag.CrashCatcher.delete(context)
+                            org.cmchat.app.vault.Shredder.shredAll(context)
+                        }
+                        // 4) …and only then ask Android to uninstall the app. An app
+                        //    can't remove itself silently; this opens the system prompt.
+                        runCatching {
+                            context.startActivity(
+                                Intent(Intent.ACTION_DELETE, Uri.parse("package:${context.packageName}"))
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        }
                     }
                 }) { Text("Wipe") }
             },
@@ -168,6 +219,28 @@ fun AppNav() {
             )
             org.cmchat.app.vault.VaultIO.save(manager, p, updated)
             data = updated
+        }
+        // A friend set / turned off this chat's Team Clock: persist it per friend.
+        MessageService.onTeamClockChanged = tc@{ cmId, value ->
+            val p = pin; val cur = data
+            if (p == null || cur == null) { pendingTeamClock[cmId] = value ?: ""; return@tc }
+            val updated = cur.copy(contacts = cur.contacts.map { if (it.cmId == cmId) it.copy(teamHour = value) else it })
+            org.cmchat.app.vault.VaultIO.save(manager, p, updated)
+            data = updated
+        }
+        // Apply Team Clock changes that arrived while the app was locked.
+        if (pendingTeamClock.isNotEmpty()) {
+            val p = pin
+            if (p != null) {
+                val updated = d.copy(contacts = d.contacts.map { c ->
+                    val v = c.cmId?.let { pendingTeamClock[it] }
+                    if (v != null) c.copy(teamHour = v.ifEmpty { null }) else c
+                })
+                pendingTeamClock.clear()
+                org.cmchat.app.vault.VaultIO.save(manager, p, updated)
+                data = updated
+                return@LaunchedEffect
+            }
         }
         // Persist an accepted knock as a contact in the vault.
         MessageService.onContactAccepted = accepted@{ req ->
@@ -230,12 +303,16 @@ fun AppNav() {
             // Load bridge config BEFORE starting Tor so it's in the torrc at launch.
             org.cmchat.app.tor.Bridges.configure(unlocked.settings.bridgeMode, unlocked.settings.bridgeLines)
             org.cmchat.app.transport.CoverTraffic.setEnabled(unlocked.settings.coverTraffic)
+            org.cmchat.app.settings.AppSettings.textSize.value = unlocked.settings.textSize
             TorService.start(context)
             org.cmchat.app.guard.GuardController.init(context)
+            org.cmchat.app.guard.GuardController.setCerberusMinutes(unlocked.settings.cerberusMinutes)
+            org.cmchat.app.guard.GuardController.setCerberusArmed(
+                unlocked.settings.cerberusArmed && !org.cmchat.app.settings.AppSettings.stayReachable.value)
             // Brand-new users get the one-time onboarding wizard first.
-            if (firstRun) nav = Nav.Onboarding else nav = Nav.Circle
+            if (firstRun) nav = Nav.Onboarding else nav = Nav.Friends
         }
-        Nav.Circle -> {
+        Nav.Friends -> {
             val threads by ChatStore.threads.collectAsState()
             val real = data?.contacts?.takeIf { it.isNotEmpty() }
                 ?.map {
@@ -244,10 +321,11 @@ fun AppNav() {
                         unread = t?.unread ?: false,
                         cmId = it.cmId,
                         lastSeenMs = t?.peerLastSeen,
-                        missed = t?.messages?.any { m -> m.missed } == true)
+                        missed = t?.messages?.any { m -> m.missed } == true,
+                        buzzed = t?.buzzed ?: false)
                 }
                 ?: emptyList()   // real empty state (no fake sample contacts)
-            // Decoy chat: a fake contact; tapping it silently Exits + wipes RAM.
+            // Decoy chat: a fake contact; tapping it = this phone may be compromised.
             val decoyOn by org.cmchat.app.settings.AppSettings.decoyEnabled.collectAsState()
             val decoyName by org.cmchat.app.settings.AppSettings.decoyName.collectAsState()
             val decoyTop by org.cmchat.app.settings.AppSettings.decoyAtTop.collectAsState()
@@ -255,18 +333,35 @@ fun AppNav() {
                 val decoy = Contact(decoyName, CmGreen, unread = false, cmId = DECOY_CM_ID)
                 if (decoyTop) listOf(decoy) + real else real + decoy
             } else real
-            CircleScreen(
+            FriendsScreen(
                 contacts = contacts,
                 onOpenChat = {
                     if (it.cmId == DECOY_CM_ID) {
-                        // Decoy: instantly wipe ALL conversations (RAM + best-effort
-                        // remote burn), then open the clean decoy chat.
-                        MessageService.burnAll()
-                        nav = Nav.Chat(it.name, DECOY_CM_ID)
+                        // DECOY TRIPPED. (1) Instantly wipe MY side from RAM and send
+                        // every friend a red "Decoy chat tripped." alert — their copy
+                        // is NOT deleted. (2) Rotate to a new onion address (saved with
+                        // the unlock material captured here; the signed address update
+                        // goes to friends). (3) Silently log out to the lock screen.
+                        val p = pin; val cur = data
+                        MessageService.tripDecoy()
+                        if (p != null && cur != null) {
+                            ServerController.requestNewAddress { pub ->
+                                val me = cur.faces.firstOrNull() ?: return@requestNewAddress
+                                val updated = cur.copy(faces = cur.faces.map { f ->
+                                    if (f.id == me.id) f.copy(onionKey = pub.newPrivateKey ?: f.onionKey,
+                                        onionAddress = pub.onion) else f
+                                })
+                                // Saved to disk only — the decrypted vault is NOT put
+                                // back into RAM, since we're locked now.
+                                org.cmchat.app.vault.VaultIO.save(manager, p, updated)
+                                myCmId(updated)?.let { id -> MessageService.sendAddressUpdate(id) }
+                            }
+                        }
+                        pin = null; data = null; nav = Nav.Lock
                     } else nav = Nav.Chat(it.name, it.cmId)
                 },
                 onOpenSettings = { nav = Nav.Settings },
-                onKnock = { nav = Nav.Knock },
+                onAddFriend = { nav = Nav.Knock },
                 onOpenTool = { nav = Nav.Tool(it) },
                 onMinimise = { findActivity(context)?.moveTaskToBack(true) },
                 onExit = {
@@ -278,7 +373,7 @@ fun AppNav() {
         is Nav.Chat -> ChatScreen(
             contactName = n.name,
             chatCmId = n.cmId,
-            onBack = { nav = Nav.Circle },
+            onBack = { nav = Nav.Friends },
             teamHour = data?.contacts?.firstOrNull { it.cmId == n.cmId }?.teamHour,
             onSetTeamHour = { value ->
                 val p = pin; val cur = data
@@ -306,9 +401,9 @@ fun AppNav() {
                 }
             },
         )
-        is Nav.Tool -> org.cmchat.app.ui.screens.ToolsScreen(n.which) { nav = Nav.Circle }
+        is Nav.Tool -> org.cmchat.app.ui.screens.ToolsScreen(n.which) { nav = Nav.Friends }
         Nav.Settings -> SettingsScreen(
-            onBack = { nav = Nav.Circle },
+            onBack = { nav = Nav.Friends },
             onOpenMyServer = { nav = Nav.MyServer },
             onOpenMyId = { nav = Nav.MyId },
             onOpenBridges = { nav = Nav.Bridges },
@@ -339,10 +434,22 @@ fun AppNav() {
                     data = updated
                 }
             },
-            onRemovePrivacyPin = {
+            onCerberusChange = { armed, minutes ->
+                org.cmchat.app.guard.GuardController.setCerberusMinutes(minutes)
+                org.cmchat.app.guard.GuardController.setCerberusArmed(armed)
                 val p = pin; val cur = data
                 if (p != null && cur != null) {
-                    val updated = cur.copy(settings = cur.settings.copy(privacyPin = null))
+                    val updated = cur.copy(settings = cur.settings.copy(cerberusArmed = armed, cerberusMinutes = minutes))
+                    org.cmchat.app.vault.VaultIO.save(manager, p, updated)
+                    data = updated
+                }
+            },
+            textSize = data?.settings?.textSize ?: 0,
+            onTextSize = { step ->
+                org.cmchat.app.settings.AppSettings.textSize.value = step
+                val p = pin; val cur = data
+                if (p != null && cur != null) {
+                    val updated = cur.copy(settings = cur.settings.copy(textSize = step))
                     org.cmchat.app.vault.VaultIO.save(manager, p, updated)
                     data = updated
                 }
@@ -381,7 +488,7 @@ fun AppNav() {
                 org.cmchat.app.vault.VaultIO.save(manager, p, updated)
                 data = updated
             }
-            nav = Nav.Circle
+            nav = Nav.Friends
             showReviewSettings = true
         })
         Nav.Help -> org.cmchat.app.ui.screens.HelpScreen(onBack = { nav = Nav.Settings })
@@ -438,9 +545,9 @@ fun AppNav() {
             myCmId = myCmId(data),
             onSend = { cmId, _ ->
                 MessageService.sendKnock(cmId) {}
-                nav = Nav.Circle
+                nav = Nav.Friends
             },
-            onBack = { nav = Nav.Circle },
+            onBack = { nav = Nav.Friends },
             onShowMyQr = { nav = Nav.MyId },
         )
         Nav.MyServer -> {

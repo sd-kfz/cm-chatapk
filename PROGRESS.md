@@ -20,7 +20,47 @@ continue.
 - Release signing: not set up yet (release APK is unsigned). Stable-key
   signing via GitHub secrets is a later step; see "Signing TODO" below.
 
-## Forward secrecy LIVE — wire v3 (latest)
+## v1.2 big batch (latest)
+- **Look:** true-black OLED (#000 bg, window/status/nav bars black), cyan accent
+  (`CmBlue`=#35C6F2), teal status dots, dense friend cards (30dp avatars, tight
+  padding), cyan-gradient drawn "+". Wordmark unchanged.
+- **Front screen:** letters-only wordmark, exactly two Canvas-drawn icons (white
+  minimise line; red power symbol from the given SVG geometry), no gear, no logo
+  image. The flower/gear/box the user saw came from builds ≤75 (fix landed in 76).
+- **Chat:** timer pill beside the Cerberus eye (shows the timer the NEXT message
+  gets); Team Clock = shared UTC offset per chat (`chat/TeamClock.kt`), live clock,
+  picker dialog, synced via new TEAM_CLOCK frame, persisted per friend (changes
+  arriving while locked are applied after unlock).
+- **Decoy = alert, not destroy:** `MessageService.tripDecoy()` wipes MY RAM, sends
+  DECOY_ALERT to every friend (red timestamped "Decoy chat tripped." line; their
+  history is kept), AppNav rotates the onion (saved with captured unlock material,
+  not kept in RAM) and locks. Alerts also land in scout (buzz-only) mode.
+- **Sensitive settings** behind the Privacy PIN: My Server, Bridges, Metadata scrub,
+  Keep engine running, Stay unlocked, Change PIN (+ guardians, wipe). Remove-PIN gone.
+- **Wipe Everything:** stop engine → wipe RAM/keys → Shredder.shredAll → THEN the
+  system uninstall prompt. Added REQUEST_DELETE_PACKAGES (without it Android 9+
+  silently ignored the uninstall request — it never worked before).
+- **Stealth Shredder:** `Shredder.trip()` shows only "Error: please restart the app."
+  and accepts no input until restart; stops Tor; shreds on a process-level scope.
+- **Passcode:** 4–56 chars, any mix, no palindrome (Shredder needs it); strength hint
+  (encourages 8+); Enter button always (no 6-digit auto-submit); bigger keys
+  (keypad 84×70dp, letters 54dp tall, compact header when letters show).
+- **Stubs:** Cerberus operable (arm/off + 15m–3h, persisted), Kill Timer operable
+  (arm 15m–24h, live countdown, cancel); status word removed (STATUS frame retired);
+  text size applied app-wide via LocalDensity.fontScale (persisted); single identity
+  row. Fixed: Cerberus idle clock only reset on resume (active users got wiped) —
+  now every touch/key resets it.
+- **Buzz:** blue marker per friend, cleared (and Once-only re-armed) on opening the
+  chat. Fixed: POST_NOTIFICATIONS was never requested → no notifications on
+  Android 13/14; now asked once after unlock. Scout/Buzz audit in the commit report.
+- **Rename:** Circle→Friends everywhere (FriendsScreen.kt, Nav.Friends, strings);
+  "Pick a nickname"; Help reorganised setup→friends→messaging→presence→panic→diag.
+- **Wire v4** (new frame types would be silently ignored by v3). Gap-free contact
+  table refresh in configure(). Tests: 82 green incl. OpaqueInputTest (hostile
+  passcodes/nicknames/messages stay bytes; no exec/SQL/eval/WebView APIs exist) and
+  TeamClockDecoyBuzzTest.
+
+## Forward secrecy LIVE — wire v3
 Commit `security: forward secrecy (signed prekey + X3DH + per-message ratchet)`.
 - **Every contact frame** (message, status, buzz, erase, address update, cover,
   knock-accept) now goes over a 3-frame handshake on its one Tor connection

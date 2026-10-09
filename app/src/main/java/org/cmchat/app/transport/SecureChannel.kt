@@ -87,7 +87,7 @@ class InnerCodec(sessionId: ByteArray? = null) {
  *
  * Identity keys only AUTHENTICATE: they seal the two tiny handshake frames
  * (which carry no user content — a random challenge and a public key) and feed
- * DH2/DH3. ALL user content (messages, status, buzz, erase, address updates,
+ * DH2/DH3. ALL user content (messages, buzz, erase, address updates, decoy alerts, Team Clock,
  * cover traffic) travels only in step 3. The anonymous KNOCK to a not-yet-contact
  * stays a sealed box (see [sealKnock]).
  */
@@ -100,15 +100,16 @@ class SecureChannel(
 ) {
 
     companion object {
-        /** v3 = forward-secret handshake. (v2 = static crypto_box + replay counter.) */
-        const val WIRE_VERSION = 3
+        /** v4 = v3's forward-secret handshake + decoy alert + Team Clock frames.
+         * (v3 = forward secrecy; v2 = static crypto_box + replay counter.) */
+        const val WIRE_VERSION = 4
         const val CHALLENGE = 16
         private const val RESP_BODY = Fs.PKID + Fs.KEY + CHALLENGE
 
         /** Frame types allowed to carry content in step 3 — never handshake types. */
         val CONTENT_TYPES: Set<FrameType> = setOf(
-            FrameType.MSG, FrameType.STATUS, FrameType.ERASE_CHAT, FrameType.BUZZ,
-            FrameType.ADDR_UPDATE, FrameType.COVER, FrameType.KNOCK_ACCEPT,
+            FrameType.MSG, FrameType.ERASE_CHAT, FrameType.BUZZ, FrameType.ADDR_UPDATE,
+            FrameType.COVER, FrameType.KNOCK_ACCEPT, FrameType.DECOY_ALERT, FrameType.TEAM_CLOCK,
         )
     }
 

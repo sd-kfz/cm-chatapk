@@ -8,6 +8,7 @@ enum class FrameType(val code: Int) {
     KNOCK_ACCEPT(2),
     MSG(3),
     ACK(4),
+    /** Retired (the custom status word was removed in v1.2); code kept reserved. */
     STATUS(5),
     ERASE_CHAT(6),
     PING(7),
@@ -29,7 +30,14 @@ enum class FrameType(val code: Int) {
     PREKEY_REQ(15),
 
     /** Forward secrecy, step 2: the one-time prekey, bound to the request. */
-    PREKEY_RESP(16);
+    PREKEY_RESP(16),
+
+    /** "Decoy chat tripped": the sender's phone may be compromised. Shown to the
+     * friend as a red timestamped line; it deletes NOTHING on their side. */
+    DECOY_ALERT(17),
+
+    /** Team Clock changed: payload = canonical UTC offset ("UTC+02:00") or empty. */
+    TEAM_CLOCK(18);
 
     companion object {
         fun fromCode(code: Int): FrameType? = entries.firstOrNull { it.code == code }

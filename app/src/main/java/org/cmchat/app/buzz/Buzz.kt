@@ -86,6 +86,11 @@ object BuzzPolicy {
     @Synchronized
     fun onMessagedContact(cmId: String) { onceConsumed.remove(cmId) }
 
+    /** Opening that friend's conversation clears their one-time buzz, so a new
+     * one can reach you again (the blue dot itself is cleared in ChatStore). */
+    @Synchronized
+    fun onOpenedConversation(cmId: String) { onceConsumed.remove(cmId) }
+
     fun requestShake(chatCmId: String) { _shakes.tryEmit(BuzzShake(chatCmId)) }
 
     @Synchronized

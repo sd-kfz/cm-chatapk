@@ -19,9 +19,3 @@ data class TextPayload(
     val text: String,
     val selfTimer: String = "off",
 )
-
-@kotlinx.serialization.Serializable
-data class StatusPayload(
-    val word: String,
-    val colorArgb: Long,
-)

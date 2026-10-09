@@ -16,13 +16,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.cmchat.app.R
@@ -32,6 +35,7 @@ import org.cmchat.app.tor.TorStatus
 import org.cmchat.app.transport.MessageService
 import org.cmchat.app.ui.theme.*
 
+/** One friend row on the Friends screen. */
 data class Contact(
     val name: String,
     val color: Color,
@@ -39,23 +43,28 @@ data class Contact(
     val cmId: String? = null,
     val lastSeenMs: Long? = null,
     val missed: Boolean = false,
+    /** A Buzz arrived and the conversation hasn't been opened since (blue dot). */
+    val buzzed: Boolean = false,
 )
 
-// Brand accents for the wordmark + status line (kept local to this screen).
+// The crisp blue/red wordmark (kept exactly as approved) + offline grey.
 private val WordBlue = Color(0xFF35C6F2)
 private val WordRed = Color(0xFFFF3B3B)
-private val Teal = Color(0xFF35D6A6)
-private val Cyan = Color(0xFF35C6F2)
-private val Purple = Color(0xFF8B5CF6)
 private val Grey = Color(0xFF8B94A3)
-private val Frame = Color(0xFF2B3340)
+private val Frame = Color(0xFF232A35)
 
+/**
+ * The Friends screen (main screen). v1.2 final look: true-black OLED background,
+ * letters-only "CM-Chat" wordmark top-left, exactly two DRAWN vector icons
+ * top-right (minimise, exit), dense friend cards, and a cyan-gradient "+" that
+ * holds Add friend + Settings. No logo image and no gear in the top bar.
+ */
 @Composable
-fun CircleScreen(
+fun FriendsScreen(
     contacts: List<Contact>,
     onOpenChat: (Contact) -> Unit,
     onOpenSettings: () -> Unit,
-    onKnock: () -> Unit = {},
+    onAddFriend: () -> Unit = {},
     onOpenTool: (String) -> Unit = {},
     onMinimise: () -> Unit = {},
     onExit: () -> Unit = {},
@@ -71,35 +80,34 @@ fun CircleScreen(
     val online = torStatus is TorStatus.Online
 
     Box(Modifier.fillMaxSize().background(CmBackground)) {
-        Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+        Column(Modifier.fillMaxSize().padding(horizontal = 14.dp)) {
 
             // ---- top bar: wordmark (letters only, left) .......... minimise / exit
-            // No logo image and no settings gear here — Settings lives under the "+".
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(10.dp))
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Wordmark(online)
                 Spacer(Modifier.weight(1f))
                 IconBtn(onClick = onMinimise) { MinimiseIcon() }
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(6.dp))
                 IconBtn(onClick = onExit) { PowerIcon() }
             }
 
             // ---- thin status line: Engine (left) .......... Me (right)
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(6.dp))
             StatusLine(online, torStatus, invisible) {
                 val nowInvisible = !invisible
                 org.cmchat.app.settings.AppSettings.invisibleMode.value = nowInvisible
                 if (!nowInvisible) org.cmchat.app.chat.ChatStore.markMissedSeen()
             }
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
 
             if (versionMismatch) {
-                Text("A contact is on a different version — update both apps to the same version.",
+                Text("A friend is on a different version — update both apps to the same version.",
                     color = WordRed, fontFamily = Nunito, fontSize = 12.sp,
                     modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
                         .background(WordRed.copy(alpha = 0.12f)).padding(10.dp),
                     textAlign = TextAlign.Center)
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(6.dp))
             }
 
             if (torStatus is TorStatus.Starting || torStatus is TorStatus.Connecting) {
@@ -115,22 +123,22 @@ fun CircleScreen(
             // Incoming knock requests (only when present).
             for (k in knocks) {
                 Column(
-                    Modifier.fillMaxWidth().padding(bottom = 8.dp)
-                        .clip(RoundedCornerShape(12.dp)).background(CmCard).padding(14.dp),
+                    Modifier.fillMaxWidth().padding(bottom = 6.dp)
+                        .clip(RoundedCornerShape(10.dp)).background(CmCard).padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Text("Knock from ${k.displayName}", color = CmText, fontFamily = Nunito,
-                        fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Box(Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).background(Teal)
-                            .clickable { MessageService.acceptKnock(k) }.padding(vertical = 10.dp),
+                        Box(Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).background(CmTeal)
+                            .clickable { MessageService.acceptKnock(k) }.padding(vertical = 9.dp),
                             contentAlignment = Alignment.Center) {
                             Text("Accept", color = CmBackground, fontFamily = Nunito, fontSize = 14.sp,
                                 fontWeight = FontWeight.SemiBold)
                         }
                         Box(Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).background(CmBackground)
                             .border(1.dp, Frame, RoundedCornerShape(10.dp))
-                            .clickable { MessageService.declineKnock(k) }.padding(vertical = 10.dp),
+                            .clickable { MessageService.declineKnock(k) }.padding(vertical = 9.dp),
                             contentAlignment = Alignment.Center) {
                             Text("Decline", color = CmTextDim, fontFamily = Nunito, fontSize = 14.sp)
                         }
@@ -138,19 +146,19 @@ fun CircleScreen(
                 }
             }
 
-            // ---- contact list
+            // ---- friends list (dense cards)
             if (contacts.isEmpty()) {
                 Box(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
                     contentAlignment = Alignment.Center) {
-                    Text(stringResource(R.string.empty_circle), color = CmTextFaint,
+                    Text(stringResource(R.string.empty_friends), color = CmTextFaint,
                         fontFamily = Nunito, fontSize = 14.sp, textAlign = TextAlign.Center)
                 }
             } else LazyColumn(
                 Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(bottom = 84.dp),  // clear the FAB
+                verticalArrangement = Arrangement.spacedBy(5.dp),
+                contentPadding = PaddingValues(bottom = 80.dp),  // clear the "+"
             ) {
-                items(contacts) { c -> ContactRow(c, online, onOpenChat) }
+                items(contacts) { c -> FriendRow(c, online, onOpenChat) }
             }
 
             // Tools dock (only when a tool is enabled) — behaviour unchanged.
@@ -166,24 +174,22 @@ fun CircleScreen(
             }
         }
 
-        // ---- purple "+" FAB, bottom-right — opens the actions menu (Add contact,
-        // Settings). Settings is NOT in the top bar; it lives here under the "+".
+        // ---- cyan-gradient "+", bottom-right: Add friend + Settings live here.
         var menuOpen by remember { mutableStateOf(false) }
         Box(Modifier.align(Alignment.BottomEnd).padding(20.dp)) {
             Box(
-                Modifier.size(56.dp).clip(CircleShape).background(Purple)
+                Modifier.size(56.dp).clip(CircleShape)
+                    .background(Brush.linearGradient(listOf(CmBlueGlow, CmBlue, CmCyanDeep)))
                     .clickable { menuOpen = true },
                 contentAlignment = Alignment.Center,
-            ) {
-                Text("+", color = Color.White, fontFamily = Nunito, fontSize = 30.sp, fontWeight = FontWeight.Bold)
-            }
+            ) { PlusIcon() }
             androidx.compose.material3.DropdownMenu(
                 expanded = menuOpen,
                 onDismissRequest = { menuOpen = false },
             ) {
                 androidx.compose.material3.DropdownMenuItem(
-                    text = { Text("Add contact", fontFamily = Nunito) },
-                    onClick = { menuOpen = false; onKnock() },
+                    text = { Text("Add friend", fontFamily = Nunito) },
+                    onClick = { menuOpen = false; onAddFriend() },
                 )
                 androidx.compose.material3.DropdownMenuItem(
                     text = { Text("Settings", fontFamily = Nunito) },
@@ -214,55 +220,56 @@ private fun Wordmark(online: Boolean) {
     }
 }
 
-/** A ≥40dp circular touch target wrapping a vector icon (not a font glyph). */
+/**
+ * A ≥40dp circular touch target wrapping a vector icon. The icons are DRAWN
+ * with Canvas lines/arcs — never a font or emoji glyph — so they render the same
+ * on every Android version (a missing glyph is what showed up as an empty box).
+ */
 @Composable
 private fun IconBtn(onClick: () -> Unit, content: @Composable () -> Unit) {
-    Box(Modifier.size(40.dp).clip(CircleShape).clickable { onClick() }, contentAlignment = Alignment.Center) {
+    Box(Modifier.size(44.dp).clip(CircleShape).clickable { onClick() }, contentAlignment = Alignment.Center) {
         content()
     }
 }
 
-/** MINIMISE — a single horizontal white line (SVG "M5 12h14"). */
+/** MINIMISE — a single horizontal white line (SVG "M5 12h14", stroke 2.2). */
 @Composable
 private fun MinimiseIcon() {
-    androidx.compose.foundation.Canvas(Modifier.size(22.dp)) {
+    androidx.compose.foundation.Canvas(Modifier.size(24.dp)) {
         val s = size.minDimension / 24f
-        drawLine(
-            color = Color.White,
-            start = Offset(5f * s, 12f * s),
-            end = Offset(19f * s, 12f * s),
-            strokeWidth = 2.2f * s,
-            cap = androidx.compose.ui.graphics.StrokeCap.Round,
-        )
+        drawLine(Color.White, Offset(5f * s, 12f * s), Offset(19f * s, 12f * s),
+            strokeWidth = 2.2f * s, cap = StrokeCap.Round)
     }
 }
 
-/** EXIT — a red power/off symbol: open ring + vertical stem through the top. */
+/** EXIT — a red power symbol: stem "M12 3.5v8" + open ring "M6.8 7a8 8 0 1 0 10.4 0". */
 @Composable
 private fun PowerIcon() {
-    androidx.compose.foundation.Canvas(Modifier.size(22.dp)) {
+    androidx.compose.foundation.Canvas(Modifier.size(24.dp)) {
         val s = size.minDimension / 24f
-        val stroke = androidx.compose.ui.graphics.drawscope.Stroke(
-            width = 2.2f * s, cap = androidx.compose.ui.graphics.StrokeCap.Round,
-        )
-        // Ring: a circle open at the top (gap centred on the vertical stem).
-        val r = 7.5f * s
-        val cx = 12f * s; val cy = 12.5f * s
+        val stroke = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.2f * s, cap = StrokeCap.Round)
+        // The SVG arc is a radius-8 circle through (6.8,7) and (17.2,7), drawn the
+        // long way round the bottom: centre (12, 13.08). Its gap at the top spans
+        // ±40.5° either side of straight up, i.e. start -49.5°, sweep 279°.
+        val r = 8f * s
+        val cx = 12f * s; val cy = 13.08f * s
         drawArc(
-            color = WordRed,
-            startAngle = -60f, sweepAngle = 300f, useCenter = false,
-            topLeft = Offset(cx - r, cy - r),
-            size = androidx.compose.ui.geometry.Size(2 * r, 2 * r),
+            color = WordRed, startAngle = -49.5f, sweepAngle = 279f, useCenter = false,
+            topLeft = Offset(cx - r, cy - r), size = androidx.compose.ui.geometry.Size(2 * r, 2 * r),
             style = stroke,
         )
-        // Vertical stem (SVG "M12 3.5v8").
-        drawLine(
-            color = WordRed,
-            start = Offset(12f * s, 3.5f * s),
-            end = Offset(12f * s, 11.5f * s),
-            strokeWidth = 2.2f * s,
-            cap = androidx.compose.ui.graphics.StrokeCap.Round,
-        )
+        drawLine(WordRed, Offset(12f * s, 3.5f * s), Offset(12f * s, 11.5f * s),
+            strokeWidth = 2.2f * s, cap = StrokeCap.Round)
+    }
+}
+
+/** The "+" on the cyan button, drawn (crisp at any size). */
+@Composable
+private fun PlusIcon() {
+    androidx.compose.foundation.Canvas(Modifier.size(24.dp)) {
+        val s = size.minDimension / 24f
+        drawLine(CmBackground, Offset(12f * s, 4f * s), Offset(12f * s, 20f * s), strokeWidth = 3f * s, cap = StrokeCap.Round)
+        drawLine(CmBackground, Offset(4f * s, 12f * s), Offset(20f * s, 12f * s), strokeWidth = 3f * s, cap = StrokeCap.Round)
     }
 }
 
@@ -278,7 +285,7 @@ private fun StatusLine(online: Boolean, status: TorStatus, invisible: Boolean, o
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Engine: ", color = CmTextDim, fontFamily = Nunito, fontSize = 13.sp)
-            Text(engineLabel, color = if (online) Teal else Grey.copy(alpha = 0.7f),
+            Text(engineLabel, color = if (online) CmTeal else Grey.copy(alpha = 0.7f),
                 fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
         Spacer(Modifier.weight(1f))
@@ -287,54 +294,60 @@ private fun StatusLine(online: Boolean, status: TorStatus, invisible: Boolean, o
                 .padding(horizontal = 6.dp, vertical = 4.dp)) {
             Text("Me: ", color = CmTextDim, fontFamily = Nunito, fontSize = 13.sp)
             Text(if (invisible) "Invisible" else "Online",
-                color = if (!online) Grey else if (invisible) Cyan else Teal,
+                color = if (!online) Grey else if (invisible) CmBlue else CmTeal,
                 fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }
 
+/**
+ * A dense friend card: small round avatar, name + one sub-line, and markers on
+ * the right — ORANGE = new/missed message, BLUE = a Buzz, TEAL = seen recently.
+ */
 @Composable
-private fun ContactRow(c: Contact, online: Boolean, onOpenChat: (Contact) -> Unit) {
+private fun FriendRow(c: Contact, online: Boolean, onOpenChat: (Contact) -> Unit) {
     val recent = c.lastSeenMs != null && System.currentTimeMillis() - c.lastSeenMs <= 24 * 3_600_000L
     @OptIn(ExperimentalFoundationApi::class)
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(CmCard)
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(CmCard)
             .combinedClickable(
                 onClick = { onOpenChat(c) },
                 onLongClick = { c.cmId?.let { MessageService.sendBuzz(it) } },
             )
-            .padding(12.dp),
+            .padding(horizontal = 10.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(40.dp).clip(CircleShape).background(c.color), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(30.dp).clip(CircleShape).background(c.color), contentAlignment = Alignment.Center) {
             Text(c.name.take(1).uppercase(), color = CmBackground, fontFamily = Nunito,
-                fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                fontSize = 13.sp, fontWeight = FontWeight.Bold)
         }
-        Spacer(Modifier.width(12.dp))
+        Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
-            Text(c.name, color = CmText, fontFamily = Nunito, fontSize = 16.sp)
+            Text(c.name, color = CmText, fontFamily = Nunito, fontSize = 15.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
             when {
                 c.missed -> Text("Missed Message", color = WordRed, fontFamily = Nunito, fontSize = 11.sp,
                     fontStyle = FontStyle.Italic)
+                c.buzzed -> Text("Buzzed you", color = CmBuzzBlue, fontFamily = Nunito, fontSize = 11.sp)
                 recent -> Text("last seen recently", color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp)
             }
         }
-        // Status dot: teal = seen recently (online-ish), dim = otherwise; orange
-        // marker when there's an unread/missed message.
-        val dot = when {
-            c.unread || c.missed -> CmOrange
-            recent && online -> Teal
-            else -> Frame
+        Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (c.unread || c.missed) Dot(CmOrange)
+            if (c.buzzed) Dot(CmBuzzBlue)
+            if (!c.unread && !c.missed && !c.buzzed) Dot(if (recent && online) CmTeal else Frame)
         }
-        Box(Modifier.size(10.dp).clip(CircleShape).background(dot))
     }
 }
+
+@Composable
+private fun Dot(color: Color) = Box(Modifier.size(9.dp).clip(CircleShape).background(color))
 
 @Composable
 private fun DockTool(label: String, glyph: String, active: Boolean = false, onClick: () -> Unit) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
-            Modifier.size(48.dp).clip(CircleShape)
+            Modifier.size(46.dp).clip(CircleShape)
                 .then(if (active) Modifier.background(CmOrange) else Modifier)
                 .border(1.5.dp, CmOrange, CircleShape)
                 .clickable { onClick() },

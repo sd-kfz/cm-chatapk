@@ -39,7 +39,7 @@ fun KnockScreen(
         Box(Modifier.fillMaxWidth().padding(16.dp)) {
             Text("‹ Back", color = CmBlue, fontFamily = Nunito, fontSize = 15.sp,
                 modifier = Modifier.align(Alignment.CenterStart).clickable { onBack() })
-            Text("Knock", color = CmText, fontFamily = Nunito, fontSize = 17.sp,
+            Text("Add friend", color = CmText, fontFamily = Nunito, fontSize = 17.sp,
                 fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
         }
 

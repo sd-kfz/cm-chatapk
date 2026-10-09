@@ -67,14 +67,36 @@ class VaultManager(val crypto: CryptoManager, dir: File) {
     fun wipe() = vault.wipe()
 
     companion object {
+        const val MIN_PASSCODE = 4
+        const val MAX_PASSCODE = 56
+
         /**
-         * Accepts any passcode of 6..128 characters (digits, letters and/or the
-         * keyboard symbols) that is not a palindrome. Argon2id (cryptoPwHash)
+         * Accepts any NEW passcode of 4..56 characters (any mix of digits,
+         * letters and symbols) that is not a palindrome. Argon2id (cryptoPwHash)
          * hashes the raw bytes, so any length/charset derives a valid key; the
          * passcode is treated as OPAQUE BYTES only and never interpreted. The
-         * palindrome rejection keeps the reversed-input duress check unambiguous.
+         * palindrome rejection is required: the Shredder fires on the passcode
+         * typed BACKWARDS, so a passcode must differ from its reverse. Short
+         * passcodes are allowed (the UI encourages 8+ via [strength]); existing
+         * vaults with longer legacy passcodes still unlock (unlock doesn't check).
          */
         fun isValidNewPin(pin: String): Boolean =
-            pin.length in 6..128 && pin != pin.reversed()
+            pin.length in MIN_PASSCODE..MAX_PASSCODE && pin != pin.reversed()
+
+        enum class Strength(val label: String) { WEAK("Weak"), FAIR("Fair"), GOOD("Good"), STRONG("Strong") }
+
+        /** A simple, honest strength hint: length first, then character variety. */
+        fun strength(pin: String): Strength {
+            val kinds = listOf(
+                pin.any { it.isDigit() }, pin.any { it.isLowerCase() },
+                pin.any { it.isUpperCase() }, pin.any { !it.isLetterOrDigit() },
+            ).count { it }
+            return when {
+                pin.length < 6 -> Strength.WEAK
+                pin.length < 8 -> if (kinds >= 3) Strength.FAIR else Strength.WEAK
+                pin.length < 12 -> if (kinds >= 3) Strength.GOOD else Strength.FAIR
+                else -> if (kinds >= 2) Strength.STRONG else Strength.GOOD
+            }
+        }
     }
 }

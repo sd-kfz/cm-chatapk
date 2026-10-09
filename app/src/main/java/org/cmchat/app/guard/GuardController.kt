@@ -18,7 +18,7 @@ import org.cmchat.app.tor.TorService
 /**
  * Runtime driver for the guardians. On expiry it performs a silent RAM wipe:
  * clears all chat state, stops the onion server and Tor, and kills the
- * process. The vault (identities + Circle) stays; the next open needs the PIN.
+ * process. The vault (identity + friends) stays; the next open needs the PIN.
  *
  * Idle tracking (touch resets Cerberus) and the kill deadline are driven from
  * the UI; the actual process kill is Android runtime and only observable on a
@@ -31,6 +31,16 @@ object GuardController {
 
     private val _killDeadline = MutableStateFlow<Long?>(null)
     val killDeadline: StateFlow<Long?> = _killDeadline.asStateFlow()
+
+    /** Cerberus idle window in minutes (one of [CERBERUS_CHOICES]). */
+    private val _cerberusMinutes = MutableStateFlow(90)
+    val cerberusMinutes: StateFlow<Int> = _cerberusMinutes.asStateFlow()
+
+    /** Idle windows offered in Settings. */
+    val CERBERUS_CHOICES = listOf(15, 30, 60, 90, 180)
+
+    /** Kill Timer durations offered in Settings (minutes; capped by KILL_MAX_MS). */
+    val KILL_CHOICES = listOf(15, 30, 60, 120, 360, 720, 1440)
 
     @Volatile private var cerberusIdleMs: Long = GuardLogic.CERBERUS_90_MIN
     @Volatile private var lastTouch: Long = System.currentTimeMillis()
@@ -48,8 +58,12 @@ object GuardController {
     /** Any interaction (incl. reopening from recents) resets the idle clock. */
     fun touch() { lastTouch = System.currentTimeMillis() }
 
+    /** Set the idle window. Unknown values snap to the nearest offered choice. */
     fun setCerberusMinutes(minutes: Int) {
-        cerberusIdleMs = if (minutes >= 180) GuardLogic.CERBERUS_180_MIN else GuardLogic.CERBERUS_90_MIN
+        val m = CERBERUS_CHOICES.minByOrNull { kotlin.math.abs(it - minutes) } ?: 90
+        _cerberusMinutes.value = m
+        cerberusIdleMs = m * 60_000L
+        touch()   // a new window starts counting from now
     }
 
     fun setCerberusArmed(armed: Boolean) { _cerberusArmed.value = armed }

@@ -8,6 +8,12 @@ object AppSettings {
     /** Strip EXIF/GPS from every photo before sending. Default ON. */
     val metadataScrub = MutableStateFlow(true)
 
+    /** App-wide text size step, -6..+6 (0 = default), loaded from the vault. */
+    val textSize = MutableStateFlow(0)
+
+    /** Font-scale multiplier for a text size step (about 0.79x .. 1.21x). */
+    fun textScale(step: Int): Float = 1f + step.coerceIn(-6, 6) * 0.035f
+
     /** Share my per-chat last-seen with contacts. Default ON. */
     val shareLastSeen = MutableStateFlow(true)
 
@@ -40,7 +46,7 @@ object AppSettings {
     val stayReachable = MutableStateFlow(false)
 
     /**
-     * Decoy chat (default OFF): a fake, renamable contact shown in the Circle.
+     * Decoy chat (default OFF): a fake, renamable contact shown on the Friends screen.
      * Tapping it = silent instant Exit + RAM wipe, no confirmation. Its name and
      * whether it sits at the top (vs bottom) are configurable.
      */

@@ -33,7 +33,7 @@ import kotlin.math.exp
  * softer bloom) as the sweep passes it; the whole thing is clipped to the logo's
  * own bounds so the glow never spills past its edges.
  *
- * When [active] is false (e.g. Tor not connected on the Circle page) the logo is
+ * When [active] is false (e.g. Tor not connected on the Friends page) the logo is
  * rendered desaturated grey with NO glow and NO sweep. The login/naming screen
  * always passes active = true.
  */

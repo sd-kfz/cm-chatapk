@@ -46,6 +46,10 @@ object MessageService {
     @Volatile
     var onContactAddressUpdated: ((oldCmId: String, newCmId: String) -> Unit)? = null
 
+    /** Set by AppNav to persist a Team Clock the friend set (null = turned off). */
+    @Volatile
+    var onTeamClockChanged: ((cmId: String, value: String?) -> Unit)? = null
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private var myName: String = ""
@@ -79,7 +83,8 @@ object MessageService {
     /**
      * Wire protocol version. Bumped whenever the framing/crypto changes so two
      * peers on different builds detect the mismatch instead of failing silently.
-     * v3 = forward-secret handshake (v2 = static crypto_box + replay counter).
+     * v4 = forward-secret handshake + decoy alert + Team Clock (v3 = forward
+     * secrecy only; v2 = static crypto_box + replay counter).
      */
     const val WIRE_VERSION = SecureChannel.WIRE_VERSION
 
@@ -122,9 +127,15 @@ object MessageService {
         this.myName = myDisplayName
         this.myCmId = myCmId
         this.channel = SecureChannel(crypto, myIdentityPubHex, myIdentitySecHex, codec, replayGuard)
-        contacts.clear()
-        knownContactCmIds.forEach { id -> CmId.decode(id)?.let { contacts[id] = it } }
-        names.clear(); names.putAll(contactNames)
+        // Update the friend table WITHOUT an empty moment: configure() re-runs on
+        // every vault save, and a clear-then-refill would let a frame arriving
+        // in between be dropped as "not from a known contact".
+        val fresh = HashMap<String, CmIdData>()
+        knownContactCmIds.forEach { id -> CmId.decode(id)?.let { fresh[id] = it } }
+        contacts.keys.retainAll(fresh.keys)
+        contacts.putAll(fresh)
+        names.keys.retainAll(contactNames.keys)
+        names.putAll(contactNames)
         ServerController.onIncoming = { socket -> handleIncoming(socket) }
     }
 
@@ -234,20 +245,44 @@ object MessageService {
     }
 
     /**
-     * Decoy / panic: INSTANTLY erase every conversation locally (RAM cleared
-     * immediately — not hidden) and fire the best-effort remote burn (ERASE_CHAT)
-     * to every known contact. Same effect as the per-chat Erase button applied to
-     * all chats at once. Remote burn only lands if the peer is online on the real
-     * app; it is never guaranteed.
+     * Decoy tripped (this phone may be in someone else's hands): INSTANTLY wipe
+     * MY side from RAM — every conversation, buzz marker and tool note — and send
+     * every friend a DECOY_ALERT. The alert deletes NOTHING on their side: it
+     * shows a red timestamped "Decoy chat tripped." line in their chat and they
+     * keep their history until they clear it. Best-effort: a friend who is
+     * offline right now won't get it (there's no server to hold it).
+     * The caller then rotates the onion address and locks the app.
      */
-    fun burnAll() {
+    fun tripDecoy() {
         val peers = contacts.values.toList()
         // Clear local RAM first so the wipe is immediate even if sends are slow.
         ChatStore.clearAll()
+        org.cmchat.app.buzz.BuzzPolicy.clear()
+        org.cmchat.app.tools.ToolsState.clear()
+        activeChatCmId = null
         if (channel == null) return
         peers.forEach { peer ->
-            scope.launch { runCatching { sendSecure(peer, FrameType.ERASE_CHAT, ByteArray(0)) } }
+            scope.launch {
+                runCatching { sendSecure(peer, FrameType.DECOY_ALERT, ByteArray(0)) }
+                    .onFailure { org.cmchat.app.diag.ConnDiag.out("decoy alert not delivered (friend offline?)") }
+            }
         }
+    }
+
+    /**
+     * Share this conversation's Team Clock with the friend ([value] = canonical
+     * "UTC+hh:mm", or "" to turn it off). Rides the forward-secret channel like a
+     * message. Returns false if the engine/friend isn't ready (shown to the user).
+     */
+    fun sendTeamClock(chatCmId: String, value: String): Boolean {
+        val peer = contacts[chatCmId] ?: return false
+        if (channel == null) return false
+        if (value.isNotEmpty() && org.cmchat.app.chat.TeamClock.decode(value) == null) return false
+        scope.launch {
+            runCatching { sendSecure(peer, FrameType.TEAM_CLOCK, value.toByteArray(Charsets.US_ASCII)) }
+                .onFailure { org.cmchat.app.diag.Diag.e("teamclock", "send failed", it) }
+        }
+        return true
     }
 
     /**
@@ -261,15 +296,6 @@ object MessageService {
         val payload = newCmId.toByteArray()
         contacts.values.toList().forEach { peer ->
             scope.launch { runCatching { sendSecure(peer, FrameType.ADDR_UPDATE, payload) } }
-        }
-    }
-
-    fun sendStatus(word: String, colorArgb: Long) {
-        if (channel == null) return
-        val payload = Messages.json.encodeToString(StatusPayload.serializer(),
-            StatusPayload(word, colorArgb)).toByteArray()
-        contacts.values.toList().forEach { peer ->
-            scope.launch { runCatching { sendSecure(peer, FrameType.STATUS, payload) } }
         }
     }
 
@@ -382,11 +408,13 @@ object MessageService {
                     }
                 }
             }
-            FrameType.STATUS -> {
-                val st = runCatching {
-                    Messages.json.decodeFromString(StatusPayload.serializer(), String(body))
-                }.getOrNull() ?: return
-                ChatStore.setPeerStatus(chatCmId, st.word, st.colorArgb)
+            FrameType.DECOY_ALERT -> onDecoyAlert(chatCmId)
+            FrameType.TEAM_CLOCK -> {
+                val v = runCatching { String(body, Charsets.US_ASCII) }.getOrNull() ?: return
+                // Strictly validated: only a canonical offset or "" (off) is accepted.
+                val value = if (v.isEmpty()) null else v.takeIf { org.cmchat.app.chat.TeamClock.decode(it) != null } ?: return
+                ChatStore.setTeamHour(chatCmId, value, names[chatCmId] ?: "Your friend")
+                onTeamClockChanged?.invoke(chatCmId, value)
             }
             FrameType.ERASE_CHAT -> ChatStore.erase(chatCmId)
             FrameType.KNOCK_ACCEPT -> ChatStore.touchPeer(chatCmId)
@@ -414,16 +442,32 @@ object MessageService {
         org.cmchat.app.diag.Diag.i("addr", "contact relinked to new address")
     }
 
-    /** When the scout listener is alive, only a BUZZ does anything. */
+    /** When the scout listener is alive, only a BUZZ — and a decoy ALERT, which
+     * is a safety signal that mustn't be lost — does anything. */
     private fun dispatchBuzzOnly(chatCmId: String, type: FrameType) {
-        if (type == FrameType.BUZZ) onBuzz(chatCmId)
+        when (type) {
+            FrameType.BUZZ -> onBuzz(chatCmId)
+            FrameType.DECOY_ALERT -> onDecoyAlert(chatCmId)
+            else -> {}
+        }
+    }
+
+    /** A friend's decoy was tripped: red timestamped line + a generic notification. */
+    private fun onDecoyAlert(chatCmId: String) {
+        ChatStore.addAlert(chatCmId, "Decoy chat tripped.")
+        org.cmchat.app.diag.ConnDiag.inc("decoy alert received")
+        if (activeChatCmId != chatCmId) {
+            org.cmchat.app.settings.AppSettings.appContext?.let { org.cmchat.app.notify.Notifier.message(it) }
+        }
     }
 
     /** A buzz arrived: throttle by the receiver setting, then shake + notify. */
     private fun onBuzz(chatCmId: String) {
         if (!org.cmchat.app.buzz.BuzzPolicy.accept(chatCmId)) return
-        // Shake the chat if it's on screen (the UI collects this per-chat).
+        // Shake the chat if it's on screen (the UI collects this per-chat);
+        // otherwise leave a blue Buzz dot on that friend until the chat is opened.
         org.cmchat.app.buzz.BuzzPolicy.requestShake(chatCmId)
+        if (activeChatCmId != chatCmId) ChatStore.markBuzzed(chatCmId)
         // Generic "Activity" bar notification; nickname only if opted in.
         org.cmchat.app.settings.AppSettings.appContext?.let { ctx ->
             org.cmchat.app.notify.Notifier.activity(ctx)

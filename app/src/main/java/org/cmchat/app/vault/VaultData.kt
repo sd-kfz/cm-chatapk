@@ -21,7 +21,7 @@ data class Face(
     val onionAddress: String? = null,
 )
 
-/** A contact in the Circle, belonging to one Face. */
+/** A friend (contact). `faceId` is a legacy field: the app has ONE identity. */
 @Serializable
 data class ContactRec(
     val id: String,
@@ -36,7 +36,10 @@ data class ContactRec(
 @Serializable
 data class VaultSettings(
     val cerberusMinutes: Int = 90,
+    /** Cerberus idle auto-wipe armed (default ON, as before). */
+    val cerberusArmed: Boolean = true,
     val defaultSelfTimer: String = "30s",
+    /** App-wide text size step, -6..+6 (0 = default). Applied to every screen. */
     val textSize: Int = 0,
     /** Separate 4-8 digit PIN gating the Privacy & Safety section (null = unset). */
     val privacyPin: String? = null,

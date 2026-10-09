@@ -10,10 +10,10 @@ data class ChatThread(
     val messages: List<ChatMessage> = emptyList(),
     val teamHour: String? = null,
     val peerLastSeen: Long? = null,
-    val peerStatus: String? = null,
-    val peerStatusColor: Long = 0,
     /** Orange unread dot: something arrived while invisible, not yet viewed. */
     val unread: Boolean = false,
+    /** Blue Buzz dot: a buzz arrived; cleared when the conversation is opened. */
+    val buzzed: Boolean = false,
 )
 
 /**
@@ -92,17 +92,36 @@ object ChatStore {
 
     fun touchPeer(chatId: String) = update(chatId) { it.copy(peerLastSeen = System.currentTimeMillis()) }
 
-    fun setPeerStatus(chatId: String, word: String, colorArgb: Long) =
-        update(chatId) { it.copy(peerStatus = word, peerStatusColor = colorArgb) }
+    /** A Buzz arrived from this friend (blue dot until the chat is opened). */
+    fun markBuzzed(chatId: String) = update(chatId) { it.copy(buzzed = true) }
+
+    /** Opening the conversation clears the one-time Buzz marker. */
+    fun clearBuzzed(chatId: String) = update(chatId) { if (it.buzzed) it.copy(buzzed = false) else it }
+
+    /**
+     * Add a small RED timestamped system line, e.g. "Decoy chat tripped." It is
+     * never self-destructed and deletes nothing — the friend's history stays
+     * until they clear it themselves. Marks the chat unread (orange dot).
+     */
+    fun addAlert(chatId: String, text: String, at: Long = System.currentTimeMillis()) = update(chatId) {
+        it.copy(
+            messages = it.messages + ChatMessage(newId(), mine = false, text = text,
+                state = MsgState.SENT, createdAt = at, system = true, alert = true),
+            unread = true,
+        )
+    }
 
     /** Seed/set the Team clock without a system message (used when loading it). */
     fun setTeamHourValue(chatId: String, value: String?) = update(chatId) { it.copy(teamHour = value) }
 
-    fun setTeamHour(chatId: String, value: String, byName: String) = update(chatId) {
+    /** A Team Clock change (from the friend, or mine): set it + a grey system line. */
+    fun setTeamHour(chatId: String, value: String?, byName: String) = update(chatId) {
+        val what = TeamClock.decode(value)?.let { "set the Team Clock to ${TeamClock.label(it)}" }
+            ?: "turned the Team Clock off"
         it.copy(
             teamHour = value,
             messages = it.messages + ChatMessage(
-                newId(), mine = false, text = "$byName modified Team Hour",
+                newId(), mine = false, text = "$byName $what",
                 state = MsgState.SENT, system = true,
             ),
         )

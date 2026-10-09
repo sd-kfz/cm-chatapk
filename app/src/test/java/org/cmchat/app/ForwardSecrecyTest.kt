@@ -43,7 +43,7 @@ class ForwardSecrecyTest {
     private val alice = Device("alice")
     private val bob = Device("bob")
     private val carol = Device("carol")
-    /** Bob's Circle: Alice and Carol are contacts. */
+    /** Bob's Friends: Alice and Carol are contacts. */
     private val bobContacts = mapOf(alice.cmId to alice.idPub, carol.cmId to carol.idPub)
 
     /** The three frames that crossed the wire, plus Bob's side of the connection. */
@@ -70,7 +70,7 @@ class ForwardSecrecyTest {
         o as? Opened.Delivered ?: throw AssertionError("expected delivery, got ${(o as? Opened.Drop)?.reason ?: o}")
 
     /** Build a prekey reply by hand (to forge, replay or version-shift one). */
-    private fun craftReply(sealerSecHex: String, toPubHex: String, body: ByteArray, version: Int = 3) =
+    private fun craftReply(sealerSecHex: String, toPubHex: String, body: ByteArray, version: Int = SecureChannel.WIRE_VERSION) =
         crypto.boxSeal(FramePad.pad(InnerCodec().wrap(FrameType.PREKEY_RESP, body, toPubHex, version)),
             toPubHex, sealerSecHex)
 
@@ -233,7 +233,7 @@ class ForwardSecrecyTest {
     }
 
     @Test
-    fun a_request_from_someone_outside_the_circle_gets_no_prekey() {
+    fun a_request_from_someone_who_is_not_a_friend_gets_no_prekey() {
         val mallory = Device("mallory")
         assertTrue(bob.ch.onFirstFrame(mallory.ch.Client(bob.idPub).request, bobContacts) is First.Drop)
     }
@@ -305,11 +305,11 @@ class ForwardSecrecyTest {
         val v2Knock = crypto.sealedSeal(
             FramePad.pad(InnerCodec().wrap(FrameType.KNOCK, "{}".toByteArray(), bob.idPub, version = 2)), bob.idPub)
         assertSame(First.VersionMismatch, bob.ch.onFirstFrame(v2Knock, bobContacts))
-        // A newer peer answering our request with version 4.
+        // A newer peer answering our request with the NEXT version.
         val client = alice.ch.Client(bob.idPub)
         val challenge = challengeOf(client.request, alice, bob)
         val v4 = craftReply(bob.idSec, alice.idPub,
-            crypto.randomBytes(Fs.PKID) + crypto.x25519Keypair().first + challenge, version = 4)
+            crypto.randomBytes(Fs.PKID) + crypto.x25519Keypair().first + challenge, version = SecureChannel.WIRE_VERSION + 1)
         assertSame(Verdict.VersionMismatch, client.verify(v4))
     }
 

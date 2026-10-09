@@ -5,6 +5,7 @@ import com.goterl.lazysodium.SodiumJava
 import org.cmchat.app.crypto.CryptoManager
 import org.cmchat.app.vault.UnlockResult
 import org.cmchat.app.vault.VaultManager
+import org.cmchat.app.vault.VaultManager.Companion.Strength
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -51,14 +52,30 @@ class VaultTest {
 
     @Test
     fun palindrome_pin_rejected_others_accepted() {
-        assertFalse(VaultManager.isValidNewPin("123321")) // palindrome
-        assertFalse(VaultManager.isValidNewPin("12345"))  // too short
-        assertFalse(VaultManager.isValidNewPin("ababa"))  // too short
-        assertTrue(VaultManager.isValidNewPin("135790"))   // 6-digit PIN
-        assertTrue(VaultManager.isValidNewPin("12a456"))   // alphanumeric passcode
-        assertTrue(VaultManager.isValidNewPin("Secret1"))  // longer alphanumeric
-        assertTrue(VaultManager.isValidNewPin("p@ss#1"))   // symbols allowed now
-        assertFalse(VaultManager.isValidNewPin("aa1aa"))   // 5 chars, too short
+        // v1.2 policy: 4..56 chars, any mix, never a palindrome (Shredder = reversed).
+        assertFalse(VaultManager.isValidNewPin("123"))      // too short (min 4)
+        assertTrue(VaultManager.isValidNewPin("1234"))      // 4 is allowed (hint nudges to 8+)
+        assertTrue(VaultManager.isValidNewPin("12345"))
+        assertFalse(VaultManager.isValidNewPin("1221"))     // palindrome
+        assertFalse(VaultManager.isValidNewPin("123321"))   // palindrome
+        assertFalse(VaultManager.isValidNewPin("ababa"))    // palindrome
+        assertTrue(VaultManager.isValidNewPin("135790"))
+        assertTrue(VaultManager.isValidNewPin("12a456"))    // alphanumeric
+        assertTrue(VaultManager.isValidNewPin("p@ss#1"))    // symbols
+        assertTrue(VaultManager.isValidNewPin("a".repeat(55) + "b"))   // 56 = max
+        assertFalse(VaultManager.isValidNewPin("a".repeat(56) + "b"))  // 57 = too long
+    }
+
+    @Test
+    fun strength_hint_encourages_eight_plus_but_never_blocks() {
+        assertEquals(Strength.WEAK, VaultManager.strength("1234"))
+        assertEquals(Strength.WEAK, VaultManager.strength("135790"))
+        assertEquals(Strength.FAIR, VaultManager.strength("Ab1!xy"))        // short but varied
+        assertEquals(Strength.FAIR, VaultManager.strength("13579024"))      // 8 digits
+        assertEquals(Strength.GOOD, VaultManager.strength("Abc12!xyz"))     // 9, 4 kinds
+        assertEquals(Strength.STRONG, VaultManager.strength("correct horse 9"))
+        // Weak is only a hint: a weak-but-valid passcode is still accepted.
+        assertTrue(VaultManager.isValidNewPin("1234"))
     }
 
     @Test
@@ -77,7 +94,7 @@ class VaultTest {
         assertTrue(ok is UnlockResult.Success)
         assertEquals("Wanderer", (ok as UnlockResult.Success).data.faces.single().name)
 
-        // An invalid new passcode (too short) is rejected and changes nothing.
+        // An invalid new passcode (a palindrome) is rejected and changes nothing.
         assertFalse(m.changePin("246802", "12321"))
         assertTrue(m.unlock("246802") is UnlockResult.Success)
     }
