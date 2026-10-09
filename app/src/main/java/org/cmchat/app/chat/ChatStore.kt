@@ -109,12 +109,11 @@ object ChatStore {
      * is never self-destructed. Marks the chat unread (orange dot).
      */
     fun addAlert(chatId: String, text: String, at: Long = System.currentTimeMillis()) = update(chatId) {
-        it.copy(
-            messages = it.messages + ChatMessage(newId(), mine = false, text = text,
-                state = MsgState.SENT, createdAt = at, system = true, alert = true),
-            unread = true,
-        )
+        it.copy(messages = it.messages + alertLine(text, at), unread = true)
     }
+
+    private fun alertLine(text: String, at: Long) = ChatMessage(newId(), mine = false, text = text,
+        state = MsgState.SENT, createdAt = at, system = true, alert = true)
 
     /** Text of the friend-side decoy notice. */
     const val DECOY_NOTICE = "Decoy chat triggered — chat erased."
@@ -124,9 +123,9 @@ object ChatStore {
      * instantly. The notice line is shown where the next message would be, and
      * the whole chat is erased once the user leaves it ([leaveChat]).
      */
-    fun addDecoyNotice(chatId: String) {
-        addAlert(chatId, DECOY_NOTICE)
-        update(chatId) { it.copy(decoyErase = true) }
+    fun addDecoyNotice(chatId: String, at: Long = System.currentTimeMillis()) = update(chatId) {
+        // ONE atomic change: the line never shows without its "erase on leave" flag.
+        it.copy(messages = it.messages + alertLine(DECOY_NOTICE, at), unread = true, decoyErase = true)
     }
 
     /** Leaving a chat: burn seen view-once messages; erase it if a decoy notice was shown. */

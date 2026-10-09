@@ -107,6 +107,18 @@ object MessageService {
         return id
     }
 
+    /**
+     * Held while a friend's chat moves to their new address, and while a chat
+     * write picks which address to file under — so a message sent or received
+     * right during the move can never land in the old (now hidden) chat. Never
+     * held across network I/O or a vault save.
+     */
+    private val relinkLock = Any()
+
+    /** Run a chat write under the friend's CURRENT id, atomically w.r.t. a move. */
+    private inline fun <T> inChat(cmId: String, write: (String) -> T): T =
+        synchronized(relinkLock) { write(currentId(cmId)) }
+
     /** The chat currently open in the foreground, or null. Set by ChatScreen. */
     @Volatile
     var activeChatCmId: String? = null
@@ -303,13 +315,12 @@ object MessageService {
      * reveals whether the friend is online.
      */
     fun sendText(cmId: String, text: String, timer: SelfTimer) {
-        val chatCmId = currentId(cmId)
-        // Messaging a person re-opens their "Once only" buzzes.
-        org.cmchat.app.buzz.BuzzPolicy.onMessagedContact(chatCmId)
         // Per-message timer wins; otherwise fall back to the general timer.
         val effective = if (timer != SelfTimer.OFF) timer
             else org.cmchat.app.settings.AppSettings.generalTimer.value
-        val msg = ChatStore.addMine(chatCmId, text, effective)
+        val (chatCmId, msg) = inChat(cmId) { id -> id to ChatStore.addMine(id, text, effective) }
+        // Messaging a person re-opens their "Once only" buzzes.
+        org.cmchat.app.buzz.BuzzPolicy.onMessagedContact(chatCmId)
         if (channel == null || !contacts.containsKey(chatCmId)) return
         val payload = Messages.json.encodeToString(TextPayload.serializer(),
             TextPayload(msg.id, text, effective.label)).toByteArray()
@@ -324,8 +335,7 @@ object MessageService {
 
     /** The normal chat Erase: wipes BOTH sides (theirs as soon as it reaches them). */
     fun sendErase(cmId: String) {
-        val chatCmId = currentId(cmId)
-        ChatStore.erase(chatCmId)
+        val chatCmId = inChat(cmId) { id -> ChatStore.erase(id); id }
         if (channel == null || !contacts.containsKey(chatCmId)) return
         outbox.enqueue(Outbox.Item(peer = chatCmId, label = "erase", replaceKey = "erase",
             deliver = { sendSecureTo(chatCmId, FrameType.ERASE_CHAT, ByteArray(0)) }))
@@ -516,7 +526,7 @@ object MessageService {
         }
     }
 
-    private fun dispatchFromContact(chatCmId: String, peer: CmIdData, type: FrameType, body: ByteArray) {
+    private fun dispatchFromContact(fromCmId: String, peer: CmIdData, type: FrameType, body: ByteArray) {
         ConnDiag.inc("dispatched $type")
         when (type) {
             FrameType.MSG -> {
@@ -528,7 +538,9 @@ object MessageService {
                 // the sender learns nothing, and it surfaces once we go Online.
                 val invisible = org.cmchat.app.settings.AppSettings.invisibleMode.value
                 if (invisible) ConnDiag.inc("held (Invisible): message kept as missed")
-                ChatStore.addTheirs(chatCmId, t.id, t.text, SelfTimer.fromLabel(t.selfTimer), missed = invisible)
+                val chatCmId = inChat(fromCmId) { id ->
+                    ChatStore.addTheirs(id, t.id, t.text, SelfTimer.fromLabel(t.selfTimer), missed = invisible); id
+                }
                 // Generic "Notification" unless that chat is already on screen.
                 if (activeChatCmId != chatCmId) {
                     org.cmchat.app.settings.AppSettings.appContext?.let { ctx ->
@@ -536,18 +548,20 @@ object MessageService {
                     }
                 }
             }
-            FrameType.DECOY_ALERT -> onDecoyAlert(chatCmId)
+            FrameType.DECOY_ALERT -> onDecoyAlert(fromCmId)
             FrameType.TEAM_CLOCK -> {
                 val v = runCatching { String(body, Charsets.US_ASCII) }.getOrNull() ?: return
                 // Strictly validated: only a canonical offset or "" (off) is accepted.
                 val value = if (v.isEmpty()) null else v.takeIf { org.cmchat.app.chat.TeamClock.decode(it) != null } ?: return
-                ChatStore.setTeamHour(chatCmId, value, names[chatCmId] ?: "Your friend")
+                val chatCmId = inChat(fromCmId) { id ->
+                    ChatStore.setTeamHour(id, value, names[id] ?: "Your friend"); id
+                }
                 onTeamClockChanged?.invoke(chatCmId, value)
             }
-            FrameType.ERASE_CHAT -> ChatStore.erase(chatCmId)
-            FrameType.KNOCK_ACCEPT -> ChatStore.touchPeer(chatCmId)   // confirmed above
-            FrameType.BUZZ -> onBuzz(chatCmId)
-            FrameType.ADDR_UPDATE -> onAddressUpdate(chatCmId, peer, body)
+            FrameType.ERASE_CHAT -> inChat(fromCmId) { ChatStore.erase(it) }
+            FrameType.KNOCK_ACCEPT -> inChat(fromCmId) { ChatStore.touchPeer(it) }   // confirmed above
+            FrameType.BUZZ -> onBuzz(fromCmId)
+            FrameType.ADDR_UPDATE -> onAddressUpdate(currentId(fromCmId), peer, body)
             FrameType.COVER -> ConnDiag.inc("cover frame discarded")
             else -> {}
         }
@@ -563,14 +577,21 @@ object MessageService {
         val decoded = CmId.decode(newCmId) ?: return
         if (!decoded.identityPubKeyHex.equals(peer.identityPubKeyHex, ignoreCase = true)) return
         if (newCmId == oldCmId) return
-        contacts.remove(oldCmId)
-        contacts[newCmId] = decoded
-        names.remove(oldCmId)?.let { names[newCmId] = it }
-        if (pending.remove(oldCmId)) pending.add(newCmId)
-        relinked.remove(newCmId)            // moving back to an earlier address
-        relinked[oldCmId] = newCmId
-        ChatStore.rekey(oldCmId, newCmId)   // the conversation follows the friend
-        if (activeChatCmId == oldCmId) activeChatCmId = newCmId
+        synchronized(relinkLock) {
+            // Order matters for readers that don't take the lock: the new address
+            // exists before the old one goes, and the chat has MOVED before the
+            // new id is published — whoever sees the new id sees the moved chat.
+            contacts[newCmId] = decoded
+            names[oldCmId]?.let { names[newCmId] = it }
+            if (oldCmId in pending) pending.add(newCmId)
+            ChatStore.rekey(oldCmId, newCmId)   // the conversation follows the friend
+            relinked.remove(newCmId)            // moving back to an earlier address
+            relinked[oldCmId] = newCmId
+            if (activeChatCmId == oldCmId) activeChatCmId = newCmId
+            contacts.remove(oldCmId)
+            names.remove(oldCmId)
+            pending.remove(oldCmId)
+        }
         ConnDiag.inc("friend moved to a new address → relinked")
         onContactAddressUpdated?.invoke(oldCmId, newCmId)
         org.cmchat.app.diag.Diag.i("addr", "contact relinked to new address")
@@ -587,8 +608,8 @@ object MessageService {
     }
 
     /** A friend's decoy was tripped: the notice line (chat erased when they leave). */
-    private fun onDecoyAlert(chatCmId: String) {
-        ChatStore.addDecoyNotice(chatCmId)
+    private fun onDecoyAlert(fromCmId: String) {
+        val chatCmId = inChat(fromCmId) { id -> ChatStore.addDecoyNotice(id); id }
         ConnDiag.inc("decoy alert received")
         if (activeChatCmId != chatCmId) {
             org.cmchat.app.settings.AppSettings.appContext?.let { org.cmchat.app.notify.Notifier.message(it) }
@@ -596,12 +617,13 @@ object MessageService {
     }
 
     /** A buzz arrived: throttle by the receiver setting, then shake + notify. */
-    private fun onBuzz(chatCmId: String) {
+    private fun onBuzz(fromCmId: String) {
+        val chatCmId = currentId(fromCmId)
         if (!org.cmchat.app.buzz.BuzzPolicy.accept(chatCmId)) return
         // Shake the chat if it's on screen (the UI collects this per-chat);
         // otherwise leave a blue Buzz dot on that friend until the chat is opened.
         org.cmchat.app.buzz.BuzzPolicy.requestShake(chatCmId)
-        if (activeChatCmId != chatCmId) ChatStore.markBuzzed(chatCmId)
+        inChat(chatCmId) { id -> if (activeChatCmId != id) ChatStore.markBuzzed(id) }
         // Generic "Activity" bar notification; nickname only if opted in.
         org.cmchat.app.settings.AppSettings.appContext?.let { ctx ->
             org.cmchat.app.notify.Notifier.activity(ctx)
