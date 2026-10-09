@@ -57,6 +57,27 @@ object ServerController {
     private var lastDebounceLogMs = 0L
     private const val DEBOUNCE_LOG_INTERVAL_MS = 2_000L
 
+    // ---- anti-mashing for the My Server buttons ------------------------------
+    /** Restart can't be mashed into a storm of re-publishes. */
+    @Volatile private var lastRestartMs = 0L
+    private const val MIN_RESTART_INTERVAL_MS = 10_000L
+    /** Self-test: one at a time, and at most one per [SELF_TEST_MIN_INTERVAL_MS]
+     * (each can hold a Tor connection attempt for up to 90 s). */
+    private val selfTestRunning = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile private var lastSelfTestMs = 0L
+    private const val SELF_TEST_MIN_INTERVAL_MS = 20_000L
+
+    /** ms until Restart is accepted again (0 = now). */
+    fun restartCooldownMs(now: Long = System.currentTimeMillis()): Long =
+        (lastRestartMs + MIN_RESTART_INTERVAL_MS - now).coerceAtLeast(0)
+    /** ms until "Request new address" is accepted again (0 = now). */
+    fun rotateCooldownMs(now: Long = System.currentTimeMillis()): Long =
+        (lastRotateMs + MIN_ROTATE_INTERVAL_MS - now).coerceAtLeast(0)
+    /** ms until a self-test is accepted again (0 = now). */
+    fun selfTestCooldownMs(now: Long = System.currentTimeMillis()): Long =
+        (lastSelfTestMs + SELF_TEST_MIN_INTERVAL_MS - now).coerceAtLeast(0)
+    fun selfTestRunning(): Boolean = selfTestRunning.get()
+
     // ---- incoming-connection DoS limits ------------------------------------
     /** Max simultaneous incoming onion connections; extras are dropped. */
     private const val MAX_CONCURRENT_CONN = 8
@@ -97,6 +118,8 @@ object ServerController {
         // Fast path: already online for THIS exact key -> nothing to do. Prevents
         // the re-publish storm when the start effect re-fires on recomposition.
         if (_status.value is ServerStatus.Online && activeKey == existingOnionKey) return
+        // A publish is already in flight: never queue another one behind it.
+        if (_status.value is ServerStatus.Starting) return
         scope.launch {
             // Single-flight: never run two publishes concurrently.
             publishMutex.withLock {
@@ -153,15 +176,17 @@ object ServerController {
      * server. The caller persists the new key/address and sends the signed
      * address-update to contacts. Manual (triggered from My Server).
      */
-    fun requestNewAddress(onNew: (OnionPublish) -> Unit) {
+    fun requestNewAddress(urgent: Boolean = false, onNew: (OnionPublish) -> Unit) {
         // Debounce at the GATE: claim the 60s window SYNCHRONOUSLY, so a burst of
         // calls (rapid taps, or the adversarial self-test) collapses to ONE real
         // rotation instead of launching a coroutine per call. Debounced calls are
         // only counted here and logged at most once per DEBOUNCE_LOG_INTERVAL_MS
         // as "rotation debounced x<n>", so a tight loop can never flood the log.
+        // [urgent] (the decoy — at most once, since it locks the app) skips the
+        // window and waits for a running publish instead of being dropped.
         val now = System.currentTimeMillis()
         synchronized(rotateLock) {
-            if (now - lastRotateMs < MIN_ROTATE_INTERVAL_MS) {
+            if (!urgent && now - lastRotateMs < MIN_ROTATE_INTERVAL_MS) {
                 debouncedCount++
                 if (now - lastDebounceLogMs >= DEBOUNCE_LOG_INTERVAL_MS) {
                     lastDebounceLogMs = now
@@ -177,8 +202,10 @@ object ServerController {
             }
         }
         scope.launch {
-            // Single-flight: skip if a publish/rotate is already running.
-            if (!publishMutex.tryLock()) {
+            // Single-flight: skip if a publish/rotate is already running (an
+            // urgent one waits for it instead).
+            if (urgent) publishMutex.lock()
+            else if (!publishMutex.tryLock()) {
                 org.cmchat.app.diag.Diag.i("onion", "rotation skipped (publish in flight)"); return@launch
             }
             try {
@@ -236,14 +263,22 @@ object ServerController {
         }
     }
 
+    /** Stop + start. Ignored while a publish is in flight or within 10 s of the
+     * last restart, so mashing can't queue a re-publish storm. */
     fun restart(
         faceName: String,
         existingOnionKey: String?,
         existingOnionAddress: String? = null,
         onPublished: (OnionPublish) -> Unit,
-    ) {
+    ): Boolean {
+        val now = System.currentTimeMillis()
+        synchronized(rotateLock) {
+            if (_status.value is ServerStatus.Starting || now - lastRestartMs < MIN_RESTART_INTERVAL_MS) return false
+            lastRestartMs = now
+        }
         stop()
         start(faceName, existingOnionKey, existingOnionAddress, onPublished)
+        return true
     }
 
     /**
@@ -251,20 +286,29 @@ object ServerController {
      * freshly published descriptor needs ~30-90s to upload, so this retries with
      * backoff rather than hard-failing, and reports progress via [onProgress].
      */
-    suspend fun selfTest(onProgress: (Long) -> Unit = {}): Pair<Boolean, Long> = withContext(Dispatchers.IO) {
-        val onion = (status.value as? ServerStatus.Online)?.onion
-            ?: return@withContext false to 0L
-        val start = System.currentTimeMillis()
-        val ok = runCatching {
-            Transport.connectThroughTorRetry(
-                TorService.socksPort(), onion.removeSuffix(".onion"), 80,
-                totalMs = 90_000L, onProgress = onProgress,
-            ).use { it.isConnected }
-        }.getOrElse { org.cmchat.app.diag.Diag.e("onion", "self-test failed", it); false }
-        val ms = System.currentTimeMillis() - start
-        org.cmchat.app.diag.Diag.i("onion", "self-test ${if (ok) "OK" else "FAIL"} ${ms}ms")
-        org.cmchat.app.diag.ConnDiag.recordSelfTest(ok, ms)
-        ok to ms
+    suspend fun selfTest(onProgress: (Long) -> Unit = {}): Pair<Boolean, Long>? = withContext(Dispatchers.IO) {
+        // One at a time + rate-limited: mashing returns null (refused) instead of
+        // stacking up 90-second Tor probes.
+        if (selfTestCooldownMs() > 0 || !selfTestRunning.compareAndSet(false, true)) return@withContext null
+        lastSelfTestMs = System.currentTimeMillis()
+        try {
+            val onion = (status.value as? ServerStatus.Online)?.onion
+                ?: return@withContext false to 0L
+            val start = System.currentTimeMillis()
+            val ok = runCatching {
+                Transport.connectThroughTorRetry(
+                    TorService.socksPort(), onion.removeSuffix(".onion"), 80,
+                    totalMs = 90_000L, onProgress = onProgress,
+                ).use { it.isConnected }
+            }.getOrElse { org.cmchat.app.diag.Diag.e("onion", "self-test failed", it); false }
+            val ms = System.currentTimeMillis() - start
+            org.cmchat.app.diag.Diag.i("onion", "self-test ${if (ok) "OK" else "FAIL"} ${ms}ms")
+            org.cmchat.app.diag.ConnDiag.recordSelfTest(ok, ms)
+            ok to ms
+        } finally {
+            lastSelfTestMs = System.currentTimeMillis()   // the cooldown counts from the END
+            selfTestRunning.set(false)
+        }
     }
 
     private fun acceptLoop(server: ServerSocket) {

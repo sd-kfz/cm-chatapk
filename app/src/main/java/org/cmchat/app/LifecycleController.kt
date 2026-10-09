@@ -10,6 +10,7 @@ import org.cmchat.app.tools.ToolsState
 import org.cmchat.app.tor.BuzzListenerService
 import org.cmchat.app.tor.ServerController
 import org.cmchat.app.tor.TorService
+import kotlinx.coroutines.launch
 import org.cmchat.app.transport.MessageService
 
 /**
@@ -33,6 +34,36 @@ object LifecycleController {
     /** Emitted when the app is backgrounded and should re-lock (require PIN). */
     val lockRequests = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
+    private val scope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+
+    /**
+     * Until this time, a background event is OUR OWN doing: we just opened the
+     * QR scanner, the share sheet, or an Android settings screen. Those cover the
+     * app (onStop) but the user hasn't left — re-locking then is what made a scan
+     * "re-ask the PIN and die" (the scan result came back to a locked app).
+     */
+    @Volatile private var ownLaunchUntil = 0L
+    @Volatile private var deferredLock: kotlinx.coroutines.Job? = null
+
+    /** Call right before launching our own scanner / share sheet / settings page. */
+    fun expectOwnLaunch(windowMs: Long = 3 * 60_000L) {
+        ownLaunchUntil = System.currentTimeMillis() + windowMs
+    }
+
+    /**
+     * The user left OUR scanner for Home / another app (not back to CM-Chat):
+     * don't wait out the window — lock now, exactly as leaving the app would.
+     */
+    fun ownScreenLeft() {
+        if (ownLaunchUntil == 0L) return
+        deferredLock?.cancel(); deferredLock = null
+        ownLaunchUntil = 0L
+        if (org.cmchat.app.settings.AppSettings.stayReachable.value) return
+        if (org.cmchat.app.settings.AppSettings.sessionStillValid()) return
+        lockRequests.tryEmit(Unit)
+    }
+
     /**
      * App moved to the background (minimised). Unless "stay reachable" is on,
      * re-lock the UI and wipe the vault-unlock material from RAM (PIN + decrypted
@@ -43,6 +74,19 @@ object LifecycleController {
         if (org.cmchat.app.settings.AppSettings.stayReachable.value) return
         // 6h session window: don't re-lock while it's still valid.
         if (org.cmchat.app.settings.AppSettings.sessionStillValid()) return
+        val left = ownLaunchUntil - System.currentTimeMillis()
+        if (left > 0) {
+            // We opened that screen ourselves: stay unlocked so its result can come
+            // back — but if the user doesn't return within the window (e.g. went
+            // Home from the scanner), lock anyway.
+            deferredLock?.cancel()
+            deferredLock = scope.launch {
+                kotlinx.coroutines.delay(left)
+                ownLaunchUntil = 0L
+                lockRequests.tryEmit(Unit)
+            }
+            return
+        }
         lockRequests.tryEmit(Unit)
     }
 
@@ -54,7 +98,8 @@ object LifecycleController {
             Diag.i("life", "closed but staying reachable")
             return
         }
-        // RAM is dropped either way.
+        // RAM is dropped either way (incl. anything still queued to send).
+        MessageService.clearOutbox()
         ChatStore.clearAll()
         ToolsState.clear()
         BuzzPolicy.clear()
@@ -76,6 +121,9 @@ object LifecycleController {
 
     /** The user came back to the foreground. */
     fun onAppForeground() {
+        // Back from our own scanner/share sheet: cancel the safety lock.
+        deferredLock?.cancel(); deferredLock = null
+        ownLaunchUntil = 0L
         if (listening) {
             MessageService.buzzOnlyMode = false
             AppSettings.appContext?.let { BuzzListenerService.stop(it) }
@@ -87,6 +135,7 @@ object LifecycleController {
     /** Exit: stop the server, clear RAM, drop the listener, and log out. */
     fun exit(context: Context) {
         val ctx = context.applicationContext
+        MessageService.clearOutbox()
         ChatStore.clearAll()
         ToolsState.clear()
         BuzzPolicy.clear()

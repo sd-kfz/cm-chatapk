@@ -20,7 +20,59 @@ continue.
 - Release signing: not set up yet (release APK is unsigned). Stable-key
   signing via GitHub secrets is a later step; see "Signing TODO" below.
 
-## v1.2 big batch (latest)
+## Spine working + critical fixes (latest)
+Goal: a WORKING add-contact → connect → send → receive path. Cloud-verified with
+loopback tests that drive the REAL MessageService; Tor itself needs two phones.
+- **Add friend = knock + pending friend.** `sendKnock` adds them on MY side at once
+  as PENDING ("Waiting for them to accept" on Friends) so their acceptance can reach
+  me; ANY authenticated frame from them confirms it (persisted; buffered if it lands
+  while locked). Knock results: QUEUED / NOT_READY / INVALID / SELF / TOO_SOON (60 s).
+  Incoming knocks always punch through Invisible, rate-limited (6 burst, then 1/20 s),
+  duplicates merged, declined = ignored 1 h; a knock from an existing friend just
+  re-sends my acceptance (no duplicate card).
+- **Silent Outbox** (`transport/Outbox.kt`, RAM-only): every outgoing frame (message,
+  knock, accept, erase, decoy alert, address/Team Clock update) retried quietly with
+  backoff 15 s→10 min; per-friend FIFO; a frame from that friend (or Tor coming
+  online) retries at once; dropped if erased/wiped first; bounded 200/friend, 24 h.
+  The **Retry / "Offline" bubble is gone** (MsgState.OFFLINE removed) — nothing on
+  screen reveals whether a friend is online.
+- **Friend moved address** (decoy / new address): old cmId → new is followed
+  everywhere (`MessageService.currentId`), the chat moves with them
+  (`ChatStore.rekey`), an open chat follows; ChatStore writes are now atomic
+  (UI + network threads could lose a message before).
+- **Scanner:** `ui/QrScanActivity` (portrait, no laser, no beep). Root cause of
+  "scan re-asks the PIN and dies": opening our own scanner/share sheet backgrounds
+  MainActivity → re-lock → the result came back to a locked app. Fixed with
+  `LifecycleController.expectOwnLaunch()` (+ immediate lock if you leave the scanner
+  for Home). QR now built at module size (fast, crisp, offline from the stored ID).
+- **Connection log** covers every spine step (redacted; a test asserts no keys,
+  onions, IDs or message text leak).
+- **Shredder:** red italic "Error. Please restart the app.", Back ignored; every wipe
+  step isolated so one failure can't skip the shred. Wipe Everything: uninstall
+  prompt ALWAYS fires last (finally; Activity context; app-info fallback); a
+  cancelled uninstall now starts fresh instead of "Wrong PIN" forever.
+- **PIN wording:** "Create a PIN — numbers, letters or symbols (4–56)" + strength hint
+  everywhere (lock screen, Change PIN, Privacy PIN — which is now 4–56 any chars).
+  Privacy PIN stays MANDATORY (no remove option).
+- **Lock keyboard:** keys fill all remaining height (anchored bottom, 42–72 dp), full
+  width; letters page with [123][#+=][Enter] thumb row; symbols page has every ASCII
+  symbol + « » + space (old PINs stay typeable); number pad no longer overflows
+  small screens.
+- **Decoy:** unchanged semantics (wipe my side, friend sees "Decoy chat triggered —
+  chat erased." until they leave, rotate onion, lock + Home). Rotation is now urgent
+  (not swallowed by the 60 s debounce). Engine deliberately keeps running so the
+  alert/new address reach friends who are offline right now.
+- **Anti-mashing:** Restart ignored while publishing / within 10 s; Start ignored
+  while publishing; server self-test single-flight + 20 s; diagnostics self-test
+  30 s cooldown; all My Server buttons disabled while busy with countdowns. The
+  debug self-test no longer stops/rotates a LIVE server (it used to take you offline).
+- **Notes:** scratchpad bounded + scrolls internally (no lost lines), checklist
+  bounded, "Clear…" needs confirmation, Exit asks first when Notes has content.
+  **Calculator:** display always one line, font shrinks to fit. **Wordmark:** laid
+  out once; only a mask repaints per frame (was a full per-letter re-layout).
+- Tests: 103 green (new: SpineLoopbackTest ×10, OutboxTest ×11; mutation-checked).
+
+## v1.2 big batch
 - **Look:** true-black OLED (#000 bg, window/status/nav bars black), cyan accent
   (`CmBlue`=#35C6F2), teal status dots, dense friend cards (30dp avatars, tight
   padding), cyan-gradient drawn "+". Wordmark unchanged.

@@ -31,6 +31,9 @@ data class ContactRec(
     val cmId: String? = null,
     /** Per-contact Team clock, persisted (encrypted) so it survives logout. */
     val teamHour: String? = null,
+    /** I added (knocked) them; they haven't accepted yet. Cleared by their
+     * acceptance or any authenticated frame from them. */
+    val pending: Boolean = false,
 )
 
 @Serializable

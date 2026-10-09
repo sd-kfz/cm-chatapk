@@ -64,6 +64,31 @@ private sealed class Nav {
     data class Tool(val which: String) : Nav()
 }
 
+/**
+ * Open Android's own "Uninstall this app?" prompt — the last step of Wipe
+ * Everything. Needs REQUEST_DELETE_PACKAGES in the manifest: since Android 9
+ * the prompt silently refuses without it. Started from the Activity when we
+ * have one; falls back to the app-info page (with its Uninstall button) if no
+ * uninstaller answers.
+ */
+private fun requestUninstall(context: android.content.Context) {
+    val uri = Uri.fromParts("package", context.packageName, null)
+    val activity = findActivity(context)
+    @Suppress("DEPRECATION")
+    val attempts = listOf(
+        Intent(Intent.ACTION_DELETE, uri),
+        Intent(Intent.ACTION_UNINSTALL_PACKAGE, uri),
+        Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, uri),
+    )
+    for (i in attempts) {
+        val ok = runCatching {
+            if (activity != null) activity.startActivity(i)
+            else context.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }.isSuccess
+        if (ok) return
+    }
+}
+
 private fun myCmId(data: VaultData?): String? {
     val face = data?.faces?.firstOrNull() ?: return null
     val onion = face.onionAddress ?: return null
@@ -96,6 +121,12 @@ private fun AppNavContent() {
 
     val torStatus by TorService.status.collectAsState()
     var showWipeConfirm by remember { mutableStateOf(false) }
+    // Exit wipes RAM — Notes included. If there are notes, confirm first so one
+    // accidental tap can't erase them. Holds the exit action to run on "Exit".
+    var confirmExit by remember { mutableStateOf<(() -> Unit)?>(null) }
+    fun guardedExit(doExit: () -> Unit) {
+        if (org.cmchat.app.tools.ToolsState.hasContent()) confirmExit = doExit else doExit()
+    }
     // Android 13+ only shows notifications (Buzz "Activity", new-message
     // "Notification") if the app asks for POST_NOTIFICATIONS at runtime — the
     // system never asks for a targetSdk-33+ app. Ask ONCE per run, after unlock;
@@ -113,8 +144,11 @@ private fun AppNavContent() {
     }
 
     // Team Clock changes a friend made while the app was locked (no passcode in
-    // RAM to save the vault): applied right after the next unlock.
+    // RAM to save the vault): applied right after the next unlock. Same for a
+    // friend who moved to a new address (old cmId -> new) or who accepted me.
     val pendingTeamClock = remember { mutableStateMapOf<String, String>() }
+    val pendingRelinks = remember { mutableStateMapOf<String, String>() }
+    val pendingConfirms = remember { mutableStateMapOf<String, Boolean>() }
     var showReviewSettings by remember { mutableStateOf(false) }
 
     // Surface a crash from a previous run (debug-phase aid), then delete it.
@@ -151,6 +185,16 @@ private fun AppNavContent() {
         )
     }
 
+    confirmExit?.let { doExit ->
+        AlertDialog(
+            onDismissRequest = { confirmExit = null },
+            title = { Text("Exit and erase your Notes?") },
+            text = { Text("Exit clears everything from memory — your Notes scratchpad and checklist will be gone.") },
+            confirmButton = { TextButton(onClick = { confirmExit = null; doExit() }) { Text("Exit") } },
+            dismissButton = { TextButton(onClick = { confirmExit = null }) { Text("Cancel") } },
+        )
+    }
+
     if (showWipeConfirm) {
         AlertDialog(
             onDismissRequest = { showWipeConfirm = false },
@@ -163,32 +207,31 @@ private fun AppNavContent() {
                     // Log out first so nothing decrypted stays on screen or in RAM.
                     pin = null; data = null; nav = Nav.Lock
                     scope.launch {
-                        // 1) stop the engine so nothing is still writing files…
-                        org.cmchat.app.transport.CoverTraffic.stop()
-                        ServerController.stop()
-                        org.cmchat.app.tor.BuzzListenerService.stop(context)
-                        TorService.stop(context)
-                        // 2) …wipe RAM…
-                        ChatStore.clearAll()
-                        org.cmchat.app.tools.ToolsState.clear()
-                        org.cmchat.app.buzz.BuzzPolicy.clear()
-                        org.cmchat.app.notify.Notifier.clearAll(context)
-                        MessageService.zeroKeys()
-                        org.cmchat.app.diag.Diag.clear()
-                        // 3) …shred EVERY file the app owns (vault, salt, prefs,
-                        //    caches, Tor's working dir, crash file)…
-                        withContext(Dispatchers.IO) {
-                            kotlinx.coroutines.delay(800)   // let Tor finish shutting down
-                            org.cmchat.app.diag.CrashCatcher.delete(context)
-                            org.cmchat.app.vault.Shredder.shredAll(context)
-                        }
-                        // 4) …and only then ask Android to uninstall the app. An app
-                        //    can't remove itself silently; this opens the system prompt.
-                        runCatching {
-                            context.startActivity(
-                                Intent(Intent.ACTION_DELETE, Uri.parse("package:${context.packageName}"))
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            )
+                        try {
+                            // 1) stop the engine so nothing is still writing files…
+                            runCatching { org.cmchat.app.transport.CoverTraffic.stop() }
+                            runCatching { ServerController.stop() }
+                            runCatching { org.cmchat.app.tor.BuzzListenerService.stop(context) }
+                            runCatching { TorService.stop(context) }
+                            // 2) …wipe RAM…
+                            runCatching { ChatStore.clearAll() }
+                            runCatching { org.cmchat.app.tools.ToolsState.clear() }
+                            runCatching { org.cmchat.app.buzz.BuzzPolicy.clear() }
+                            runCatching { org.cmchat.app.notify.Notifier.clearAll(context) }
+                            runCatching { MessageService.zeroKeys() }
+                            runCatching { org.cmchat.app.diag.Diag.clear() }
+                            // 3) …shred EVERY file the app owns (vault, salt, prefs,
+                            //    caches, Tor's working dir, crash file)…
+                            withContext(Dispatchers.IO) {
+                                kotlinx.coroutines.delay(800)   // let Tor finish shutting down
+                                runCatching { org.cmchat.app.diag.CrashCatcher.delete(context) }
+                                runCatching { org.cmchat.app.vault.Shredder.shredAll(context) }
+                            }
+                        } finally {
+                            // 4) …and ALWAYS end by asking Android to uninstall the app
+                            //    (even if a step above failed). An app can't remove
+                            //    itself silently; this opens the system prompt.
+                            requestUninstall(context)
                         }
                     }
                 }) { Text("Wipe") }
@@ -209,16 +252,28 @@ private fun AppNavContent() {
             myCmId = myCmId(d),
             knownContactCmIds = d.contacts.mapNotNull { it.cmId },
             contactNames = d.contacts.mapNotNull { c -> c.cmId?.let { it to c.name } }.toMap(),
+            pendingCmIds = d.contacts.filter { it.pending }.mapNotNull { it.cmId },
         )
+        // A friend I added proved they accepted me → no longer pending.
+        MessageService.onFriendConfirmed = conf@{ cmId ->
+            val p = pin; val cur = data
+            if (p == null || cur == null) { pendingConfirms[cmId] = true; return@conf }
+            if (cur.contacts.none { it.cmId == cmId && it.pending }) return@conf
+            val updated = cur.copy(contacts = cur.contacts.map { if (it.cmId == cmId) it.copy(pending = false) else it })
+            org.cmchat.app.vault.VaultIO.save(manager, p, updated)
+            data = updated
+        }
         // A contact rotated their onion: update their stored cmId in the vault.
         MessageService.onContactAddressUpdated = upd@{ oldCmId, newCmId ->
-            val p = pin ?: return@upd
-            val cur = data ?: return@upd
+            val p = pin; val cur = data
+            if (p == null || cur == null) { pendingRelinks[oldCmId] = newCmId; return@upd }
             val updated = cur.copy(
                 contacts = cur.contacts.map { if (it.cmId == oldCmId) it.copy(cmId = newCmId) else it }
             )
             org.cmchat.app.vault.VaultIO.save(manager, p, updated)
             data = updated
+            // Their chat is open right now: follow them to the new address.
+            (nav as? Nav.Chat)?.takeIf { it.cmId == oldCmId }?.let { nav = it.copy(cmId = newCmId) }
         }
         // A friend set / turned off this chat's Team Clock: persist it per friend.
         MessageService.onTeamClockChanged = tc@{ cmId, value ->
@@ -228,15 +283,24 @@ private fun AppNavContent() {
             org.cmchat.app.vault.VaultIO.save(manager, p, updated)
             data = updated
         }
-        // Apply Team Clock changes that arrived while the app was locked.
-        if (pendingTeamClock.isNotEmpty()) {
+        // Apply what friends changed while the app was locked: a new address
+        // (followed through any chain of moves), an acceptance, a Team Clock.
+        if (pendingTeamClock.isNotEmpty() || pendingRelinks.isNotEmpty() || pendingConfirms.isNotEmpty()) {
             val p = pin
             if (p != null) {
-                val updated = d.copy(contacts = d.contacts.map { c ->
-                    val v = c.cmId?.let { pendingTeamClock[it] }
-                    if (v != null) c.copy(teamHour = v.ifEmpty { null }) else c
+                val updated = d.copy(contacts = d.contacts.map { c0 ->
+                    var c = c0
+                    c.cmId?.let { id -> MessageService.currentId(id).takeIf { it != id } }
+                        ?.let { c = c.copy(cmId = it) }
+                    val id = c.cmId
+                    if (id != null && pendingConfirms.keys.any { MessageService.currentId(it) == id }) {
+                        c = c.copy(pending = false)
+                    }
+                    val v = id?.let { pendingTeamClock[it] }
+                    if (v != null) c = c.copy(teamHour = v.ifEmpty { null })
+                    c
                 })
-                pendingTeamClock.clear()
+                pendingTeamClock.clear(); pendingRelinks.clear(); pendingConfirms.clear()
                 org.cmchat.app.vault.VaultIO.save(manager, p, updated)
                 data = updated
                 return@LaunchedEffect
@@ -246,7 +310,12 @@ private fun AppNavContent() {
         MessageService.onContactAccepted = accepted@{ req ->
             val p = pin ?: return@accepted
             val cur = data ?: return@accepted
-            if (cur.contacts.none { it.cmId == req.cmId }) {
+            if (cur.contacts.any { it.cmId == req.cmId }) {
+                // We had knocked them too: accepting their knock settles it.
+                val updated = cur.copy(contacts = cur.contacts.map { if (it.cmId == req.cmId) it.copy(pending = false) else it })
+                org.cmchat.app.vault.VaultIO.save(manager, p, updated)
+                data = updated
+            } else {
                 val contact = org.cmchat.app.vault.ContactRec(
                     id = manager.crypto.randomHex(8),
                     name = req.displayName,
@@ -322,7 +391,8 @@ private fun AppNavContent() {
                         cmId = it.cmId,
                         lastSeenMs = t?.peerLastSeen,
                         missed = t?.messages?.any { m -> m.missed } == true,
-                        buzzed = t?.buzzed ?: false)
+                        buzzed = t?.buzzed ?: false,
+                        pending = it.pending)
                 }
                 ?: emptyList()   // real empty state (no fake sample contacts)
             // Decoy chat: a fake contact; tapping it = this phone may be compromised.
@@ -338,14 +408,15 @@ private fun AppNavContent() {
                 onOpenChat = {
                     if (it.cmId == DECOY_CM_ID) {
                         // DECOY TRIPPED. (1) Instantly wipe MY side from RAM and send
-                        // every friend a red "Decoy chat tripped." alert — their copy
-                        // is NOT deleted. (2) Rotate to a new onion address (saved with
-                        // the unlock material captured here; the signed address update
-                        // goes to friends). (3) Silently log out to the lock screen.
+                        // every friend a "Decoy chat triggered — chat erased." alert —
+                        // their copy is erased once they leave it. (2) Rotate to a new
+                        // onion address (saved with the unlock material captured here;
+                        // the signed address update goes to friends). (3) Silently log
+                        // out to the lock screen and leave the app.
                         val p = pin; val cur = data
                         MessageService.tripDecoy()
                         if (p != null && cur != null) {
-                            ServerController.requestNewAddress { pub ->
+                            ServerController.requestNewAddress(urgent = true) { pub ->
                                 val me = cur.faces.firstOrNull() ?: return@requestNewAddress
                                 val updated = cur.copy(faces = cur.faces.map { f ->
                                     if (f.id == me.id) f.copy(onionKey = pub.newPrivateKey ?: f.onionKey,
@@ -358,6 +429,10 @@ private fun AppNavContent() {
                             }
                         }
                         pin = null; data = null; nav = Nav.Lock
+                        // …and leave the app (Home screen). The engine keeps running
+                        // briefly so the alerts + new address can go out silently;
+                        // reopening needs the PIN.
+                        findActivity(context)?.moveTaskToBack(true)
                     } else nav = Nav.Chat(it.name, it.cmId)
                 },
                 onOpenSettings = { nav = Nav.Settings },
@@ -365,8 +440,10 @@ private fun AppNavContent() {
                 onOpenTool = { nav = Nav.Tool(it) },
                 onMinimise = { findActivity(context)?.moveTaskToBack(true) },
                 onExit = {
-                    org.cmchat.app.LifecycleController.exit(context)
-                    findActivity(context)?.finish()
+                    guardedExit {
+                        org.cmchat.app.LifecycleController.exit(context)
+                        findActivity(context)?.finish()
+                    }
                 },
             )
         }
@@ -411,6 +488,7 @@ private fun AppNavContent() {
             onOpenDiagnostics = { nav = Nav.Diagnostics },
             onOpenConnection = { nav = Nav.Connection },
             onIgnoreBattery = {
+                org.cmchat.app.LifecycleController.expectOwnLaunch()
                 runCatching {
                     context.startActivity(
                         Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
@@ -419,7 +497,7 @@ private fun AppNavContent() {
                     )
                 }
             },
-            onExit = { org.cmchat.app.LifecycleController.exit(context) },
+            onExit = { guardedExit { org.cmchat.app.LifecycleController.exit(context) } },
             onAbout = { nav = Nav.About },
             onHelp = { nav = Nav.Help },
             onLanguage = { nav = Nav.Language },
@@ -543,9 +621,30 @@ private fun AppNavContent() {
         )
         Nav.Knock -> KnockScreen(
             myCmId = myCmId(data),
-            onSend = { cmId, _ ->
-                MessageService.sendKnock(cmId) {}
-                nav = Nav.Friends
+            onSend = { cmId, nickname ->
+                when (MessageService.sendKnock(cmId)) {
+                    MessageService.KnockResult.QUEUED -> {
+                        // Add them NOW as a pending friend (shown on Friends right
+                        // away); their acceptance flips it. Saved in the vault.
+                        val p = pin; val cur = data
+                        if (p != null && cur != null && cur.contacts.none { it.cmId == cmId }) {
+                            val friend = org.cmchat.app.vault.ContactRec(
+                                id = manager.crypto.randomHex(8), name = nickname, colorArgb = 0xFF35C6F2,
+                                faceId = cur.faces.firstOrNull()?.id ?: "", cmId = cmId, pending = true,
+                            )
+                            val updated = cur.copy(contacts = cur.contacts + friend)
+                            org.cmchat.app.vault.VaultIO.save(manager, p, updated)
+                            data = updated
+                        }
+                        nav = Nav.Friends
+                        null
+                    }
+                    MessageService.KnockResult.NOT_READY ->
+                        "Not ready yet — wait until the Engine is Online once, then try again."
+                    MessageService.KnockResult.INVALID -> "That doesn't look like a CMC-ID"
+                    MessageService.KnockResult.SELF -> "That's your own ID 🙂"
+                    MessageService.KnockResult.TOO_SOON -> "Already sent — it keeps trying in the background."
+                }
             },
             onBack = { nav = Nav.Friends },
             onShowMyQr = { nav = Nav.MyId },

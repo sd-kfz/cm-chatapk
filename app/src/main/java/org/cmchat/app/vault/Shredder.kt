@@ -17,8 +17,8 @@ import java.security.SecureRandom
 object Shredder {
 
     /**
-     * Set the moment the Shredder (duress) passcode is entered. While true the
-     * lock screen shows ONLY "Error: please restart the app." and accepts NO
+     * Set the moment the Shredder (duress) PIN is entered. While true the
+     * lock screen shows ONLY "Error. Please restart the app." and accepts NO
      * input — no new-PIN prompt, no uninstall prompt, nothing that hints at a
      * wipe. RAM-only, so it lasts exactly until the process restarts.
      */
@@ -35,15 +35,16 @@ object Shredder {
     fun trip(context: Context) {
         val ctx = context.applicationContext
         tripped.value = true
-        org.cmchat.app.guard.GuardController.wipeRamOnly()   // chats, tools, buzz, diag, notifications, server
-        org.cmchat.app.transport.MessageService.zeroKeys()
-        org.cmchat.app.transport.CoverTraffic.stop()
+        // Every step on its own: one failing can never skip the rest or the shred.
+        runCatching { org.cmchat.app.guard.GuardController.wipeRamOnly() }   // chats, tools, buzz, diag, notifications, server
+        runCatching { org.cmchat.app.transport.MessageService.zeroKeys() }
+        runCatching { org.cmchat.app.transport.CoverTraffic.stop() }
         runCatching { org.cmchat.app.tor.BuzzListenerService.stop(ctx) }
         runCatching { org.cmchat.app.tor.TorService.stop(ctx) }
         // Process-level scope: the shred must finish even if the screen goes away.
         scope.launch {
             kotlinx.coroutines.delay(800)   // let Tor finish shutting down before shredding its dir
-            shredAll(ctx)
+            runCatching { shredAll(ctx) }
         }
     }
 

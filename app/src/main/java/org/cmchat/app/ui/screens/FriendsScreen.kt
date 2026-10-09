@@ -45,6 +45,8 @@ data class Contact(
     val missed: Boolean = false,
     /** A Buzz arrived and the conversation hasn't been opened since (blue dot). */
     val buzzed: Boolean = false,
+    /** I added them; waiting for them to accept. */
+    val pending: Boolean = false,
 )
 
 // The crisp blue/red wordmark (kept exactly as approved) + offline grey.
@@ -326,6 +328,8 @@ private fun FriendRow(c: Contact, online: Boolean, onOpenChat: (Contact) -> Unit
             Text(c.name, color = CmText, fontFamily = Nunito, fontSize = 15.sp,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
             when {
+                c.pending -> Text("Waiting for them to accept", color = CmTextDim, fontFamily = Nunito,
+                    fontSize = 11.sp, fontStyle = FontStyle.Italic)
                 c.missed -> Text("Missed Message", color = WordRed, fontFamily = Nunito, fontSize = 11.sp,
                     fontStyle = FontStyle.Italic)
                 c.buzzed -> Text("Buzzed you", color = CmBuzzBlue, fontFamily = Nunito, fontSize = 11.sp)

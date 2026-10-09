@@ -52,11 +52,13 @@ object Diag {
             _entries.value = buffer.toList()
         }
         // Mirrored to Logcat in debug; stripped by R8 in release.
-        when (level) {
-            Level.D -> android.util.Log.d("cmchat/$tag", message)
-            Level.I -> android.util.Log.i("cmchat/$tag", message)
-            Level.W -> android.util.Log.w("cmchat/$tag", message)
-            Level.E -> android.util.Log.e("cmchat/$tag", message)
+        runCatching {   // logging must never be able to crash anything
+            when (level) {
+                Level.D -> android.util.Log.d("cmchat/$tag", message)
+                Level.I -> android.util.Log.i("cmchat/$tag", message)
+                Level.W -> android.util.Log.w("cmchat/$tag", message)
+                Level.E -> android.util.Log.e("cmchat/$tag", message)
+            }
         }
     }
 

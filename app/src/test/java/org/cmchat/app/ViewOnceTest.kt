@@ -33,12 +33,13 @@ class ViewOnceTest {
     }
 
     @Test
-    fun sender_copy_stays_if_only_offline() {
-        val m = ChatStore.addMine(chat, "secret", SelfTimer.VIEW_ONCE)
-        ChatStore.setState(chat, m.id, MsgState.OFFLINE)
-        // Not sent yet -> still shown (so the user can retry); not burned.
+    fun sender_copy_stays_until_delivered() {
+        ChatStore.addMine(chat, "secret", SelfTimer.VIEW_ONCE)
+        // Still queued in the silent outbox (friend unreachable) -> still shown
+        // as SENDING, never burned, and nothing says "offline".
+        ChatStore.burnViewOnce(chat)
         assertEquals(1, msgs().size)
-        assertEquals(MsgState.OFFLINE, msgs().single().state)
+        assertEquals(MsgState.SENDING, msgs().single().state)
     }
 
     @Test

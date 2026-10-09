@@ -50,11 +50,14 @@ fun MyIdScreen(cmId: String?, onBack: () -> Unit) {
         }
 
         Spacer(Modifier.height(16.dp))
-        val qr = remember(cmId) { qrBitmap(cmId, 640) }
+        // Built locally from the stored ID — no network needed.
+        val qr = remember(cmId) { qrBitmap(cmId) }
         if (qr != null) {
             Image(
                 bitmap = qr.asImageBitmap(),
                 contentDescription = "CMC-ID QR",
+                // One pixel per QR module, scaled up without smoothing: sharp edges.
+                filterQuality = androidx.compose.ui.graphics.FilterQuality.None,
                 modifier = Modifier.align(Alignment.CenterHorizontally)
                     .size(240.dp).clip(RoundedCornerShape(16.dp)).background(androidx.compose.ui.graphics.Color.White)
                     .padding(12.dp),
@@ -72,12 +75,20 @@ fun MyIdScreen(cmId: String?, onBack: () -> Unit) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Action("Copy", CmBlue, Modifier.weight(1f)) {
                 clipboard.setText(AnnotatedString(cmId))
+                // Android 13+ shows its own "Copied" confirmation.
+                if (android.os.Build.VERSION.SDK_INT < 33) {
+                    android.widget.Toast.makeText(context, "CMC-ID copied", android.widget.Toast.LENGTH_SHORT).show()
+                }
+                org.cmchat.app.diag.ConnDiag.sys("My ID: CMC-ID copied to clipboard")
             }
             Action("Share", CmCard, Modifier.weight(1f), textColor = CmText) {
                 val send = Intent(Intent.ACTION_SEND).apply {
                     type = "text/plain"
                     putExtra(Intent.EXTRA_TEXT, cmId)
                 }
+                // Our own share sheet: don't re-lock while it covers the app.
+                org.cmchat.app.LifecycleController.expectOwnLaunch()
+                org.cmchat.app.diag.ConnDiag.sys("My ID: share sheet opened")
                 context.startActivity(Intent.createChooser(send, null))
             }
         }
@@ -96,11 +107,14 @@ private fun Action(
     }
 }
 
-private fun qrBitmap(text: String, size: Int): Bitmap? = runCatching {
-    val matrix = QRCodeWriter().encode(text, BarcodeFormat.QR_CODE, size, size)
-    val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-    for (x in 0 until size) for (y in 0 until size) {
-        bmp.setPixel(x, y, if (matrix.get(x, y)) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
+/** The QR at its natural size (one pixel per module), built in one pass. */
+private fun qrBitmap(text: String): Bitmap? = runCatching {
+    val hints = mapOf(com.google.zxing.EncodeHintType.MARGIN to 1)
+    val m = QRCodeWriter().encode(text, BarcodeFormat.QR_CODE, 0, 0, hints)
+    val w = m.width
+    val h = m.height
+    val px = IntArray(w * h) { i ->
+        if (m.get(i % w, i / w)) android.graphics.Color.BLACK else android.graphics.Color.WHITE
     }
-    bmp
+    Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888)
 }.getOrNull()

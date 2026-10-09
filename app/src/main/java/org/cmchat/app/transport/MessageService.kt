@@ -2,18 +2,20 @@ package org.cmchat.app.transport
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import org.cmchat.app.chat.ChatStore
 import org.cmchat.app.chat.MsgState
 import org.cmchat.app.chat.SelfTimer
 import org.cmchat.app.crypto.CmId
 import org.cmchat.app.crypto.CmIdData
 import org.cmchat.app.crypto.CryptoManager
+import org.cmchat.app.diag.ConnDiag
+import org.cmchat.app.diag.Redact
 import org.cmchat.app.tor.ServerController
 import org.cmchat.app.tor.TorService
 import org.cmchat.app.tor.TorStatus
@@ -22,14 +24,25 @@ import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Frames over Tor. Every frame to a contact (message, status, buzz, erase,
- * address update, cover, knock-accept) goes over the forward-secret v3 handshake
- * in [SecureChannel]: fetch a one-time prekey, X3DH, one AEAD frame. Only the
- * anonymous KNOCK (to a not-yet-contact) is a sealed box. Anything that won't
- * open is dropped. Chats live only in [ChatStore] (RAM).
+ * The message spine, kept deliberately boring (modelled on the old Termux
+ * CM-chat: a stable onion + a small listener, one request/response per frame):
  *
- * Real delivery needs Tor ONLINE on a device; CI verifies compile + crypto, and
- * the loopback tests run the full handshake over local sockets.
+ *  ADD A FRIEND   knock = anonymous sealed box to their identity key. Sending
+ *                 one immediately adds them on MY side as a PENDING friend, so
+ *                 their acceptance (and any message) can reach me.
+ *  ACCEPT         they tap Accept → they add me, and send KNOCK_ACCEPT over the
+ *                 forward-secret channel. ANY authenticated frame from a pending
+ *                 friend (accept or message) confirms them on my side.
+ *  MESSAGES       every frame to a friend goes over the v4 handshake in
+ *                 [SecureChannel] (one-time prekey + X3DH + AEAD).
+ *  NO RETRY BUTTON  everything outgoing goes through the silent [Outbox]: it
+ *                 retries in the background, and the screen never shows whether
+ *                 a friend is online or offline.
+ *
+ * Every step is logged to the Connection diagnostic, redacted (no keys,
+ * contents or full onion addresses). Chats live only in [ChatStore] (RAM).
+ * Real delivery needs Tor ONLINE on a device; the loopback tests drive this exact
+ * object over local sockets (only [dialer] — the Tor dial — is swapped).
  */
 object MessageService {
 
@@ -41,6 +54,10 @@ object MessageService {
     /** Set by AppNav to persist an accepted contact into the vault. */
     @Volatile
     var onContactAccepted: ((KnockRequest) -> Unit)? = null
+
+    /** Set by AppNav: a PENDING friend proved they accepted us → persist it. */
+    @Volatile
+    var onFriendConfirmed: ((cmId: String) -> Unit)? = null
 
     /** Set by AppNav to persist a contact's rotated address (old cmId -> new). */
     @Volatile
@@ -54,14 +71,15 @@ object MessageService {
 
     private var myName: String = ""
     private var myCmId: String? = null
+    private var myPubHex: String? = null
 
-    /** The forward-secret channel for the active Face; null until configured. */
+    /** The forward-secret channel for my identity; null until configured. */
     @Volatile
     private var channel: SecureChannel? = null
 
     /**
      * Buzz-only mode: the app was swiped away but the scout listener is alive.
-     * Only BUZZ frames produce an "Activity" notification; everything else is
+     * Only BUZZ frames (and decoy alerts) do anything; everything else is
      * dropped, and no chat state is kept (ChatStore is already cleared).
      */
     @Volatile
@@ -70,8 +88,24 @@ object MessageService {
     /** cmId -> decoded peer (onion + identity pubkey). Concurrent: read by the
      * incoming-connection threads while the UI adds/relinks contacts. */
     private val contacts = ConcurrentHashMap<String, CmIdData>()
-    /** cmId -> contact nickname (only used if the user opts into showing it). */
+    /** cmId -> my nickname for that friend. */
     private val names = ConcurrentHashMap<String, String>()
+    /** Friends I added (knocked) who haven't confirmed yet. */
+    private val pending: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    /**
+     * A friend's OLD cmId -> their new one, after they rotated their onion (a
+     * decoy does that). A chat screen still open on the old ID, and frames
+     * already queued for it, keep reaching the friend instead of silently going
+     * nowhere. RAM-only.
+     */
+    private val relinked = ConcurrentHashMap<String, String>()
+
+    /** The friend's current cmId ([cmId] itself unless they moved address). */
+    fun currentId(cmId: String): String {
+        var id = cmId
+        repeat(8) { id = relinked[id] ?: return id }   // bounded: never loops forever
+        return id
+    }
 
     /** The chat currently open in the foreground, or null. Set by ChatScreen. */
     @Volatile
@@ -79,6 +113,15 @@ object MessageService {
 
     /** Per-contact post-auth rate limit (drop a contact that floods us). */
     private val contactRate = RateLimiter(burst = 20, refillPerSec = 5.0)
+
+    /** Incoming knocks: a burst of 6, then one per 20 s — a stranger can't spam. */
+    private val knockRate = RateLimiter(burst = 6, refillPerSec = 1.0 / 20)
+    /** A knock from someone I declined is ignored for this long. */
+    private const val DECLINE_COOLDOWN_MS = 60 * 60_000L
+    private val declinedAt = ConcurrentHashMap<String, Long>()
+    /** I can't re-knock the same person faster than this (no mash-storms). */
+    private const val KNOCK_RESEND_MS = 60_000L
+    private val knockSentAt = ConcurrentHashMap<String, Long>()
 
     /**
      * Wire protocol version. Bumped whenever the framing/crypto changes so two
@@ -103,17 +146,40 @@ object MessageService {
     /** Cap pending knock requests so a knock flood can't grow RAM without bound. */
     private const val MAX_PENDING_KNOCKS = 20
 
+    /** Silent background delivery (RAM-only). See [Outbox]. */
+    private val outbox = Outbox(scope)
+    @Volatile private var torWatch: Job? = null
+
     /**
-     * Anti-forensics: drop the identity key material and contact table held in
-     * RAM. Called from the crash handler before the process dies, and safe to
+     * How a socket to a friend's onion is opened. Production: through Tor (fails
+     * closed if Tor is down). The loopback tests swap ONLY this, so everything
+     * after the socket is the real code. Not reachable from outside the app.
+     */
+    @Volatile
+    internal var dialer: (CmIdData) -> Socket = { peer -> torDial(peer) }
+
+    /**
+     * Anti-forensics: drop the identity key material, contact table and queued
+     * frames held in RAM. Called from wipe paths and the crash handler; safe to
      * call anytime (the next configure() repopulates it).
      */
     fun zeroKeys() {
         channel = null
         myCmId = null
+        myPubHex = null
         contacts.clear()
         names.clear()
+        pending.clear()
+        outbox.clear()
+        knockSentAt.clear()
+        declinedAt.clear()
+        relinked.clear()
+        _incomingKnocks.value = emptyList()   // a stranger's name + ID must not survive a wipe
+        activeChatCmId = null
     }
+
+    /** Drop every queued outgoing frame (wipe/exit paths). */
+    fun clearOutbox() = outbox.clear()
 
     fun configure(
         crypto: CryptoManager,
@@ -123,49 +189,84 @@ object MessageService {
         myCmId: String?,
         knownContactCmIds: List<String>,
         contactNames: Map<String, String> = emptyMap(),
+        pendingCmIds: Collection<String> = emptyList(),
     ) {
         this.myName = myDisplayName
         this.myCmId = myCmId
+        this.myPubHex = myIdentityPubHex
         this.channel = SecureChannel(crypto, myIdentityPubHex, myIdentitySecHex, codec, replayGuard)
         // Update the friend table WITHOUT an empty moment: configure() re-runs on
         // every vault save, and a clear-then-refill would let a frame arriving
         // in between be dropped as "not from a known contact".
+        // A friend who moved address this run (see [relinked]) stays on the new
+        // one even if the vault still lists the old (it catches up after unlock).
         val fresh = HashMap<String, CmIdData>()
-        knownContactCmIds.forEach { id -> CmId.decode(id)?.let { fresh[id] = it } }
+        knownContactCmIds.forEach { raw -> currentId(raw).let { id -> CmId.decode(id)?.let { fresh[id] = it } } }
         contacts.keys.retainAll(fresh.keys)
         contacts.putAll(fresh)
-        names.keys.retainAll(contactNames.keys)
-        names.putAll(contactNames)
+        val freshNames = contactNames.mapKeys { (id, _) -> currentId(id) }
+        names.keys.retainAll(freshNames.keys)
+        names.putAll(freshNames)
+        val freshPending = pendingCmIds.map { currentId(it) }.toSet()
+        pending.retainAll(freshPending)
+        pending.addAll(freshPending)
         ServerController.onIncoming = { socket -> handleIncoming(socket) }
+        // Whenever Tor comes (back) online, retry anything queued right away.
+        if (torWatch == null) {
+            torWatch = scope.launch {
+                TorService.status.collect { if (it is TorStatus.Online) outbox.kickAll() }
+            }
+        }
     }
 
     // ---- outgoing ----------------------------------------------------------
 
-    fun sendKnock(cmId: String, onResult: (Boolean) -> Unit) {
-        val ch = channel; val myId = myCmId; val target = CmId.decode(cmId)
-        if (ch == null || myId == null || target == null) { onResult(false); return }
-        scope.launch {
-            val ok = runCatching {
-                val payload = Messages.json.encodeToString(KnockPayload.serializer(), KnockPayload(myName, myId))
-                    .toByteArray()
-                val sealed = ch.sealKnock(payload, target.identityPubKeyHex)
-                withTorConnection(target) { s ->
+    enum class KnockResult { QUEUED, NOT_READY, INVALID, SELF, TOO_SOON }
+
+    /**
+     * Add a friend: knock on [cmId]. They're added on MY side right away as a
+     * PENDING friend (so their acceptance can reach me), and the knock is queued
+     * for silent delivery — it keeps trying in the background until it lands.
+     */
+    fun sendKnock(cmId: String): KnockResult {
+        val target = CmId.decode(cmId) ?: return KnockResult.INVALID
+        val ch = channel; val myId = myCmId
+        if (ch == null || myId == null) return KnockResult.NOT_READY
+        if (cmId == myId || target.identityPubKeyHex.equals(myPubHex, ignoreCase = true)) return KnockResult.SELF
+        val now = System.currentTimeMillis()
+        val last = knockSentAt[cmId]
+        if (last != null && now - last < KNOCK_RESEND_MS) return KnockResult.TOO_SOON
+        knockSentAt[cmId] = now
+        val alreadyFriend = contacts.containsKey(cmId) && cmId !in pending
+        contacts.putIfAbsent(cmId, target)
+        if (!alreadyFriend) pending.add(cmId)
+        val payload = Messages.json.encodeToString(KnockPayload.serializer(), KnockPayload(myName, myId))
+            .toByteArray()
+        val sealed = ch.sealKnock(payload, target.identityPubKeyHex)
+        ConnDiag.sys("Add friend: knock queued → ${Redact.onionShort(target.onion)}")
+        outbox.enqueue(Outbox.Item(
+            peer = cmId, label = "knock", replaceKey = "knock",
+            deliver = {
+                withConnection(target) { s ->
                     Transport.writeFrame(s.getOutputStream(), sealed)
-                    org.cmchat.app.diag.ConnDiag.out("knock sent (anonymous sealed box, ${sealed.size}b)")
+                    ConnDiag.out("knock sent (anonymous sealed box, ${sealed.size}b)")
                 }
-                true
-            }.getOrElse { org.cmchat.app.diag.Diag.e("knock", "send failed", it); false }
-            org.cmchat.app.diag.Diag.i("knock", "sent=$ok")
-            withContext(Dispatchers.Main) { onResult(ok) }
-        }
+            },
+            onDelivered = { ConnDiag.sys("Add friend: knock delivered — waiting for them to accept") },
+        ))
+        return KnockResult.QUEUED
     }
+
+    /** Is this friend still waiting to accept me? */
+    fun isPending(cmId: String): Boolean = currentId(cmId) in pending
 
     /**
      * Fire-and-forget BUZZ: no ack, no retry, no state, no content. Rate-limited
      * to one per contact per [BuzzPolicy.SEND_COOLDOWN_MS]. Returns false if on
      * cooldown or not configured.
      */
-    fun sendBuzz(chatCmId: String): Boolean {
+    fun sendBuzz(cmId: String): Boolean {
+        val chatCmId = currentId(cmId)
         val peer = contacts[chatCmId]
         if (channel == null || peer == null) return false
         if (!org.cmchat.app.buzz.BuzzPolicy.canSend(chatCmId)) return false
@@ -183,8 +284,8 @@ object MessageService {
      * tell them apart) and the receiver silently discards it. Random inner size
      * within the base bucket so it looks like a short real message.
      */
-    fun sendCover(chatCmId: String) {
-        val peer = contacts[chatCmId] ?: return
+    fun sendCover(cmId: String) {
+        val peer = contacts[currentId(cmId)] ?: return
         if (channel == null) return
         val junk = ByteArray((8..400).random()).also { java.security.SecureRandom().nextBytes(it) }
         scope.launch {
@@ -196,92 +297,76 @@ object MessageService {
     /** Contacts currently known (for the cover-traffic picker). */
     fun contactIds(): List<String> = contacts.keys.toList()
 
-    /** Send a text message; updates [ChatStore] state to SENT or OFFLINE. */
-    fun sendText(chatCmId: String, text: String, timer: SelfTimer) {
+    /**
+     * Send a text message. It appears in the chat immediately and is delivered
+     * silently in the background (retried until it lands). Nothing on screen
+     * reveals whether the friend is online.
+     */
+    fun sendText(cmId: String, text: String, timer: SelfTimer) {
+        val chatCmId = currentId(cmId)
         // Messaging a person re-opens their "Once only" buzzes.
         org.cmchat.app.buzz.BuzzPolicy.onMessagedContact(chatCmId)
         // Per-message timer wins; otherwise fall back to the general timer.
         val effective = if (timer != SelfTimer.OFF) timer
             else org.cmchat.app.settings.AppSettings.generalTimer.value
-        sendTextResolved(chatCmId, text, effective)
+        val msg = ChatStore.addMine(chatCmId, text, effective)
+        if (channel == null || !contacts.containsKey(chatCmId)) return
+        val payload = Messages.json.encodeToString(TextPayload.serializer(),
+            TextPayload(msg.id, text, effective.label)).toByteArray()
+        outbox.enqueue(Outbox.Item(
+            peer = chatCmId, label = "message",
+            deliver = { sendSecureTo(chatCmId, FrameType.MSG, payload) },
+            // Erased / wiped / expired before delivery → never sent.
+            stillWanted = { ChatStore.thread(currentId(chatCmId)).messages.any { it.id == msg.id } },
+            onDelivered = { ChatStore.setState(currentId(chatCmId), msg.id, MsgState.SENT) },
+        ))
     }
 
-    private fun sendTextResolved(chatCmId: String, text: String, timer: SelfTimer) {
-        val msg = ChatStore.addMine(chatCmId, text, timer)
-        val peer = contacts[chatCmId]
-        if (channel == null || peer == null) {
-            ChatStore.setState(chatCmId, msg.id, MsgState.OFFLINE); return
-        }
-        scope.launch {
-            val ok = runCatching {
-                val payload = Messages.json.encodeToString(TextPayload.serializer(),
-                    TextPayload(msg.id, text, timer.label)).toByteArray()
-                sendSecure(peer, FrameType.MSG, payload)
-                true
-            }.getOrDefault(false)
-            ChatStore.setState(chatCmId, msg.id, if (ok) MsgState.SENT else MsgState.OFFLINE)
-        }
-    }
-
-    fun retry(chatCmId: String, msgId: String, text: String, timer: SelfTimer) {
-        val peer = contacts[chatCmId] ?: return
-        if (channel == null) return
-        ChatStore.setState(chatCmId, msgId, MsgState.SENDING)
-        scope.launch {
-            val ok = runCatching {
-                val payload = Messages.json.encodeToString(TextPayload.serializer(),
-                    TextPayload(msgId, text, timer.label)).toByteArray()
-                sendSecure(peer, FrameType.MSG, payload); true
-            }.getOrDefault(false)
-            ChatStore.setState(chatCmId, msgId, if (ok) MsgState.SENT else MsgState.OFFLINE)
-        }
-    }
-
-    fun sendErase(chatCmId: String) {
+    /** The normal chat Erase: wipes BOTH sides (theirs as soon as it reaches them). */
+    fun sendErase(cmId: String) {
+        val chatCmId = currentId(cmId)
         ChatStore.erase(chatCmId)
-        val peer = contacts[chatCmId] ?: return
-        if (channel == null) return
-        scope.launch { runCatching { sendSecure(peer, FrameType.ERASE_CHAT, ByteArray(0)) } }
+        if (channel == null || !contacts.containsKey(chatCmId)) return
+        outbox.enqueue(Outbox.Item(peer = chatCmId, label = "erase", replaceKey = "erase",
+            deliver = { sendSecureTo(chatCmId, FrameType.ERASE_CHAT, ByteArray(0)) }))
     }
 
     /**
      * Decoy tripped (this phone may be in someone else's hands): INSTANTLY wipe
-     * MY side from RAM — every conversation, buzz marker and tool note — and send
-     * every friend a DECOY_ALERT. The alert deletes NOTHING on their side: it
-     * shows a red timestamped "Decoy chat tripped." line in their chat and they
-     * keep their history until they clear it. Best-effort: a friend who is
-     * offline right now won't get it (there's no server to hold it).
+     * MY side from RAM — every conversation, queued frame, buzz marker and note —
+     * and queue a DECOY_ALERT to every friend. It does NOT instantly destroy their
+     * copy: they see "Decoy chat triggered — chat erased." in the chat, and it's
+     * erased for them once they leave it. Delivered silently in the background
+     * (a friend who's offline gets it when they're back, while my engine runs).
      * The caller then rotates the onion address and locks the app.
      */
     fun tripDecoy() {
-        val peers = contacts.values.toList()
-        // Clear local RAM first so the wipe is immediate even if sends are slow.
+        val peers = contacts.keys.toList()
+        outbox.clear()
         ChatStore.clearAll()
         org.cmchat.app.buzz.BuzzPolicy.clear()
         org.cmchat.app.tools.ToolsState.clear()
         activeChatCmId = null
+        ConnDiag.sys("Decoy tripped: my chats wiped; alerting ${peers.size} friend(s)")
         if (channel == null) return
-        peers.forEach { peer ->
-            scope.launch {
-                runCatching { sendSecure(peer, FrameType.DECOY_ALERT, ByteArray(0)) }
-                    .onFailure { org.cmchat.app.diag.ConnDiag.out("decoy alert not delivered (friend offline?)") }
-            }
+        peers.forEach { id ->
+            outbox.enqueue(Outbox.Item(peer = id, label = "decoy alert", replaceKey = "decoy",
+                deliver = { sendSecureTo(id, FrameType.DECOY_ALERT, ByteArray(0)) },
+                onDelivered = { ConnDiag.out("decoy alert delivered") }))
         }
     }
 
     /**
      * Share this conversation's Team Clock with the friend ([value] = canonical
-     * "UTC+hh:mm", or "" to turn it off). Rides the forward-secret channel like a
-     * message. Returns false if the engine/friend isn't ready (shown to the user).
+     * "UTC+hh:mm", or "" to turn it off). Queued like a message (latest wins).
      */
-    fun sendTeamClock(chatCmId: String, value: String): Boolean {
-        val peer = contacts[chatCmId] ?: return false
-        if (channel == null) return false
+    fun sendTeamClock(cmId: String, value: String): Boolean {
+        val chatCmId = currentId(cmId)
+        if (channel == null || !contacts.containsKey(chatCmId)) return false
         if (value.isNotEmpty() && org.cmchat.app.chat.TeamClock.decode(value) == null) return false
-        scope.launch {
-            runCatching { sendSecure(peer, FrameType.TEAM_CLOCK, value.toByteArray(Charsets.US_ASCII)) }
-                .onFailure { org.cmchat.app.diag.Diag.e("teamclock", "send failed", it) }
-        }
+        val bytes = value.toByteArray(Charsets.US_ASCII)
+        outbox.enqueue(Outbox.Item(peer = chatCmId, label = "team clock", replaceKey = "teamclock",
+            deliver = { sendSecureTo(chatCmId, FrameType.TEAM_CLOCK, bytes) }))
         return true
     }
 
@@ -294,32 +379,36 @@ object MessageService {
         if (channel == null) return
         myCmId = newCmId
         val payload = newCmId.toByteArray()
-        contacts.values.toList().forEach { peer ->
-            scope.launch { runCatching { sendSecure(peer, FrameType.ADDR_UPDATE, payload) } }
+        contacts.keys.toList().forEach { id ->
+            outbox.enqueue(Outbox.Item(peer = id, label = "address update", replaceKey = "addr",
+                deliver = { sendSecureTo(id, FrameType.ADDR_UPDATE, payload) }))
         }
     }
 
     fun acceptKnock(req: KnockRequest) {
-        org.cmchat.app.diag.ConnDiag.inc("knock accepted → added as contact")
+        ConnDiag.sys("Add friend: knock accepted → added as friend")
         CmId.decode(req.cmId)?.let { contacts[req.cmId] = it }
+        pending.remove(req.cmId)   // if I had knocked them too, that settles it
         _incomingKnocks.value = _incomingKnocks.value.filterNot { it.cmId == req.cmId }
         onContactAccepted?.invoke(req)
-        // Tell them we accepted (forward-secret, now that we know their key).
-        val peer = contacts[req.cmId]
-        val myId = myCmId
-        if (channel != null && peer != null && myId != null) {
-            scope.launch {
-                runCatching {
-                    val payload = Messages.json.encodeToString(KnockPayload.serializer(),
-                        KnockPayload(myName, myId)).toByteArray()
-                    sendSecure(peer, FrameType.KNOCK_ACCEPT, payload)
-                }
-            }
-        }
+        queueAccept(req.cmId)
+    }
+
+    /** Tell [cmId] we accepted (forward-secret, since we know their key) —
+     * silently retried until it reaches them. */
+    private fun queueAccept(cmId: String) {
+        val myId = myCmId ?: return
+        if (channel == null || !contacts.containsKey(cmId)) return
+        val payload = Messages.json.encodeToString(KnockPayload.serializer(),
+            KnockPayload(myName, myId)).toByteArray()
+        outbox.enqueue(Outbox.Item(peer = cmId, label = "accept", replaceKey = "accept",
+            deliver = { sendSecureTo(cmId, FrameType.KNOCK_ACCEPT, payload) },
+            onDelivered = { ConnDiag.sys("Add friend: acceptance delivered") }))
     }
 
     fun declineKnock(req: KnockRequest) {
-        org.cmchat.app.diag.ConnDiag.inc("knock declined")
+        ConnDiag.sys("Add friend: knock declined (ignored from them for 1 h)")
+        declinedAt[req.cmId] = System.currentTimeMillis()
         _incomingKnocks.value = _incomingKnocks.value.filterNot { it.cmId == req.cmId }
     }
 
@@ -346,50 +435,89 @@ object MessageService {
             val r = SecureWire.receive(
                 ch, socket.getInputStream(), socket.getOutputStream(), known,
                 allow = { contactRate.allow(it) },
-                onStage = { org.cmchat.app.diag.ConnDiag.inc(it) },
+                onStage = { ConnDiag.inc(it) },
             )
             when (r) {
                 is SecureWire.Received.Knock -> {
-                    org.cmchat.app.diag.ConnDiag.inc("opened as KNOCK (anonymous sealed box)")
+                    ConnDiag.inc("opened as KNOCK (anonymous sealed box)")
                     dispatchAnonymous(r.body)
                 }
                 is SecureWire.Received.Message -> {
                     val peer = contacts[r.cmId] ?: return
-                    org.cmchat.app.diag.ConnDiag.inc(
-                        "forward-secret frame opened from ${org.cmchat.app.diag.Redact.onionShort(peer.onion)}")
+                    ConnDiag.inc("forward-secret frame opened from ${Redact.onionShort(peer.onion)}")
+                    // Any authenticated frame proves this friend has me: confirm a
+                    // pending one, and retry anything queued for them right now.
+                    confirmIfPending(r.cmId)
+                    outbox.kick(r.cmId)
                     if (buzzOnlyMode) dispatchBuzzOnly(r.cmId, r.type)
                     else dispatchFromContact(r.cmId, peer, r.type, r.body)
                 }
                 SecureWire.Received.VersionMismatch -> {
                     versionMismatch.value = true
-                    org.cmchat.app.diag.ConnDiag.inc("wire version mismatch → dropped (update both apps)")
+                    ConnDiag.inc("wire version mismatch → dropped (update both apps)")
                     org.cmchat.app.diag.Diag.droppedFrame()
                 }
                 is SecureWire.Received.Dropped -> {
                     // Static reason strings only — never keys, contents or addresses.
-                    org.cmchat.app.diag.ConnDiag.inc("${r.reason} → dropped")
+                    ConnDiag.inc("${r.reason} → dropped")
                     org.cmchat.app.diag.Diag.droppedFrame()
                 }
             }
         } catch (_: Exception) {
-            org.cmchat.app.diag.ConnDiag.inc("incoming error → connection dropped")
+            ConnDiag.inc("incoming error → connection dropped")
             org.cmchat.app.diag.Diag.droppedFrame()
         }
     }
 
+    private fun confirmIfPending(cmId: String) {
+        if (pending.remove(cmId)) {
+            ConnDiag.sys("Add friend: they accepted — friend confirmed")
+            onFriendConfirmed?.invoke(cmId)
+        }
+    }
+
+    /**
+     * A knock (friend request). It ALWAYS reaches the Friends screen, even while
+     * I'm Invisible — first contact has to get through somehow — but it's
+     * one-time and rate-limited: duplicates are merged, at most
+     * [MAX_PENDING_KNOCKS] wait at once, a declined sender is ignored for an
+     * hour, and bursts are throttled.
+     */
     private fun dispatchAnonymous(body: ByteArray) {
         val kp = decodeKnock(body) ?: return
-        val cur = _incomingKnocks.value
-        // Cap pending knocks (flood guard) and de-dup by cmId.
-        if (cur.size >= MAX_PENDING_KNOCKS || cur.any { it.cmId == kp.cmId }) {
-            org.cmchat.app.diag.ConnDiag.inc("KNOCK ignored (pending cap or duplicate)"); return
+        if (CmId.decode(kp.cmId) == null || kp.cmId == myCmId) {
+            ConnDiag.inc("KNOCK ignored (malformed or my own ID)"); return
         }
-        org.cmchat.app.diag.ConnDiag.inc("KNOCK received (pending accept)")
-        _incomingKnocks.value = cur + KnockRequest(kp.displayName, kp.cmId)
+        val now = System.currentTimeMillis()
+        declinedAt[kp.cmId]?.let { if (now - it < DECLINE_COOLDOWN_MS) {
+            ConnDiag.inc("KNOCK ignored (declined recently)"); return
+        } }
+        // Already my (confirmed) friend: they never got my acceptance (e.g. my app
+        // closed before it went out) and knocked again. No duplicate card — just
+        // re-send the acceptance. A knock isn't authenticated, but this only ever
+        // sends to that friend's REAL key + address, so a forged one gains nothing.
+        if (contacts.containsKey(kp.cmId) && kp.cmId !in pending) {
+            if (!knockRate.allow("knock")) { ConnDiag.inc("KNOCK ignored (rate limit)"); return }
+            ConnDiag.inc("KNOCK from an existing friend → acceptance re-sent")
+            queueAccept(kp.cmId)
+            return
+        }
+        val cur = _incomingKnocks.value
+        if (cur.size >= MAX_PENDING_KNOCKS || cur.any { it.cmId == kp.cmId }) {
+            ConnDiag.inc("KNOCK ignored (pending cap or duplicate)"); return
+        }
+        if (!knockRate.allow("knock")) {
+            ConnDiag.inc("KNOCK ignored (rate limit)"); return
+        }
+        ConnDiag.inc("KNOCK received (waiting for you to accept)")
+        _incomingKnocks.value = cur + KnockRequest(kp.displayName.take(24), kp.cmId)
+        if (activeChatCmId == null) {
+            org.cmchat.app.settings.AppSettings.appContext?.let { org.cmchat.app.notify.Notifier.activity(it) }
+        }
     }
 
     private fun dispatchFromContact(chatCmId: String, peer: CmIdData, type: FrameType, body: ByteArray) {
-        org.cmchat.app.diag.ConnDiag.inc("dispatched $type")
+        ConnDiag.inc("dispatched $type")
         when (type) {
             FrameType.MSG -> {
                 val t = runCatching {
@@ -399,7 +527,7 @@ object MessageService {
                 // While Invisible, the message is held as "missed" (orange dot);
                 // the sender learns nothing, and it surfaces once we go Online.
                 val invisible = org.cmchat.app.settings.AppSettings.invisibleMode.value
-                if (invisible) org.cmchat.app.diag.ConnDiag.inc("held (Invisible): message kept as missed")
+                if (invisible) ConnDiag.inc("held (Invisible): message kept as missed")
                 ChatStore.addTheirs(chatCmId, t.id, t.text, SelfTimer.fromLabel(t.selfTimer), missed = invisible)
                 // Generic "Notification" unless that chat is already on screen.
                 if (activeChatCmId != chatCmId) {
@@ -417,10 +545,10 @@ object MessageService {
                 onTeamClockChanged?.invoke(chatCmId, value)
             }
             FrameType.ERASE_CHAT -> ChatStore.erase(chatCmId)
-            FrameType.KNOCK_ACCEPT -> ChatStore.touchPeer(chatCmId)
+            FrameType.KNOCK_ACCEPT -> ChatStore.touchPeer(chatCmId)   // confirmed above
             FrameType.BUZZ -> onBuzz(chatCmId)
             FrameType.ADDR_UPDATE -> onAddressUpdate(chatCmId, peer, body)
-            FrameType.COVER -> org.cmchat.app.diag.ConnDiag.inc("cover frame discarded")
+            FrameType.COVER -> ConnDiag.inc("cover frame discarded")
             else -> {}
         }
     }
@@ -438,6 +566,12 @@ object MessageService {
         contacts.remove(oldCmId)
         contacts[newCmId] = decoded
         names.remove(oldCmId)?.let { names[newCmId] = it }
+        if (pending.remove(oldCmId)) pending.add(newCmId)
+        relinked.remove(newCmId)            // moving back to an earlier address
+        relinked[oldCmId] = newCmId
+        ChatStore.rekey(oldCmId, newCmId)   // the conversation follows the friend
+        if (activeChatCmId == oldCmId) activeChatCmId = newCmId
+        ConnDiag.inc("friend moved to a new address → relinked")
         onContactAddressUpdated?.invoke(oldCmId, newCmId)
         org.cmchat.app.diag.Diag.i("addr", "contact relinked to new address")
     }
@@ -452,10 +586,10 @@ object MessageService {
         }
     }
 
-    /** A friend's decoy was tripped: red timestamped line + a generic notification. */
+    /** A friend's decoy was tripped: the notice line (chat erased when they leave). */
     private fun onDecoyAlert(chatCmId: String) {
-        ChatStore.addAlert(chatCmId, "Decoy chat tripped.")
-        org.cmchat.app.diag.ConnDiag.inc("decoy alert received")
+        ChatStore.addDecoyNotice(chatCmId)
+        ConnDiag.inc("decoy alert received")
         if (activeChatCmId != chatCmId) {
             org.cmchat.app.settings.AppSettings.appContext?.let { org.cmchat.app.notify.Notifier.message(it) }
         }
@@ -476,48 +610,39 @@ object MessageService {
 
     // ---- wire helpers ------------------------------------------------------
 
+    /** [sendSecure] to the friend's CURRENT address (looked up at attempt time). */
+    private fun sendSecureTo(cmId: String, type: FrameType, payload: ByteArray) {
+        val peer = contacts[currentId(cmId)] ?: throw IOException("not a friend any more")
+        sendSecure(peer, type, payload)
+    }
+
     /**
      * Send ONE content frame to a contact over the forward-secret handshake:
      * request a one-time prekey, verify it against their identity key, then send
-     * the X3DH-sealed frame. Throws on any failure, so callers mark the message
-     * OFFLINE (with retry) — a send never fails silently.
+     * the X3DH-sealed frame. Throws on any failure (the Outbox retries silently).
      */
     private fun sendSecure(peer: CmIdData, type: FrameType, payload: ByteArray) {
         val ch = channel ?: throw IOException("engine not ready")
-        withTorConnection(peer) { s ->
-            // The sender now READS one frame (the prekey reply): never wait forever.
+        withConnection(peer) { s ->
+            // The sender READS one frame (the prekey reply): never wait forever.
             s.soTimeout = HANDSHAKE_READ_TIMEOUT_MS
             SecureWire.send(
                 ch, s.getInputStream(), s.getOutputStream(), peer.identityPubKeyHex, type, payload,
-                onStage = { org.cmchat.app.diag.ConnDiag.out(it) },
+                onStage = { ConnDiag.out(it) },
                 onVersionMismatch = { versionMismatch.value = true },
             )
         }
     }
 
-    /** Open a Tor connection to [peer]'s onion, run [block] on it, then close it. */
-    private fun withTorConnection(peer: CmIdData, block: (Socket) -> Unit) {
-        // Fail closed: never attempt a connection unless Tor is up. Retry with
-        // backoff so a send right after publish (descriptor still uploading)
-        // doesn't hard-fail. Onion-only guard lives in Transport. Every stage is
-        // logged to the Connection diagnostic (addresses redacted to a prefix).
-        val short = org.cmchat.app.diag.Redact.onionShort(peer.onion)
-        org.cmchat.app.diag.ConnDiag.out("resolve $short")
-        if (TorService.status.value !is TorStatus.Online) {
-            org.cmchat.app.diag.ConnDiag.out("FAILED: Tor offline")
-            throw IOException("Tor offline")
-        }
-        // Timing jitter: a small randomized delay so exact send time doesn't map
-        // 1:1 to typing/sending. Applies to every outbound frame (incl. cover).
-        runCatching { Thread.sleep((30..260).random().toLong()) }
+    /** Open a connection to [peer]'s onion via [dialer], run [block], close it. */
+    private fun withConnection(peer: CmIdData, block: (Socket) -> Unit) {
+        val short = Redact.onionShort(peer.onion)
+        ConnDiag.out("resolve $short")
         val t0 = System.currentTimeMillis()
         val sock = try {
-            Transport.connectThroughTorRetry(
-                TorService.socksPort(), peer.onion.removeSuffix(".onion"), 80,
-                onStage = { org.cmchat.app.diag.ConnDiag.out(it) },
-            )
+            dialer(peer)
         } catch (e: Exception) {
-            org.cmchat.app.diag.ConnDiag.out("FAILED: ${Transport.failureReason(e)}")
+            ConnDiag.out("FAILED: ${Transport.failureReason(e)}")
             throw e
         }
         try {
@@ -526,10 +651,27 @@ object MessageService {
             // HandshakeFailed carries a fixed, content-free reason; anything else
             // is reduced to a short category. Never keys, contents or addresses.
             val why = if (e is SecureWire.HandshakeFailed) e.message else Transport.failureReason(e)
-            org.cmchat.app.diag.ConnDiag.out("FAILED: $why")
+            ConnDiag.out("FAILED: $why")
             throw e
         }
-        org.cmchat.app.diag.ConnDiag.out("CONNECTED — frame delivered (${System.currentTimeMillis() - t0}ms)")
+        ConnDiag.out("CONNECTED — frame delivered (${System.currentTimeMillis() - t0}ms)")
+    }
+
+    /** The production dialer: through Tor's SOCKS port to the onion, fail-closed. */
+    private fun torDial(peer: CmIdData): Socket {
+        // Never attempt a connection unless Tor is up. Retry with backoff so a
+        // send right after publish (descriptor still uploading) doesn't hard-fail.
+        if (TorService.status.value !is TorStatus.Online) {
+            ConnDiag.out("FAILED: Tor offline")
+            throw IOException("Tor offline")
+        }
+        // Timing jitter: a small randomized delay so exact send time doesn't map
+        // 1:1 to typing/sending. Applies to every outbound frame (incl. cover).
+        runCatching { Thread.sleep((30..260).random().toLong()) }
+        return Transport.connectThroughTorRetry(
+            TorService.socksPort(), peer.onion.removeSuffix(".onion"), 80,
+            onStage = { ConnDiag.out(it) },
+        )
     }
 
     /**
@@ -539,15 +681,15 @@ object MessageService {
      * incoming on the contact's Connection log.
      */
     fun linkTest(cmId: String) {
-        val peer = contacts[cmId]
+        val peer = contacts[currentId(cmId)]
         if (channel == null || peer == null) {
-            org.cmchat.app.diag.ConnDiag.sys("Link Test: contact or engine not ready"); return
+            ConnDiag.sys("Link Test: contact or engine not ready"); return
         }
-        org.cmchat.app.diag.ConnDiag.sys("── Link Test → ${org.cmchat.app.diag.Redact.onionShort(peer.onion)} ──")
+        ConnDiag.sys("── Link Test → ${Redact.onionShort(peer.onion)} ──")
         scope.launch {
             val ok = runCatching { sendSecure(peer, FrameType.BUZZ, ByteArray(0)); true }
                 .getOrDefault(false)
-            org.cmchat.app.diag.ConnDiag.sys("Link Test result: ${if (ok) "CONNECTED" else "FAILED"}")
+            ConnDiag.sys("Link Test result: ${if (ok) "CONNECTED" else "FAILED"}")
         }
     }
 

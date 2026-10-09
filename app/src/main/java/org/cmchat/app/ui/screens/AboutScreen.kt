@@ -42,7 +42,7 @@ fun AboutScreen(onBack: () -> Unit) {
 
 private const val WELCOME = """Please read this before you rely on CM-Chat.
 
-1. CM-Chat is peer-to-peer over Tor. There is no server, no account, and no one who can recover your data or your passcode for you. If you forget your passcode, your data is gone — by design.
+1. CM-Chat is peer-to-peer over Tor. There is no server, no account, and no one who can recover your data or your PIN for you. If you forget your PIN, your data is gone — by design.
 
 2. Both people must be online at the same time to exchange messages. There is no mailbox holding messages for you.
 

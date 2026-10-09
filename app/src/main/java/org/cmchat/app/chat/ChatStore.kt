@@ -3,6 +3,7 @@ package org.cmchat.app.chat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import java.util.concurrent.atomic.AtomicLong
 
 /** One 1:1 conversation. Everything here is RAM-only and never persisted. */
@@ -14,6 +15,8 @@ data class ChatThread(
     val unread: Boolean = false,
     /** Blue Buzz dot: a buzz arrived; cleared when the conversation is opened. */
     val buzzed: Boolean = false,
+    /** The friend's decoy was triggered: this chat is erased once I leave it. */
+    val decoyErase: Boolean = false,
 )
 
 /**
@@ -30,8 +33,11 @@ object ChatStore {
 
     fun thread(chatId: String): ChatThread = _threads.value[chatId] ?: ChatThread()
 
+    // Writes come from the UI AND from network threads (incoming frames, the
+    // outbox marking a message sent), so every write is an atomic compare-and-set
+    // — two at once can never lose a message.
     private fun update(chatId: String, f: (ChatThread) -> ChatThread) {
-        _threads.value = _threads.value.toMutableMap().also { it[chatId] = f(it[chatId] ?: ChatThread()) }
+        _threads.update { m -> m.toMutableMap().also { it[chatId] = f(it[chatId] ?: ChatThread()) } }
     }
 
     fun addMine(chatId: String, text: String, timer: SelfTimer): ChatMessage {
@@ -54,11 +60,11 @@ object ChatStore {
 
     /** Going Online: start self-timers on missed messages now that they're seen. */
     fun markMissedSeen(now: Long = System.currentTimeMillis()) {
-        _threads.value = _threads.value.mapValues { (_, t) ->
+        _threads.update { m -> m.mapValues { (_, t) ->
             t.copy(messages = t.messages.map {
                 if (it.missed && it.seenAt == null) it.copy(seenAt = now) else it
             })
-        }
+        } }
     }
 
     fun setState(chatId: String, msgId: String, state: MsgState) {
@@ -99,9 +105,8 @@ object ChatStore {
     fun clearBuzzed(chatId: String) = update(chatId) { if (it.buzzed) it.copy(buzzed = false) else it }
 
     /**
-     * Add a small RED timestamped system line, e.g. "Decoy chat tripped." It is
-     * never self-destructed and deletes nothing — the friend's history stays
-     * until they clear it themselves. Marks the chat unread (orange dot).
+     * Add a small alert line (italic-bold) where the next message would be. It
+     * is never self-destructed. Marks the chat unread (orange dot).
      */
     fun addAlert(chatId: String, text: String, at: Long = System.currentTimeMillis()) = update(chatId) {
         it.copy(
@@ -109,6 +114,25 @@ object ChatStore {
                 state = MsgState.SENT, createdAt = at, system = true, alert = true),
             unread = true,
         )
+    }
+
+    /** Text of the friend-side decoy notice. */
+    const val DECOY_NOTICE = "Decoy chat triggered — chat erased."
+
+    /**
+     * A friend's decoy was triggered: their copy of this chat is NOT destroyed
+     * instantly. The notice line is shown where the next message would be, and
+     * the whole chat is erased once the user leaves it ([leaveChat]).
+     */
+    fun addDecoyNotice(chatId: String) {
+        addAlert(chatId, DECOY_NOTICE)
+        update(chatId) { it.copy(decoyErase = true) }
+    }
+
+    /** Leaving a chat: burn seen view-once messages; erase it if a decoy notice was shown. */
+    fun leaveChat(chatId: String) {
+        burnViewOnce(chatId)
+        if (thread(chatId).decoyErase) erase(chatId)
     }
 
     /** Seed/set the Team clock without a system message (used when loading it). */
@@ -129,10 +153,32 @@ object ChatStore {
 
     /** Drop self-timer-expired messages across all threads. */
     fun purgeExpired(now: Long = System.currentTimeMillis()) {
-        _threads.value = _threads.value.mapValues { (_, t) ->
+        _threads.update { m -> m.mapValues { (_, t) ->
             t.copy(messages = t.messages.filterNot {
                 SelfTimerRules.isExpired(it.seenAt, it.selfTimer, now)
             })
+        } }
+    }
+
+    /**
+     * The friend moved to a new address (new cmId, same identity key — e.g.
+     * after their decoy fired): move the conversation to the new key so it stays
+     * on screen, merged with anything that already arrived under the new one.
+     */
+    fun rekey(oldId: String, newId: String) {
+        if (oldId == newId) return
+        _threads.update { m ->
+            val old = m[oldId] ?: return@update m
+            val cur = m[newId]
+            val merged = if (cur == null) old else cur.copy(
+                messages = old.messages + cur.messages,
+                teamHour = cur.teamHour ?: old.teamHour,
+                peerLastSeen = listOfNotNull(old.peerLastSeen, cur.peerLastSeen).maxOrNull(),
+                unread = old.unread || cur.unread,
+                buzzed = old.buzzed || cur.buzzed,
+                decoyErase = old.decoyErase || cur.decoyErase,
+            )
+            m - oldId + (newId to merged)
         }
     }
 

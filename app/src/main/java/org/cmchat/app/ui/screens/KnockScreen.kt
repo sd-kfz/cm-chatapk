@@ -23,7 +23,8 @@ import org.cmchat.app.ui.theme.*
 @Composable
 fun KnockScreen(
     myCmId: String?,
-    onSend: (cmId: String, nickname: String) -> Unit,
+    /** Returns null when the friend was added (knock queued), else an error to show. */
+    onSend: (cmId: String, nickname: String) -> String?,
     onBack: () -> Unit,
     onShowMyQr: () -> Unit = {},
 ) {
@@ -31,8 +32,30 @@ fun KnockScreen(
     var nickname by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
 
+    var scanned by remember { mutableStateOf(false) }
+    // The scan result feeds straight into the add flow (validated right away).
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
-        result.contents?.let { cmId = it.trim() }
+        val raw = result.contents?.trim() ?: return@rememberLauncherForActivityResult   // cancelled
+        if (CmId.decode(raw) != null) {
+            cmId = raw; scanned = true; error = null
+            org.cmchat.app.diag.ConnDiag.sys("Add friend: QR scanned (valid CMC-ID)")
+        } else {
+            error = "That QR isn't a CM-Chat ID"
+            org.cmchat.app.diag.ConnDiag.sys("Add friend: scanned QR was not a CMC-ID")
+        }
+    }
+    fun openScanner() {
+        // We're opening the scanner ourselves: don't treat it as leaving the app
+        // (that re-lock is what made scanning re-ask the PIN and lose the result).
+        org.cmchat.app.LifecycleController.expectOwnLaunch()
+        scanLauncher.launch(
+            ScanOptions()
+                .setCaptureActivity(org.cmchat.app.ui.QrScanActivity::class.java)
+                .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                .setOrientationLocked(true)
+                .setBeepEnabled(false)
+                .setPrompt("Point at your friend's CM-Chat QR")
+        )
     }
 
     Column(Modifier.fillMaxSize().background(CmBackground)) {
@@ -49,13 +72,13 @@ fun KnockScreen(
                 focusedTextColor = CmText, unfocusedTextColor = CmText, cursorColor = CmBlue,
             )
             OutlinedTextField(
-                value = cmId, onValueChange = { cmId = it; error = null },
+                value = cmId, onValueChange = { cmId = it; error = null; scanned = false },
                 label = { Text("Their CMC-ID (cmc1:…)", color = CmTextDim) },
                 singleLine = false, colors = colors, modifier = Modifier.fillMaxWidth(),
             )
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Box(Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).background(CmCard)
-                    .clickable { scanLauncher.launch(ScanOptions().setOrientationLocked(true)) }
+                    .clickable { openScanner() }
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                     contentAlignment = Alignment.Center) {
                     Text("Scan their QR", color = CmBlue, fontFamily = Nunito, fontSize = 14.sp,
@@ -74,23 +97,27 @@ fun KnockScreen(
                 label = { Text("Nickname for them", color = CmTextDim) },
                 singleLine = true, colors = colors, modifier = Modifier.fillMaxWidth(),
             )
+            if (scanned && error == null) {
+                Text("✓ Scanned. Pick a nickname, then tap Add friend.", color = CmGreen,
+                    fontFamily = Nunito, fontSize = 13.sp)
+            }
             error?.let { Text(it, color = CmRed, fontFamily = Nunito, fontSize = 13.sp) }
 
             Box(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(CmOrange)
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(CmBlue)
                     .clickable {
                         val id = cmId.trim()
                         when {
                             CmId.decode(id) == null -> error = "That doesn't look like a CMC-ID"
                             myCmId != null && id == myCmId -> error = "That's your own ID 🙂"
                             nickname.isBlank() -> error = "Pick a nickname"
-                            else -> onSend(id, nickname.trim())
+                            else -> onSend(id, nickname.trim())?.let { error = it }
                         }
                     }
                     .padding(vertical = 13.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("Send Knock", color = androidx.compose.ui.graphics.Color.White,
+                Text("Add friend", color = CmBackground,
                     fontFamily = Nunito, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
             }
         }

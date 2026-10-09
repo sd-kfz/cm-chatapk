@@ -28,7 +28,6 @@ import kotlin.math.roundToInt
 import org.cmchat.app.chat.ChatMessage
 import org.cmchat.app.chat.ChatStore
 import org.cmchat.app.chat.LastSeen
-import org.cmchat.app.chat.MsgState
 import org.cmchat.app.chat.SelfTimer
 import org.cmchat.app.chat.displayLabel
 import org.cmchat.app.transport.MessageService
@@ -58,7 +57,6 @@ fun ChatScreen(
     var input by remember { mutableStateOf("") }
     var selfTimer by remember { mutableStateOf(SelfTimer.OFF) }
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
-    val retryReadyAt = remember { mutableStateMapOf<String, Long>() }
     val context = LocalContext.current
 
     LaunchedEffect(Unit) {
@@ -80,8 +78,9 @@ fun ChatScreen(
         }
         onDispose {
             if (MessageService.activeChatCmId == chatCmId) MessageService.activeChatCmId = null
-            // Leaving the chat burns any view-once message that has been seen.
-            ChatStore.burnViewOnce(chatId)
+            // Leaving the chat burns any view-once message that has been seen, and
+            // erases the chat if a friend's decoy notice was shown in it.
+            ChatStore.leaveChat(chatId)
         }
     }
 
@@ -226,18 +225,13 @@ fun ChatScreen(
                 // prompt below); nothing of them is revealed yet.
                 if (invisible && m.missed) continue
                 when {
-                    m.alert -> Text("${m.text}  ·  ${stamp(m.createdAt)}", color = CmRedGlow, fontFamily = Nunito,
-                        fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                    // Small italic-bold alert line where the next message would be.
+                    m.alert -> Text(m.text, color = CmRedGlow, fontFamily = Nunito,
+                        fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
                         modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                     m.system -> Text(m.text, color = CmTextFaint, fontFamily = Nunito, fontSize = 12.sp,
                         modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                    m.mine && m.state == MsgState.OFFLINE -> OfflineBubble(m, now, retryReadyAt[m.id]) {
-                        val ready = retryReadyAt[m.id]?.let { now >= it } ?: true
-                        if (ready && chatCmId != null) {
-                            MessageService.retry(chatCmId, m.id, m.text, m.selfTimer)
-                            retryReadyAt[m.id] = now + 30_000L
-                        }
-                    }
                     else -> Bubble(m)
                 }
             }
@@ -340,10 +334,6 @@ private fun countdown(ms: Long): String {
     val secs = (ms / 1000).coerceAtLeast(0)
     return if (secs >= 3600) "${secs / 3600}h${(secs % 3600) / 60}m" else "${secs / 60}m${secs % 60}s"
 }
-
-/** Local date+time for an alert line, e.g. "9 Oct 14:05". */
-private fun stamp(ms: Long): String =
-    java.text.SimpleDateFormat("d MMM HH:mm", java.util.Locale.getDefault()).format(java.util.Date(ms))
 
 /** The message self-destruct timer, shown as a small pill beside the Cerberus eye. */
 @Composable
@@ -470,17 +460,3 @@ private fun Bubble(m: ChatMessage) {
     }
 }
 
-@Composable
-private fun OfflineBubble(m: ChatMessage, now: Long, readyAt: Long?, onRetry: () -> Unit) {
-    val remaining = readyAt?.let { ((it - now) / 1000).coerceAtLeast(0) } ?: 0
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-        Box(Modifier.widthIn(max = 260.dp).clip(RoundedCornerShape(16.dp))
-            .background(CmRed.copy(alpha = 0.10f)).border(1.5.dp, CmRed, RoundedCornerShape(16.dp))
-            .clickable { onRetry() }.padding(horizontal = 14.dp, vertical = 10.dp)) {
-            Text(
-                if (remaining > 0) "Offline. Retry in ${remaining}s" else "Offline. Retry?",
-                color = CmRed, fontFamily = Nunito, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
-            )
-        }
-    }
-}

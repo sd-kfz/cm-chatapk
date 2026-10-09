@@ -44,5 +44,8 @@ object ToolsState {
 
     fun anyEnabled(): Boolean = calcEnabled.value || notesEnabled.value || flashlightEnabled.value
 
+    /** Is there anything in Notes that an Exit would erase? */
+    fun hasContent(): Boolean = notes.value.isNotBlank() || checks.value.isNotEmpty()
+
     fun clear() { notes.value = ""; checks.value = emptyList() }
 }

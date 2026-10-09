@@ -16,6 +16,7 @@ import androidx.compose.foundation.horizontalScroll
 import kotlin.math.roundToInt
 import org.cmchat.app.chat.displayLabel
 import org.cmchat.app.vault.LoginThrottle
+import org.cmchat.app.vault.VaultManager
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -106,10 +107,10 @@ fun SettingsScreen(
             GroupHeader("Privacy & Safety 🔒")
             if (!privacyUnlocked) {
                 Setting(
-                    if (privacyPinSet) "Unlock Privacy & Safety" else "Set a Privacy PIN (4-8 digits)",
+                    if (privacyPinSet) "Unlock Privacy & Safety" else "Set a Privacy PIN",
                     if (privacyPinSet) "🔒 locked" else "set up",
                     onClick = { askMode = if (privacyPinSet) PinMode.UNLOCK else PinMode.SET },
-                    hint = "Guards the server, stealth, wipe and passcode settings.",
+                    hint = "Guards the server, stealth, wipe and PIN settings.",
                 )
             } else {
                 CerberusRow(onCerberusChange)
@@ -127,8 +128,8 @@ fun SettingsScreen(
                 Setting("Keep engine running in background", onClick = onIgnoreBattery,
                     hint = "Ask Android not to sleep the engine so messages still arrive.")
                 SessionWindowRow(onSessionWindow)
-                Setting("Change PIN (app passcode)", onClick = { showChangePin = true },
-                    hint = "Change the passcode that unlocks the app.")
+                Setting("Change app PIN", onClick = { showChangePin = true },
+                    hint = "Change the PIN that unlocks the app.")
                 Setting("Change Privacy PIN", onClick = { askMode = PinMode.CHANGE },
                     hint = "Enter the current PIN, then set a new one.")
                 Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
@@ -297,7 +298,7 @@ private fun SessionWindowRow(onChange: (Boolean) -> Unit) {
         .padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text("Stay unlocked for 6h", color = CmText, fontFamily = Nunito, fontSize = 14.sp)
-            Text("Don't re-ask the passcode for 6h after unlocking (this run only).",
+            Text("Don't re-ask the PIN for 6h after unlocking (this run only).",
                 color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp)
         }
         Text(if (on) "On" else "Off", color = if (on) CmGreen else CmTextDim,
@@ -316,11 +317,12 @@ private fun GroupHeader(title: String) {
 enum class PinMode { UNLOCK, SET, CHANGE }
 
 /**
- * A real digital-lock for the privacy PIN (not a plain text field):
- *  - masked numeric entry;
+ * A real lock for the privacy PIN (not a plain text field):
+ *  - masked entry: numbers, letters or symbols, 4–56 (older all-digit PINs
+ *    still work), with a strength hint while creating one;
  *  - SET / CHANGE require enter + confirm, with a clear mismatch error;
- *  - verifying the current PIN (UNLOCK / CHANGE / REMOVE) applies the same
- *    escalating lockout as the login screen ([LoginThrottle]);
+ *  - verifying the current PIN (UNLOCK / CHANGE) applies the same escalating
+ *    lockout as the login screen ([LoginThrottle]);
  *  - distinct Set / Change actions (no Remove — the PIN can't be turned off).
  */
 @Composable
@@ -362,8 +364,9 @@ private fun PrivacyPinDialog(
                 }
             }
             "new" -> {
-                if (v.length in 4..8) { newPin = v; entry = ""; err = null; phase = "confirm" }
-                else err = "Use 4 to 8 digits"
+                if (v.length in VaultManager.MIN_PASSCODE..VaultManager.MAX_PASSCODE) {
+                    newPin = v; entry = ""; err = null; phase = "confirm"
+                } else err = "Use 4 to 56 characters"
             }
             "confirm" -> {
                 if (v == newPin) { onSetNew(v); onPass() }
@@ -375,8 +378,8 @@ private fun PrivacyPinDialog(
     val title = when {
         phase == "current" && mode == PinMode.UNLOCK -> "Unlock Privacy & Safety"
         phase == "current" && mode == PinMode.CHANGE -> "Enter current PIN"
-        phase == "new" -> "Choose a new PIN (4-8 digits)"
-        phase == "confirm" -> "Re-enter the new PIN"
+        phase == "new" -> "Create a Privacy PIN"
+        phase == "confirm" -> "Confirm the Privacy PIN"
         else -> "Privacy PIN"
     }
 
@@ -387,13 +390,18 @@ private fun PrivacyPinDialog(
             Column {
                 OutlinedTextField(
                     value = entry,
-                    onValueChange = { v -> if (lockedFor <= 0) { entry = v.filter { it.isDigit() }.take(8); err = null } },
+                    onValueChange = { v -> if (lockedFor <= 0) { entry = v.take(VaultManager.MAX_PASSCODE); err = null } },
                     singleLine = true,
                     enabled = lockedFor <= 0,
                     visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                        keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword),
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Password),
                 )
+                if (phase == "new") {
+                    Text("Numbers, letters or symbols · 4 to 56", color = CmTextDim, fontFamily = Nunito,
+                        fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                    PinStrengthHint(entry)
+                }
                 if (lockedFor > 0) {
                     Text("Too many tries — wait " + LoginThrottle.format(lockedFor),
                         color = CmRed, fontFamily = Nunito, fontSize = 12.sp)
@@ -415,8 +423,8 @@ private fun PrivacyPinDialog(
 }
 
 /**
- * Change the VAULT passcode (the one that unlocks the app) — distinct from the
- * numeric Privacy PIN above. Flow: verify current → choose new → confirm. Both
+ * Change the app PIN (the vault passcode that unlocks the app) — distinct from
+ * the Privacy PIN above. Flow: verify current → choose new → confirm. Both
  * the verify and the re-encrypt run Argon2id, so they go through async callbacks
  * ([verifyCurrent]/[onChange] hand back the result on the main thread) and the
  * dialog shows "Working…" while they run. The new passcode is validated with the
@@ -455,14 +463,14 @@ private fun ChangePinDialog(
                     else {
                         wrongCount += 1
                         lockedFor = LoginThrottle.delaySeconds(wrongCount)
-                        entry = ""; err = "Wrong passcode"
+                        entry = ""; err = "Wrong PIN"
                     }
                 }
             }
             "new" -> when {
                 !org.cmchat.app.vault.VaultManager.isValidNewPin(entry) ->
-                    err = "4–56 characters, not a palindrome"
-                entry == current -> err = "Choose a different passcode"
+                    err = "Use 4 to 56 characters, not the same backwards"
+                entry == current -> err = "Choose a different PIN"
                 else -> { newPin = entry; entry = ""; err = null; phase = "confirm" }
             }
             "confirm" -> {
@@ -473,7 +481,7 @@ private fun ChangePinDialog(
                     onChange(current, newPin) { ok ->
                         working = false
                         if (ok) onDone()
-                        else { err = "Could not change passcode"; entry = ""; newPin = ""; phase = "new" }
+                        else { err = "Could not change the PIN"; entry = ""; newPin = ""; phase = "new" }
                     }
                 }
             }
@@ -481,9 +489,9 @@ private fun ChangePinDialog(
     }
 
     val title = when (phase) {
-        "current" -> "Enter current passcode"
-        "new" -> "Choose a new passcode"
-        else -> "Re-enter the new passcode"
+        "current" -> "Enter your current PIN"
+        "new" -> "Create a new PIN"
+        else -> "Confirm the new PIN"
     }
 
     AlertDialog(
@@ -500,6 +508,11 @@ private fun ChangePinDialog(
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                         keyboardType = androidx.compose.ui.text.input.KeyboardType.Password),
                 )
+                if (phase == "new" && !working) {
+                    Text("Numbers, letters or symbols · 4 to 56", color = CmTextDim, fontFamily = Nunito,
+                        fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                    PinStrengthHint(entry)
+                }
                 when {
                     working -> Text("Working…", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
                     lockedFor > 0 -> Text("Too many tries — wait " + LoginThrottle.format(lockedFor),
@@ -520,7 +533,8 @@ private fun ChangePinDialog(
 private fun ShredderRow() {
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CmCard).padding(14.dp)) {
         Text("Shredder PIN", color = CmText, fontFamily = Nunito, fontSize = 14.sp)
-        Text("Entering your PIN reversed silently wipes all data back to first-run.",
+        Text("Your PIN typed backwards at the lock screen silently erases everything; the app " +
+            "then only shows an error until it's restarted.",
             color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp)
     }
 }

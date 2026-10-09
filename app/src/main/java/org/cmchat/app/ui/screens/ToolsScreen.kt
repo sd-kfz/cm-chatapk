@@ -8,7 +8,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -16,6 +18,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
@@ -78,8 +82,9 @@ private fun CalculatorUi() {
             .padding(horizontal = 20.dp, vertical = 28.dp), contentAlignment = Alignment.CenterEnd) {
             if (hasMem) Text("M", color = CmOrange, fontFamily = Nunito, fontSize = 14.sp,
                 modifier = Modifier.align(Alignment.CenterStart))
-            Text(display, color = CmText, fontFamily = Nunito, fontSize = 40.sp,
-                fontWeight = FontWeight.Bold, maxLines = 1)
+            // Always ONE line: a long number shrinks until every digit fits
+            // (never wraps with the last digit under the first).
+            FitOneLine(display, Modifier.fillMaxWidth().padding(start = 18.dp))
         }
         Spacer(Modifier.height(16.dp))
 
@@ -103,6 +108,30 @@ private fun CalculatorUi() {
                 }
             }
         }
+    }
+}
+
+/** Right-aligned, single-line text that scales its font down (40sp → 14sp) to fit. */
+@Composable
+private fun FitOneLine(text: String, modifier: Modifier, max: TextUnit = 40.sp, min: TextUnit = 14.sp) {
+    val measurer = rememberTextMeasurer()
+    BoxWithConstraints(modifier, contentAlignment = Alignment.CenterEnd) {
+        val avail = constraints.maxWidth
+        val size = remember(text, avail) {
+            fun width(sp: Float) = measurer.measure(text,
+                TextStyle(fontFamily = Nunito, fontSize = sp.sp, fontWeight = FontWeight.Bold),
+                maxLines = 1, softWrap = false).size.width
+            var sp = max.value
+            val w = width(sp)
+            if (w > avail && w > 0) {
+                // Text width scales ~linearly with font size: jump close, then step down.
+                sp = (sp * avail / w).coerceIn(min.value, max.value)
+                while (sp > min.value && width(sp) > avail) sp -= 1f
+            }
+            sp.sp
+        }
+        Text(text, color = CmText, fontFamily = Nunito, fontSize = size, fontWeight = FontWeight.Bold,
+            maxLines = 1, softWrap = false, textAlign = TextAlign.End)
     }
 }
 
@@ -151,18 +180,45 @@ private fun CalcKey(label: String, modifier: Modifier, onClick: () -> Unit) {
 private fun NotesUi() {
     val notes by ToolsState.notes.collectAsState()
     val checks by ToolsState.checks.collectAsState()
+    // GUARD: notes are only ever cleared after an explicit confirmation.
+    var confirmClear by remember { mutableStateOf(false) }
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text("Clear your notes?") },
+            text = { Text("This erases the scratchpad and the checklist. It can't be undone.") },
+            confirmButton = {
+                TextButton(onClick = { ToolsState.clear(); confirmClear = false }) { Text("Clear", color = CmRed) }
+            },
+            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Keep") } },
+        )
+    }
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("RAM only — cleared when the app closes.", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("RAM only — kept while the app runs, gone when it closes.", color = CmTextDim,
+                fontFamily = Nunito, fontSize = 12.sp, modifier = Modifier.weight(1f))
+            if (notes.isNotEmpty() || checks.isNotEmpty()) {
+                Text("Clear…", color = CmRed, fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { confirmClear = true }
+                        .padding(horizontal = 8.dp, vertical = 4.dp))
+            }
+        }
 
-        Box(Modifier.fillMaxWidth().heightIn(min = 120.dp)
+        // The scratchpad takes the free space and SCROLLS inside itself, so a
+        // long note never grows off the screen and no line is ever lost.
+        Box(Modifier.fillMaxWidth().weight(1f)
             .clip(RoundedCornerShape(12.dp)).background(CmCard).padding(12.dp)) {
             if (notes.isEmpty()) Text("Scratchpad…", color = CmTextDim, fontFamily = Nunito, fontSize = 15.sp)
             BasicTextField(
                 value = notes,
                 onValueChange = { if (it.length <= ToolsState.MAX_NOTES_CHARS) ToolsState.notes.value = it },
                 textStyle = TextStyle(color = CmText, fontFamily = Nunito, fontSize = 15.sp),
-                cursorBrush = SolidColor(CmBlue), modifier = Modifier.fillMaxWidth(),
+                cursorBrush = SolidColor(CmBlue), modifier = Modifier.fillMaxSize(),
             )
+        }
+        if (notes.length > ToolsState.MAX_NOTES_CHARS * 9 / 10) {
+            Text("${notes.length} / ${ToolsState.MAX_NOTES_CHARS} characters", color = CmOrange,
+                fontFamily = Nunito, fontSize = 11.sp)
         }
 
         val atMax = checks.size >= ToolsState.MAX_CHECKS
@@ -175,7 +231,8 @@ private fun NotesUi() {
                 fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
         }
 
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Bounded too (scrolls), so the checklist never pushes the scratchpad away.
+        LazyColumn(Modifier.heightIn(max = 220.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(checks, key = { it.id }) { item ->
                 Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(CmCard)
                     .padding(12.dp), verticalAlignment = Alignment.CenterVertically) {

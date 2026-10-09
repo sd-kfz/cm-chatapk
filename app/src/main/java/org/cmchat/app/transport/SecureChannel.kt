@@ -320,9 +320,9 @@ object SecureWire {
 
     /**
      * Sender: fetch + verify a one-time prekey, then send ONE forward-secret
-     * frame. Throws on any failure (the caller marks the message OFFLINE so it
-     * never fails silently). [onVersionMismatch] fires if the peer answers with a
-     * different wire version.
+     * frame. Throws on any failure (the caller's silent outbox retries it later;
+     * nothing on screen changes). [onVersionMismatch] fires if the peer answers
+     * with a different wire version.
      */
     fun send(
         ch: SecureChannel, input: InputStream, output: OutputStream,

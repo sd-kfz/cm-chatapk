@@ -36,10 +36,20 @@ object SelfTest {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     @Volatile private var job: Job? = null
+    /** Mashing "Run self-test" can't queue runs back to back. */
+    @Volatile private var lastRunMs = 0L
+    private const val MIN_INTERVAL_MS = 30_000L
 
+    /** ms until another run is accepted (0 = now). */
+    fun cooldownMs(now: Long = System.currentTimeMillis()): Long =
+        if (job?.isActive == true) MIN_INTERVAL_MS else (lastRunMs + MIN_INTERVAL_MS - now).coerceAtLeast(0)
+
+    @Synchronized
     fun run(context: Context) {
         if (!BuildConfig.DEBUG) return
         if (job?.isActive == true) return
+        if (System.currentTimeMillis() - lastRunMs < MIN_INTERVAL_MS) return
+        lastRunMs = System.currentTimeMillis()
         val app = context.applicationContext
         job = scope.launch {
             SelfTestLog.running.value = true
@@ -50,6 +60,7 @@ object SelfTest {
             runCatching { abusePin(app) }.onFailure { crash("PIN / unlock abuse", it) }
             runCatching { forwardSecrecyLoopback(app) }.onFailure { crash("forward secrecy loopback", it) }
             SelfTestLog.record("Self-test", "finished", Severity.INFO)
+            lastRunMs = System.currentTimeMillis()   // the cooldown counts from the END
             SelfTestLog.running.value = false
         }
     }
@@ -200,18 +211,29 @@ object SelfTest {
         val threadsBefore = Thread.activeCount()
         val invisible = org.cmchat.app.settings.AppSettings.invisibleMode
         val before = invisible.value
+        // NEVER touch a live server: stopping / rotating it here would take the
+        // user offline (or move their address without telling friends).
+        val live = org.cmchat.app.tor.ServerController.status.value.let {
+            it is org.cmchat.app.tor.ServerStatus.Online || it is org.cmchat.app.tor.ServerStatus.Starting
+        }
         repeat(100) {
             invisible.value = !invisible.value
-            runCatching { org.cmchat.app.tor.ServerController.stop() }
-            runCatching { org.cmchat.app.tor.ServerController.requestNewAddress {} } // debounced
+            if (!live) {
+                runCatching { org.cmchat.app.tor.ServerController.stop() }
+                runCatching { org.cmchat.app.tor.ServerController.requestNewAddress {} } // debounced
+            }
         }
         invisible.value = before
         delay(300)
+        if (live) {
+            SelfTestLog.record("lifecycle: rapid stop/rotate",
+                "skipped — your server is live and the self-test never touches it", Severity.INFO)
+        }
         val grew = Thread.activeCount() - threadsBefore
         // Off or Failed are both fine here (there is no real Tor in the test);
         // only a stuck Starting/Online or a crash would be wrong.
         val st = org.cmchat.app.tor.ServerController.status.value
-        val statusSane = st is org.cmchat.app.tor.ServerStatus.Off ||
+        val statusSane = live || st is org.cmchat.app.tor.ServerStatus.Off ||
             st is org.cmchat.app.tor.ServerStatus.Failed
         when {
             !statusSane -> SelfTestLog.record("lifecycle: rapid stop/rotate",

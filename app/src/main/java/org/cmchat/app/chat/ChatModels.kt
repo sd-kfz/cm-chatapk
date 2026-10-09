@@ -1,12 +1,12 @@
 package org.cmchat.app.chat
 
 /**
- * Local-only send state. There are NO delivery/read receipts (dropped): a peer
- * never tells us "delivered" or "read". SENDING/SENT/OFFLINE are purely our own
- * knowledge of whether the outbound socket write succeeded, used only for the
- * offline/retry affordance — never shown as a receipt.
+ * Local-only send state, NEVER shown on screen. There are no delivery/read
+ * receipts, and no "offline / retry" either (that would reveal whether a friend
+ * is online): SENDING = queued in the silent Outbox, SENT = handed over to the
+ * friend's phone. Used internally only (e.g. view-once removes my copy on SENT).
  */
-enum class MsgState { SENDING, SENT, OFFLINE }
+enum class MsgState { SENDING, SENT }
 
 /**
  * Self-destruct durations, shared by the per-message timer and the general

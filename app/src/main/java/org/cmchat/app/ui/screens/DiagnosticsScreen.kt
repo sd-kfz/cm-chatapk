@@ -10,6 +10,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -82,17 +86,23 @@ private fun SelfTestSection() {
     val ctx = LocalContext.current
     val findings by SelfTestLog.findings.collectAsState()
     val running by SelfTestLog.running.collectAsState()
+    // Disabled while running AND for a short cooldown after, so mashing the
+    // button can't queue runs back to back (SelfTest.run enforces it too).
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) { while (true) { now = System.currentTimeMillis(); kotlinx.coroutines.delay(1000) } }
+    val waitS = ((SelfTest.cooldownMs(now) + 999) / 1000).toInt()
+    val canRun = !running && waitS == 0
 
     Spacer(Modifier.height(10.dp))
     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Text("Self-Test", color = CmOrange, fontFamily = Nunito, fontSize = 13.sp,
             fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-        Box(Modifier.clip(RoundedCornerShape(10.dp)).background(if (running) CmCard else CmBlue)
-            .clickable(enabled = !running) { SelfTest.run(ctx) }
+        Box(Modifier.clip(RoundedCornerShape(10.dp)).background(if (canRun) CmBlue else CmCard)
+            .clickable(enabled = canRun) { SelfTest.run(ctx); now = System.currentTimeMillis() }
             .padding(horizontal = 12.dp, vertical = 6.dp)) {
-            Text(if (running) "Running…" else "Run self-test",
-                color = if (running) CmTextDim else CmBackground,
+            Text(when { running -> "Running…"; waitS > 0 -> "Again in ${waitS}s"; else -> "Run self-test" },
+                color = if (canRun) CmBackground else CmTextDim,
                 fontFamily = Nunito, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
         }
         if (findings.isNotEmpty()) {

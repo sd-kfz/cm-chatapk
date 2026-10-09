@@ -35,10 +35,18 @@ fun MyServerScreen(
     val scope = rememberCoroutineScope()
     var selfTest by remember { mutableStateOf<String?>(null) }
 
+    // Ticks every second: uptime, and the cooldowns that keep the buttons from
+    // being mashed into a storm of publishes / rotations / Tor probes.
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(server) {
-        while (server is ServerStatus.Online) { now = System.currentTimeMillis(); delay(1000) }
+    LaunchedEffect(Unit) {
+        while (true) { now = System.currentTimeMillis(); delay(1000) }
     }
+    val starting = server is ServerStatus.Starting
+    val online = server is ServerStatus.Online
+    val restartWait = secs(ServerController.restartCooldownMs(now))
+    val rotateWait = secs(ServerController.rotateCooldownMs(now))
+    val testWait = secs(ServerController.selfTestCooldownMs(now))
+    val testing = ServerController.selfTestRunning()
 
     Column(Modifier.fillMaxSize().background(CmBackground)) {
         Box(Modifier.fillMaxWidth().padding(16.dp)) {
@@ -62,11 +70,11 @@ fun MyServerScreen(
                 .background(CmCard).padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            val online = server as? ServerStatus.Online
+            val live = server as? ServerStatus.Online
             Text("Onion address", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
-            Text(online?.onion ?: "—", color = CmText, fontFamily = Nunito, fontSize = 13.sp)
-            Text("Tag: ${online?.faceName ?: "—"}", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
-            val uptime = online?.let { formatUptime(now - it.sinceMs) } ?: "—"
+            Text(live?.onion ?: "—", color = CmText, fontFamily = Nunito, fontSize = 13.sp)
+            Text("Tag: ${live?.faceName ?: "—"}", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
+            val uptime = live?.let { formatUptime(now - it.sinceMs) } ?: "—"
             Text("Uptime: $uptime", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
             (server as? ServerStatus.Failed)?.let {
                 Text("Error: ${it.reason}", color = CmRed, fontFamily = Nunito, fontSize = 12.sp,
@@ -76,17 +84,34 @@ fun MyServerScreen(
 
         Spacer(Modifier.height(16.dp))
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            ServerButton("Start", CmGreen, Modifier.weight(1f)) { onStart() }
-            ServerButton("Stop", CmRed, Modifier.weight(1f)) { onStop() }
-            ServerButton("Restart", CmBlue, Modifier.weight(1f)) { onRestart() }
+            // Start only when nothing is running; Stop only when something is;
+            // Restart never while a publish is in flight (and 10 s apart).
+            ServerButton(if (starting) "Starting…" else "Start", CmGreen, Modifier.weight(1f),
+                enabled = !starting && !online) { onStart(); now = System.currentTimeMillis() }
+            ServerButton("Stop", CmRed, Modifier.weight(1f),
+                enabled = server !is ServerStatus.Off) { onStop(); now = System.currentTimeMillis() }
+            ServerButton(if (restartWait > 0) "Restart ${restartWait}s" else "Restart", CmBlue, Modifier.weight(1f),
+                enabled = !starting && restartWait == 0) { onRestart(); now = System.currentTimeMillis() }
         }
         Spacer(Modifier.height(10.dp))
         Box(Modifier.padding(horizontal = 16.dp)) {
-            ServerButton("Self-test (reach my own server)", CmCard, Modifier.fillMaxWidth(), textColor = CmText) {
+            ServerButton(
+                when {
+                    testing -> "Testing…"
+                    testWait > 0 -> "Self-test (again in ${testWait}s)"
+                    else -> "Self-test (reach my own server)"
+                },
+                CmCard, Modifier.fillMaxWidth(), textColor = CmText,
+                enabled = online && !testing && testWait == 0,
+            ) {
                 selfTest = "Testing…"
                 scope.launch {
-                    val (ok, ms) = ServerController.selfTest()
-                    selfTest = if (ok) "Reachable — ${ms}ms" else "Failed"
+                    val r = ServerController.selfTest()
+                    selfTest = when {
+                        r == null -> "Already ran just now — try again in a moment"
+                        r.first -> "Reachable — ${r.second}ms"
+                        else -> "Failed"
+                    }
                 }
             }
         }
@@ -97,8 +122,13 @@ fun MyServerScreen(
         }
         Spacer(Modifier.height(10.dp))
         Box(Modifier.padding(horizontal = 16.dp)) {
-            ServerButton("Request new address", CmCard, Modifier.fillMaxWidth(), textColor = CmOrange) {
+            ServerButton(
+                if (rotateWait > 0) "Request new address (again in ${rotateWait}s)" else "Request new address",
+                CmCard, Modifier.fillMaxWidth(), textColor = CmOrange,
+                enabled = online && rotateWait == 0,
+            ) {
                 onRequestNewAddress()
+                now = System.currentTimeMillis()
             }
         }
         Text(
@@ -120,17 +150,23 @@ private fun Step(label: String, done: Boolean) {
     }
 }
 
+/** Whole seconds left in a cooldown (0 = ready). */
+private fun secs(ms: Long): Int = ((ms + 999) / 1000).toInt()
+
 @Composable
 private fun ServerButton(
     label: String, color: androidx.compose.ui.graphics.Color, modifier: Modifier = Modifier,
-    textColor: androidx.compose.ui.graphics.Color = CmBackground, onClick: () -> Unit,
+    textColor: androidx.compose.ui.graphics.Color = CmBackground, enabled: Boolean = true, onClick: () -> Unit,
 ) {
+    // Disabled = dimmed and not tappable (no queued taps).
     Box(
-        modifier.clip(RoundedCornerShape(14.dp)).background(color).clickable { onClick() }
+        modifier.clip(RoundedCornerShape(14.dp)).background(if (enabled) color else CmCard)
+            .clickable(enabled = enabled) { onClick() }
             .padding(vertical = 12.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, color = textColor, fontFamily = Nunito, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        Text(label, color = if (enabled) textColor else CmTextFaint, fontFamily = Nunito, fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

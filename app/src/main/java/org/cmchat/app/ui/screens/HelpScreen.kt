@@ -35,24 +35,29 @@ fun HelpScreen(onBack: () -> Unit) {
             .padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
 
             Section("1 · Setting up")
-            Entry("Your passcode (very important)", "It's the only key — there is NO reset and NO recovery. " +
-                "Use 4 to 56 characters, any mix of letters, digits and symbols; 8 or more is much stronger. " +
-                "It can't read the same backwards, because your passcode typed backwards is the Shredder.")
+            Entry("Your PIN (very important)", "It's the only key — there is NO reset and NO recovery. " +
+                "Use 4 to 56 characters: numbers, letters or symbols; 8 or more is much stronger. " +
+                "It can't read the same backwards, because your PIN typed backwards is the Shredder.")
             Entry("The Engine", "Connects you over the Tor network. The first start can take 1–3 minutes. " +
                 "If your Wi-Fi or mobile data changes, it reconnects by itself.")
             Entry("Your nickname and ID", "Your nickname is what friends see when you add them. Your address " +
                 "(CMC-ID) and QR code are in Settings → My identity.")
 
             Section("2 · Adding friends")
-            Entry("Add a friend", "Tap the cyan + and choose Add friend. Show your QR code or scan theirs. " +
-                "You each add the other once (each sends a knock, each accepts). Both Engines must be online.")
-            Entry("Knocks", "A friend request arrives as a \"Knock\" card on the Friends screen — Accept or Decline.")
+            Entry("Add a friend", "Tap the cyan + and choose Add friend. Scan their QR (or paste their " +
+                "CMC-ID), pick a nickname and tap Add friend. They show as \"Waiting for them to accept\" until " +
+                "they do. Only ONE of you needs to add the other. It keeps trying quietly in the background, " +
+                "so it lands once both Engines are online.")
+            Entry("Knocks", "A friend request arrives as a \"Knock\" card on the Friends screen — Accept or " +
+                "Decline. A first knock gets through even while you're Invisible. A declined person can't " +
+                "knock again for an hour.")
             Entry("QR codes", "Everything happens on the phone. The camera is only used while you're scanning.")
 
             Section("3 · Messaging")
             Entry("Sending", "Every message gets brand-new one-time keys, so even someone who later steals " +
                 "the phone and its keys can't read messages they recorded earlier (forward secrecy). There are " +
-                "never delivery or read receipts.")
+                "never delivery or read receipts. If your friend is offline, the message waits quietly and goes " +
+                "out when they're back (while your app is running) — nothing on screen shows whether they're online.")
             Entry("Disappear", "Under \"Disappear\" pick: Off, Single Message (view once — gone the moment " +
                 "it's read), or 30s / 5m / 30m / 1h after it's seen. The small timer pill next to the Cerberus " +
                 "eye shows the timer your next message gets. A timer for ALL messages is in Settings → Chats.")
@@ -61,8 +66,8 @@ fun HelpScreen(onBack: () -> Unit) {
             Entry("Buzz", "A nudge with no text: long-press a friend, or ⚡ Buzz in the chat. Their screen " +
                 "shakes and a BLUE dot stays on your name until they open your chat. It can reach them even " +
                 "when their app is closed (if they allow it).")
-            Entry("Erase a chat", "\"Erase\" clears the conversation on your phone instantly and asks your " +
-                "friend's phone to erase it too. That part is best-effort: it only works if they're online.")
+            Entry("Erase a chat", "\"Erase\" clears the conversation on your phone instantly and erases it on " +
+                "your friend's phone as soon as that reaches them (while your app is running).")
 
             Section("4 · Presence")
             Entry("Online and Invisible", "You always start Invisible. Tap \"Me:\" on the Friends screen to switch. " +
@@ -74,16 +79,16 @@ fun HelpScreen(onBack: () -> Unit) {
                 "symbol exits: it stops everything, clears memory and logs you out.")
 
             Section("5 · Privacy and panic buttons")
-            Entry("Privacy & Safety", "Sensitive settings (server, stealth, guardians, passcode, wipe) sit " +
-                "behind a separate Privacy PIN. It can be changed but never turned off.")
+            Entry("Privacy & Safety", "Sensitive settings (server, stealth, guardians, PIN, wipe) sit " +
+                "behind a separate Privacy PIN. It's mandatory: you can change it, but never turn it off.")
             Entry("Cerberus", "Idle auto-wipe: if the app goes untouched for the time you choose (15 min–3 h), " +
                 "it clears memory, stops the Engine and closes. Your vault stays.")
             Entry("Kill Timer", "A countdown you arm; at zero it does the same as Cerberus.")
-            Entry("Decoy chat", "A fake friend. Tapping it instantly wipes your chats from memory, warns every " +
-                "friend with a red \"Decoy chat tripped.\" line (their copy is NOT deleted), moves you to a new " +
-                "address, and locks the app.")
-            Entry("Shredder", "Type your passcode BACKWARDS at the lock screen: everything is silently erased " +
-                "and the app only says \"Error: please restart the app.\"")
+            Entry("Decoy chat", "A fake friend. Tapping it instantly wipes your chats from memory, moves you " +
+                "to a new address and locks the app. Each friend sees \"Decoy chat triggered — chat erased.\" " +
+                "in your chat; their copy is erased once they leave it.")
+            Entry("Shredder", "Type your PIN BACKWARDS at the lock screen: everything is silently erased " +
+                "and the app only says \"Error. Please restart the app.\"")
             Entry("Wipe Everything", "Settings → Privacy & Safety. Erases all app data, then opens Android's " +
                 "uninstall prompt so the app itself can be removed too.")
             Entry("Bridges and cover traffic", "Bridges hide from your network that you use Tor (slower). " +
