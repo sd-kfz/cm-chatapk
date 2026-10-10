@@ -485,4 +485,31 @@ class SelfAttackTest {
         assertTrue("no junk became a contact or request", MessageService.incomingKnocks.value.isEmpty())
         assertTrue("nothing escaped a handler: $escaped", escaped.isEmpty())
     }
+
+    // ======================= H1: Exit leaves zero key material =================
+
+    @Test
+    fun exit_wipes_every_key_from_ram() {
+        // A live session: identity in RAM, a friend configured, a real message
+        // received over the wire (so a channel, the friend table and chat content
+        // all exist in RAM — the exact state a seizure would try to read).
+        val bob = Friend('b')
+        configureAlice(listOf(bob))
+        assertEquals(Ack.OK, bob.text("m1", "sensitive"))
+        waitUntil("Bob's message shown") { messagesFrom(bob).any { it.text == "sensitive" } }
+        assertTrue("keys are in RAM while the app is open", MessageService.keysInRam())
+        assertTrue("the friend is in the table", MessageService.contactCount() > 0)
+
+        // Exit's RAM half (what a JVM test can run — the process-kill is device
+        // only). After it, nothing identity/message-shaped is reachable.
+        LifecycleController.dropSessionKeys()
+
+        assertFalse("no identity/channel/friend key bytes remain", MessageService.keysInRam())
+        assertEquals("the friend table is empty", 0, MessageService.contactCount())
+        assertFalse("the vault reports closed", MessageService.vaultIsOpen())
+        assertEquals("no chat content remains in RAM", 0,
+            ChatStore.threads.value.values.sumOf { t -> t.messages.size })
+        assertTrue("no pending outgoing frames remain", MessageService.outboxIsEmpty())
+        assertTrue("nothing escaped a handler: $escaped", escaped.isEmpty())
+    }
 }

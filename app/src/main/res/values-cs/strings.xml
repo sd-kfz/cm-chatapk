@@ -191,7 +191,7 @@
     <string name="help_decoy_t">Návnadový chat</string>
     <string name="help_decoy_b">Falešný přítel. Klepnutí na něj okamžitě smaže vaše chaty z paměti, přesune vás na novou adresu a zamkne aplikaci. Odešle také signál ke spálení: u každého potvrzeného přítele, který je online, se chat s vámi smaže i v jeho telefonu a uvidí „Návnadový chat spuštěn — chat smazán.“</string>
     <string name="help_cover_t">Krytí kalkulačkou</string>
-    <string name="help_cover_b">Nastavení → Soukromí a bezpečnost → Otevírat jako kalkulačku: aplikace se otevře jako funkční kalkulačka. Pro vstup klepněte 10× za sebou na stejnou klávesu (poprvé se tato klávesa stane vaší). Klepnutím 20× na „reset“ zvolíte jinou klávesu. Váš PIN stále chrání vše.</string>
+    <string name="help_cover_b">Nastavení → Soukromí a bezpečnost → Otevírat jako kalkulačku: aplikace se otevře jako funkční kalkulačka. Pro vstup klepněte 10× za sebou na stejnou klávesu (poprvé se tato klávesa stane vaší). Klepnutím 20× na „reset“ zvolíte jinou klávesu. Váš PIN stále chrání vše. Maskuje aplikaci, když je otevřená; NESKRÝVÁ CM-Chat ze seznamu aplikací na moderním Androidu.</string>
     <string name="help_shredder_t">Skartovačka</string>
     <string name="help_shredder_b">Zadejte svůj PIN POZPÁTKU na zamykací obrazovce: vše se potichu smaže a pod „Vítejte zpět“ se objeví malé červené „Chyba. Restartujte prosím aplikaci.“. Zavřete a znovu otevřete aplikaci a začne načisto (bez přeinstalace).</string>
     <string name="help_wipe_t">Vymazat vše</string>
@@ -304,7 +304,7 @@
     <string name="set_set_up">nastavit</string>
     <string name="set_privacy_pin_hint">Zamkne tuto skupinu (jen číslice).</string>
     <string name="set_cover">Otevírat jako kalkulačku (krytí)</string>
-    <string name="set_cover_hint">Otevře se jako funkční kalkulačka. Pro vstup klepněte 10× za sebou na stejnou klávesu; klepnutím 20× na „reset“ zvolíte jinou klávesu.</string>
+    <string name="set_cover_hint">Otevře se jako funkční kalkulačka. Pro vstup klepněte 10× za sebou na stejnou klávesu; klepnutím 20× na „reset“ zvolíte jinou klávesu. Maskuje aplikaci, když je otevřená; NESKRÝVÁ CM-Chat ze seznamu aplikací na moderním Androidu.</string>
     <string name="set_server_hint">Vaše vlastní adresa, ke které se přátelé připojují.</string>
     <string name="set_bridges">Utajení / Mosty (obfs4 · Snowflake)</string>
     <string name="set_bridges_hint">Skryje před vaší sítí, že používáte Tor. Může být pomalejší.</string>
@@ -416,4 +416,5 @@
     <string name="notif_buzz_channel">Buzz</string>
     <string name="notif_engine_channel">Motor</string>
     <string name="decoy_default_name">Poznámky pro sebe</string>
+    <string name="lock_passphrase_hint">Čtyřmístné PINy jsou slabší, pokud ti vezmou telefon — přístupová fráze je mnohem silnější.</string>
 </resources>

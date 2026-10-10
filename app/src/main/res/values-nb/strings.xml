@@ -191,7 +191,7 @@
     <string name="help_decoy_t">Lokkechat</string>
     <string name="help_decoy_b">En falsk venn. Trykker du på den, slettes chattene dine straks fra minnet, du flyttes til en ny adresse, og appen låses. Den sender også et brennsignal: hos hver bekreftet venn som er pålogget, slettes chatten deres også på vennens telefon, og vennen ser «Lokkechat utløst — chatten er slettet.»</string>
     <string name="help_cover_t">Kalkulatorforkledning</string>
-    <string name="help_cover_b">Innstillinger → Personvern og sikkerhet → Åpne som kalkulator: appen åpner som en fungerende kalkulator. Trykk samme tast 10 ganger på rad for å komme inn (første gang blir den tasten din). Trykk «reset» 20 ganger for å velge en annen tast. PIN-koden din beskytter fortsatt alt.</string>
+    <string name="help_cover_b">Innstillinger → Personvern og sikkerhet → Åpne som kalkulator: appen åpner som en fungerende kalkulator. Trykk samme tast 10 ganger på rad for å komme inn (første gang blir den tasten din). Trykk «reset» 20 ganger for å velge en annen tast. PIN-koden din beskytter fortsatt alt. Dette forkler appen mens den er åpen; det skjuler IKKE CM-Chat fra app-listen din på moderne Android.</string>
     <string name="help_shredder_t">Makuleringen</string>
     <string name="help_shredder_b">Skriv PIN-koden BAKLENGS på låseskjermen: alt slettes i stillhet, og en liten rød «Feil. Start appen på nytt.» dukker opp under «Velkommen tilbake». Lukk og åpne appen igjen, så starter den helt på nytt (ingen ny installasjon nødvendig).</string>
     <string name="help_wipe_t">Slett alt</string>
@@ -304,7 +304,7 @@
     <string name="set_set_up">konfigurer</string>
     <string name="set_privacy_pin_hint">Låser denne gruppen (bare sifre).</string>
     <string name="set_cover">Åpne som kalkulator (forkledning)</string>
-    <string name="set_cover_hint">Åpner som en fungerende kalkulator. Trykk samme tast 10× på rad for å komme inn; trykk «reset» 20× for å velge en annen tast.</string>
+    <string name="set_cover_hint">Åpner som en fungerende kalkulator. Trykk samme tast 10× på rad for å komme inn; trykk «reset» 20× for å velge en annen tast. Dette forkler appen mens den er åpen; det skjuler IKKE CM-Chat fra app-listen din på moderne Android.</string>
     <string name="set_server_hint">Din egen adresse som venner kobler til.</string>
     <string name="set_bridges">Skjuling / Broer (obfs4 · Snowflake)</string>
     <string name="set_bridges_hint">Skjuler for nettverket ditt at du bruker Tor. Kan være tregere.</string>
@@ -416,4 +416,5 @@
     <string name="notif_buzz_channel">Buzz</string>
     <string name="notif_engine_channel">Motor</string>
     <string name="decoy_default_name">Notater til meg selv</string>
+    <string name="lock_passphrase_hint">4-sifrede PIN-koder er svakere hvis telefonen din tas — en passordfrase er mye sterkere.</string>
 </resources>

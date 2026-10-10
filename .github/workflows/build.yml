@@ -96,36 +96,44 @@ jobs:
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
-      # Publish ONLY the two debug APKs (arm64 + arm32), renamed. Debug builds are
-      # signed with the project's stable key (see build.gradle.kts) so they
-      # install/upgrade in place. Release / universal / x86_64 are built for CI
-      # coverage but NOT attached here.
-      - name: Publish debug APKs to Release
+      # Publish the SIGNED RELEASE APKs as the builds to use (not debuggable,
+      # screenshots blocked). The debug APK is attached only as a clearly labeled
+      # testing build. All are signed with the project's stable key (see
+      # build.gradle.kts) so they install/upgrade in place.
+      - name: Publish APKs to Release
         if: success()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v0.1-build${{ github.run_number }}"
+          R=app/build/outputs/apk/release
           D=app/build/outputs/apk/debug
-          cp "$D/app-arm64-v8a-debug.apk"   "$RUNNER_TEMP/CM-Chat-arm64-debug.apk"
-          cp "$D/app-armeabi-v7a-debug.apk" "$RUNNER_TEMP/CM-Chat-arm32-debug.apk"
-          cp twin/build/outputs/apk/debug/twin-debug.apk "$RUNNER_TEMP/Calculator-twin-debug.apk"
+          # Release filename is "-release.apk" when signed, "-release-unsigned.apk"
+          # if no keystore secret is set — pick whichever exists.
+          rel() { ls "$R/app-$1-release.apk" 2>/dev/null || ls "$R/app-$1-release-unsigned.apk"; }
+          cp "$(rel arm64-v8a)"   "$RUNNER_TEMP/CM-Chat-arm64-RELEASE.apk"
+          cp "$(rel armeabi-v7a)" "$RUNNER_TEMP/CM-Chat-arm32-RELEASE.apk"
+          cp "$D/app-arm64-v8a-debug.apk" "$RUNNER_TEMP/CM-Chat-arm64-debug-TESTING.apk"
+          cp twin/build/outputs/apk/debug/twin-debug.apk "$RUNNER_TEMP/Calculator-twin.apk"
           NOTES="$(cat <<'EOF'
-          **Download the ONE file for your phone:**
+          **Install the RELEASE file for your phone:**
 
-          - **CM-Chat-arm64-debug.apk** — Modern phones (Ulefone Armor 22, Samsung, Moto G5s, basically any phone from the last several years).
-          - **CM-Chat-arm32-debug.apk** — Older 32-bit phones only.
+          - **CM-Chat-arm64-RELEASE.apk** — Modern phones (basically any phone from the last several years).
+          - **CM-Chat-arm32-RELEASE.apk** — Older 32-bit phones only.
 
-          Optional: **Calculator-twin-debug.apk** — a separate, plain calculator app (any phone). Tapping the same key 10 times opens CM-Chat; "reset" 20 times forgets that key.
+          The RELEASE build is the one to use: it is not debuggable and blocks screenshots and the recent-apps preview.
 
-          These are debug test builds signed with a stable key, so they install and upgrade in place.
+          Optional: **Calculator-twin.apk** — a separate, plain calculator app that opens CM-Chat (same key 10 times; "reset" 20 times forgets the key). It disguises the app while open; it does NOT hide CM-Chat from your app list on modern Android.
 
-          If install still fails, uninstall any older CM-Chat first.
+          For developers only: **CM-Chat-arm64-debug-TESTING.apk** allows screenshots — do not use it for real conversations.
+
+          Upgrading from an earlier build installs in place (same signing key) and keeps your vault. If install fails, uninstall the old app first — note that uninstalling erases the vault for good.
           EOF
           )"
           gh release create "$TAG" \
-            "$RUNNER_TEMP/CM-Chat-arm64-debug.apk" \
-            "$RUNNER_TEMP/CM-Chat-arm32-debug.apk" \
-            "$RUNNER_TEMP/Calculator-twin-debug.apk" \
+            "$RUNNER_TEMP/CM-Chat-arm64-RELEASE.apk" \
+            "$RUNNER_TEMP/CM-Chat-arm32-RELEASE.apk" \
+            "$RUNNER_TEMP/Calculator-twin.apk" \
+            "$RUNNER_TEMP/CM-Chat-arm64-debug-TESTING.apk" \
             --title "CM-Chat $TAG" \
             --notes "$NOTES"

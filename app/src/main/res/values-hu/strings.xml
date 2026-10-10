@@ -191,7 +191,7 @@
     <string name="help_decoy_t">Csalibeszélgetés</string>
     <string name="help_decoy_b">Egy ál-barát. Ha rákoppintasz, azonnal törli a beszélgetéseidet a memóriából, új címre költöztet, és lezárja az alkalmazást. Égetőjelet is küld: minden megerősített, online barátnál a veled folytatott beszélgetés az ő telefonján is törlődik, és ezt látja: „Csalibeszélgetés aktiválva — beszélgetés törölve.”</string>
     <string name="help_cover_t">Számológép-álca</string>
-    <string name="help_cover_b">Beállítások → Adatvédelem és biztonság → Megnyitás számológépként: az alkalmazás egy működő számológépként nyílik meg. A belépéshez koppints ugyanarra a gombra 10-szer egymás után (az első alkalommal az a gomb lesz a tiéd). Koppints 20-szor a „reset” feliratra, ha másik gombot választanál. A PIN-kódod továbbra is mindent véd.</string>
+    <string name="help_cover_b">Beállítások → Adatvédelem és biztonság → Megnyitás számológépként: az alkalmazás egy működő számológépként nyílik meg. A belépéshez koppints ugyanarra a gombra 10-szer egymás után (az első alkalommal az a gomb lesz a tiéd). Koppints 20-szor a „reset” feliratra, ha másik gombot választanál. A PIN-kódod továbbra is mindent véd. Ez álcázza az alkalmazást, amíg nyitva van; NEM rejti el a CM-Chatet az alkalmazáslistából a modern Androidon.</string>
     <string name="help_shredder_t">Megsemmisítő</string>
     <string name="help_shredder_b">Írd be a PIN-kódodat VISSZAFELÉ a zárolási képernyőn: minden csendben törlődik, és egy kis piros „Hiba. Indítsd újra az alkalmazást.” jelenik meg az „Üdv újra” alatt. Zárd be és nyisd meg újra az alkalmazást, és tisztán indul (újratelepítés nélkül).</string>
     <string name="help_wipe_t">Minden törlése</string>
@@ -304,7 +304,7 @@
     <string name="set_set_up">beállítás</string>
     <string name="set_privacy_pin_hint">Lezárja ezt a csoportot (csak számjegyek).</string>
     <string name="set_cover">Megnyitás számológépként (álca)</string>
-    <string name="set_cover_hint">Működő számológépként nyílik meg. A belépéshez koppints ugyanarra a gombra 10× egymás után; koppints 20× a „reset” feliratra, ha másik gombot választanál.</string>
+    <string name="set_cover_hint">Működő számológépként nyílik meg. A belépéshez koppints ugyanarra a gombra 10× egymás után; koppints 20× a „reset” feliratra, ha másik gombot választanál. Ez álcázza az alkalmazást, amíg nyitva van; NEM rejti el a CM-Chatet az alkalmazáslistából a modern Androidon.</string>
     <string name="set_server_hint">A saját címed, amelyhez a barátaid kapcsolódnak.</string>
     <string name="set_bridges">Álcázás / Hidak (obfs4 · Snowflake)</string>
     <string name="set_bridges_hint">Elrejti a hálózatod elől, hogy Tort használsz. Lassabb lehet.</string>
@@ -416,4 +416,5 @@
     <string name="notif_buzz_channel">Buzz</string>
     <string name="notif_engine_channel">Motor</string>
     <string name="decoy_default_name">Jegyzetek magamnak</string>
+    <string name="lock_passphrase_hint">A 4 jegyű PIN gyengébb, ha elveszik a telefonod — egy jelmondat sokkal erősebb.</string>
 </resources>

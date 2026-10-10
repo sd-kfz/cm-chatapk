@@ -191,7 +191,7 @@
     <string name="help_decoy_t">Lockvogel-Chat</string>
     <string name="help_decoy_b">Ein falscher Freund. Wer ihn antippt, löscht sofort deine Chats aus dem Speicher, wechselt zu einer neuen Adresse und sperrt die App. Zusätzlich geht ein Löschsignal raus: Bei jedem bestätigten Freund, der online ist, wird dein Chat auch auf seinem Telefon gelöscht, und er sieht „Lockvogel-Chat ausgelöst — Chat gelöscht.“</string>
     <string name="help_cover_t">Taschenrechner-Tarnung</string>
-    <string name="help_cover_b">Einstellungen → Datenschutz &amp; Sicherheit → Als Taschenrechner öffnen: Die App öffnet sich als funktionierender Taschenrechner. Tippe 10-mal hintereinander dieselbe Taste, um hineinzukommen (beim ersten Mal wird diese Taste deine). Tippe 20-mal auf „reset“, um eine andere Taste zu wählen. Deine PIN schützt weiterhin alles.</string>
+    <string name="help_cover_b">Einstellungen → Datenschutz &amp; Sicherheit → Als Taschenrechner öffnen: Die App öffnet sich als funktionierender Taschenrechner. Tippe 10-mal hintereinander dieselbe Taste, um hineinzukommen (beim ersten Mal wird diese Taste deine). Tippe 20-mal auf „reset“, um eine andere Taste zu wählen. Deine PIN schützt weiterhin alles. Das tarnt die App im geöffneten Zustand; es verbirgt CM-Chat NICHT aus deiner App-Liste auf modernem Android.</string>
     <string name="help_shredder_t">Schredder</string>
     <string name="help_shredder_b">Tippe deine PIN RÜCKWÄRTS auf dem Sperrbildschirm: Alles wird lautlos gelöscht und unter „Willkommen zurück“ erscheint ein kleines rotes „Fehler. Bitte starte die App neu.“. Schließe und öffne die App wieder, und sie startet neu (keine Neuinstallation nötig).</string>
     <string name="help_wipe_t">Alles löschen</string>
@@ -304,7 +304,7 @@
     <string name="set_set_up">einrichten</string>
     <string name="set_privacy_pin_hint">Sperrt diese Gruppe (nur Ziffern).</string>
     <string name="set_cover">Als Taschenrechner öffnen (Tarnung)</string>
-    <string name="set_cover_hint">Öffnet sich als funktionierender Taschenrechner. Tippe 10× hintereinander dieselbe Taste, um hineinzukommen; tippe 20× auf „reset“, um eine andere Taste zu wählen.</string>
+    <string name="set_cover_hint">Öffnet sich als funktionierender Taschenrechner. Tippe 10× hintereinander dieselbe Taste, um hineinzukommen; tippe 20× auf „reset“, um eine andere Taste zu wählen. Das tarnt die App im geöffneten Zustand; es verbirgt CM-Chat NICHT aus deiner App-Liste auf modernem Android.</string>
     <string name="set_server_hint">Deine eigene Adresse, mit der sich Freunde verbinden.</string>
     <string name="set_bridges">Tarnung / Brücken (obfs4 · Snowflake)</string>
     <string name="set_bridges_hint">Verbirgt vor deinem Netzwerk, dass du Tor nutzt. Kann langsamer sein.</string>
@@ -416,4 +416,5 @@
     <string name="notif_buzz_channel">Buzz</string>
     <string name="notif_engine_channel">Motor</string>
     <string name="decoy_default_name">Notizen an mich</string>
+    <string name="lock_passphrase_hint">4-stellige PINs sind schwächer, wenn dein Telefon weggenommen wird — eine Passphrase ist viel stärker.</string>
 </resources>

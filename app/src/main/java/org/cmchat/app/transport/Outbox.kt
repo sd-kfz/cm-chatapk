@@ -91,6 +91,9 @@ class Outbox(
     /** Retry every queue now (e.g. Tor just came back online). */
     fun kickAll() { synchronized(lock) { pokes.values.toList() }.forEach { p -> p.update { it + 1 } } }
 
+    /** No frame is queued for anyone (test/observability; Exit must leave none). */
+    fun isEmpty(): Boolean = synchronized(lock) { queues.values.all { it.isEmpty() } }
+
     /** Drop everything (wipe paths). In-flight sends finish but report nothing. */
     fun clear() {
         synchronized(lock) {

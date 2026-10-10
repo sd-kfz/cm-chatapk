@@ -29,9 +29,9 @@ sealed interface UnlockResult {
  * we wipe and report Duress. Palindrome PINs are refused at creation so that
  * reverse != forward.
  */
-class VaultManager(val crypto: CryptoManager, dir: File) {
+class VaultManager(val crypto: CryptoManager, dir: File, wrapper: VaultWrapper = VaultWrapper.NONE) {
 
-    private val vault = Vault(dir)
+    private val vault = Vault(dir, wrapper)
 
     // encodeDefaults: every setting is written explicitly, so changing a default
     // in a later build can never silently change a saved choice.
@@ -104,6 +104,7 @@ class VaultManager(val crypto: CryptoManager, dir: File) {
                 if (data != null) {
                     vault.discardLeftovers()
                     startSession(Session(key, current.salt))
+                    migrateWrap(current, key, data)
                     return UnlockResult.Success(data)
                 }
                 key.fill(0)
@@ -114,6 +115,7 @@ class VaultManager(val crypto: CryptoManager, dir: File) {
                 if (data != null) {
                     vault.restorePrevious()
                     startSession(Session(key, prev.salt))
+                    migrateWrap(prev, key, data)
                     return UnlockResult.Success(data)
                 }
                 key.fill(0)
@@ -132,6 +134,19 @@ class VaultManager(val crypto: CryptoManager, dir: File) {
             }
             return UnlockResult.WrongPin
         }
+    }
+
+    /**
+     * One-time, silent migration: a legacy (build82 / two-file) vault had no
+     * hardware wrap. Right after it opens, re-save it so the device-bound layer
+     * is applied. The session key is cached, so this is a cheap re-seal (no
+     * Argon2). Best-effort: a failure here just leaves the vault as it was, to be
+     * wrapped on the next save. Caller holds [io].
+     */
+    private fun migrateWrap(blob: Vault.Blob, key: ByteArray, data: VaultData) {
+        if (!vault.wrapActive() || blob.wasWrapped) return
+        runCatching { vault.write(blob.salt, seal(key, data)) }
+            .onFailure { org.cmchat.app.diag.Diag.e("vault", "wrap migration deferred", it) }
     }
 
     /** Is [pin] the vault PIN? (One Argon2id, no side effects — no duress wipe.) For PIN gates. */

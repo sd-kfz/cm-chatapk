@@ -191,7 +191,7 @@
     <string name="help_decoy_t">Syöttikeskustelu</string>
     <string name="help_decoy_b">Valeystävä. Sen napauttaminen pyyhkii heti keskustelusi muistista, siirtää sinut uuteen osoitteeseen ja lukitsee sovelluksen. Se lähettää myös tuhoamissignaalin: jokaisen vahvistetun, paikalla olevan ystävän puhelimesta pyyhitään keskustelunne, ja hän näkee ”Syöttikeskustelu laukaistu — keskustelu pyyhitty.”</string>
     <string name="help_cover_t">Laskinnaamio</string>
-    <string name="help_cover_b">Asetukset → Yksityisyys ja turvallisuus → Avaa laskimena: sovellus avautuu toimivana laskimena. Pääset sisään napauttamalla samaa näppäintä 10 kertaa peräkkäin (ensimmäisellä kerralla siitä näppäimestä tulee sinun). Napauta ”reset” 20 kertaa valitaksesi toisen näppäimen. PIN-koodisi suojaa yhä kaikkea.</string>
+    <string name="help_cover_b">Asetukset → Yksityisyys ja turvallisuus → Avaa laskimena: sovellus avautuu toimivana laskimena. Pääset sisään napauttamalla samaa näppäintä 10 kertaa peräkkäin (ensimmäisellä kerralla siitä näppäimestä tulee sinun). Napauta ”reset” 20 kertaa valitaksesi toisen näppäimen. PIN-koodisi suojaa yhä kaikkea. Tämä naamioi sovelluksen, kun se on auki; se EI piilota CM-Chatia sovellusluettelosta nykyaikaisessa Androidissa.</string>
     <string name="help_shredder_t">Silppuri</string>
     <string name="help_shredder_b">Kirjoita PIN-koodisi TAKAPERIN lukitusnäytöllä: kaikki pyyhitään hiljaa ja ”Tervetuloa takaisin” -tekstin alle ilmestyy pieni punainen ”Virhe. Käynnistä sovellus uudelleen.”. Sulje ja avaa sovellus uudelleen, niin se aloittaa puhtaalta pöydältä (ei uudelleenasennusta).</string>
     <string name="help_wipe_t">Pyyhi kaikki</string>
@@ -304,7 +304,7 @@
     <string name="set_set_up">määritä</string>
     <string name="set_privacy_pin_hint">Lukitsee tämän ryhmän (vain numeroita).</string>
     <string name="set_cover">Avaa laskimena (naamio)</string>
-    <string name="set_cover_hint">Avautuu toimivana laskimena. Pääset sisään napauttamalla samaa näppäintä 10× peräkkäin; napauta ”reset” 20× valitaksesi toisen näppäimen.</string>
+    <string name="set_cover_hint">Avautuu toimivana laskimena. Pääset sisään napauttamalla samaa näppäintä 10× peräkkäin; napauta ”reset” 20× valitaksesi toisen näppäimen. Tämä naamioi sovelluksen, kun se on auki; se EI piilota CM-Chatia sovellusluettelosta nykyaikaisessa Androidissa.</string>
     <string name="set_server_hint">Oma osoitteesi, johon ystävät yhdistävät.</string>
     <string name="set_bridges">Häivytys / Sillat (obfs4 · Snowflake)</string>
     <string name="set_bridges_hint">Piilottaa verkoltasi, että käytät Toria. Voi olla hitaampi.</string>
@@ -416,4 +416,5 @@
     <string name="notif_buzz_channel">Buzz</string>
     <string name="notif_engine_channel">Moottori</string>
     <string name="decoy_default_name">Muistiinpanoja itselle</string>
+    <string name="lock_passphrase_hint">4-numeroiset PIN-koodit ovat heikompia, jos puhelimesi viedään — tunnuslause on paljon vahvempi.</string>
 </resources>

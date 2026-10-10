@@ -191,7 +191,7 @@
     <string name="help_decoy_t">Czat-przynęta</string>
     <string name="help_decoy_b">Fałszywy znajomy. Stuknięcie go natychmiast kasuje Twoje czaty z pamięci, przenosi Cię na nowy adres i blokuje aplikację. Wysyła też sygnał zniszczenia: u każdego potwierdzonego znajomego, który jest online, Wasz czat zostaje skasowany także na jego telefonie, a on widzi „Uruchomiono czat-przynętę — czat skasowany.”</string>
     <string name="help_cover_t">Kamuflaż kalkulatora</string>
-    <string name="help_cover_b">Ustawienia → Prywatność i bezpieczeństwo → Otwieraj jako kalkulator: aplikacja otwiera się jako działający kalkulator. Stuknij ten sam klawisz 10 razy z rzędu, aby wejść (za pierwszym razem ten klawisz staje się Twój). Stuknij „reset” 20 razy, aby wybrać inny klawisz. PIN nadal chroni wszystko.</string>
+    <string name="help_cover_b">Ustawienia → Prywatność i bezpieczeństwo → Otwieraj jako kalkulator: aplikacja otwiera się jako działający kalkulator. Stuknij ten sam klawisz 10 razy z rzędu, aby wejść (za pierwszym razem ten klawisz staje się Twój). Stuknij „reset” 20 razy, aby wybrać inny klawisz. PIN nadal chroni wszystko. Maskuje aplikację, gdy jest otwarta; NIE ukrywa CM-Chat z listy aplikacji na nowoczesnym Androidzie.</string>
     <string name="help_shredder_t">Niszczarka</string>
     <string name="help_shredder_b">Wpisz PIN OD TYŁU na ekranie blokady: wszystko zostanie po cichu skasowane, a pod „Witaj ponownie” pojawi się mały czerwony napis „Błąd. Uruchom aplikację ponownie.”. Zamknij i otwórz aplikację ponownie — zacznie od zera (bez ponownej instalacji).</string>
     <string name="help_wipe_t">Wymaż wszystko</string>
@@ -304,7 +304,7 @@
     <string name="set_set_up">ustaw</string>
     <string name="set_privacy_pin_hint">Blokuje tę grupę (tylko cyfry).</string>
     <string name="set_cover">Otwieraj jako kalkulator (kamuflaż)</string>
-    <string name="set_cover_hint">Otwiera się jako działający kalkulator. Stuknij ten sam klawisz 10× z rzędu, aby wejść; stuknij „reset” 20×, aby wybrać inny klawisz.</string>
+    <string name="set_cover_hint">Otwiera się jako działający kalkulator. Stuknij ten sam klawisz 10× z rzędu, aby wejść; stuknij „reset” 20×, aby wybrać inny klawisz. Maskuje aplikację, gdy jest otwarta; NIE ukrywa CM-Chat z listy aplikacji na nowoczesnym Androidzie.</string>
     <string name="set_server_hint">Twój własny adres, z którym łączą się znajomi.</string>
     <string name="set_bridges">Ukrycie / Mosty (obfs4 · Snowflake)</string>
     <string name="set_bridges_hint">Ukrywa przed Twoją siecią, że używasz Tor. Może działać wolniej.</string>
@@ -416,4 +416,5 @@
     <string name="notif_buzz_channel">Buzz</string>
     <string name="notif_engine_channel">Silnik</string>
     <string name="decoy_default_name">Notatki dla siebie</string>
+    <string name="lock_passphrase_hint">4-cyfrowe PIN-y są słabsze, gdy ktoś zabierze ci telefon — hasło-fraza jest znacznie silniejsze.</string>
 </resources>

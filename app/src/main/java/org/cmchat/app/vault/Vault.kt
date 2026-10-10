@@ -21,7 +21,7 @@ import java.security.SecureRandom
  *
  * This class only moves bytes — it never sees the PIN or a key.
  */
-class Vault(private val dir: File) {
+class Vault(private val dir: File, private val wrapper: VaultWrapper = VaultWrapper.NONE) {
 
     private val file = File(dir, "vault2.dat")
     private val tmp = File(dir, "vault2.tmp")
@@ -32,8 +32,12 @@ class Vault(private val dir: File) {
     private val legacyVault = File(dir, "vault.dat")
     private val legacySalt = File(dir, "salt.dat")
 
-    /** The stored salt + sealed bytes. */
-    class Blob(val salt: ByteArray, val sealed: ByteArray)
+    /** The stored salt + sealed bytes ([sealed] is already unwrapped). [wasWrapped]
+     * is false for a legacy (build82 / two-file) vault that had no hardware layer. */
+    class Blob(val salt: ByteArray, val sealed: ByteArray, val wasWrapped: Boolean = false)
+
+    /** True when a real hardware wrapper is in use (drives one-time migration). */
+    fun wrapActive(): Boolean = wrapper.active
 
     /** Test hook: simulate the process dying right after this PIN-change step. */
     internal var crashAfterStep: Int? = null
@@ -124,20 +128,33 @@ class Vault(private val dir: File) {
         if (!f.exists()) return null
         val all = runCatching { f.readBytes() }.getOrNull() ?: return null
         if (all.size <= SALT_BYTES) return null
-        return Blob(all.copyOfRange(0, SALT_BYTES), all.copyOfRange(SALT_BYTES, all.size))
+        val salt = all.copyOfRange(0, SALT_BYTES)
+        val stored = all.copyOfRange(SALT_BYTES, all.size)
+        // A hardware-wrapped vault is unwrapped here (needs this phone's secure
+        // element); null means the key is unavailable or the file was tampered —
+        // treat it as unreadable, never as plaintext. A legacy vault has no marker
+        // and is returned as-is (and re-wrapped on the next unlock).
+        if (wrapper.isWrapped(stored)) {
+            val sealed = wrapper.unwrap(stored) ?: return null
+            return Blob(salt, sealed, wasWrapped = true)
+        }
+        return Blob(salt, stored, wasWrapped = false)
     }
 
     private fun readLegacy(): Blob? {
         if (!legacyVault.exists() || !legacySalt.exists()) return null
         val salt = runCatching { legacySalt.readBytes() }.getOrNull() ?: return null
         if (salt.size != SALT_BYTES) return null
-        return Blob(salt, runCatching { legacyVault.readBytes() }.getOrNull() ?: return null)
+        return Blob(salt, runCatching { legacyVault.readBytes() }.getOrNull() ?: return null, wasWrapped = false)
     }
 
     private fun writeSynced(f: File, salt: ByteArray, sealed: ByteArray) {
+        // The device-bound wrap is applied here so EVERY write (the live vault and
+        // the crash-safe PIN-change staging/backup files) is hardware-bound alike.
+        val onDisk = wrapper.wrap(sealed)
         FileOutputStream(f).use { out ->
             out.write(salt)
-            out.write(sealed)
+            out.write(onDisk)
             out.flush()
             runCatching { out.fd.sync() }       // on flash before anything points at it
         }

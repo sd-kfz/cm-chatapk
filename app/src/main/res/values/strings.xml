@@ -227,7 +227,7 @@
     <string name="help_decoy_t">Decoy chat</string>
     <string name="help_decoy_b">A fake friend. Tapping it instantly wipes your chats from memory, moves you to a new address and locks the app. It also sends a burn signal: each confirmed friend who is online gets your chat wiped on their phone too and sees \"Decoy chat triggered — chat erased.\"</string>
     <string name="help_cover_t">Calculator cover</string>
-    <string name="help_cover_b">Settings → Privacy &amp; Safety → Open as a calculator: the app opens to a working calculator. Tap the same key 10 times in a row to get in (the first time, that key becomes yours). Tap \"reset\" 20 times to choose a different key. Your PIN still guards everything.</string>
+    <string name="help_cover_b">Settings → Privacy &amp; Safety → Open as a calculator: the app opens to a working calculator. Tap the same key 10 times in a row to get in (the first time, that key becomes yours). Tap \"reset\" 20 times to choose a different key. Your PIN still guards everything. It disguises the app while it is open; it does NOT hide CM-Chat from your app list on modern Android.</string>
     <string name="help_shredder_t">Shredder</string>
     <string name="help_shredder_b">Type your PIN BACKWARDS at the lock screen: everything is silently erased and a small red \"Error. Please restart the app.\" appears under \"Welcome back\". Close and reopen the app and it starts fresh (no reinstall needed).</string>
     <string name="help_wipe_t">Wipe Everything</string>
@@ -352,7 +352,7 @@
     <string name="set_set_up">set up</string>
     <string name="set_privacy_pin_hint">Locks this group (digits only).</string>
     <string name="set_cover">Open as a calculator (cover)</string>
-    <string name="set_cover_hint">Opens to a working calculator. Tap the same key 10× in a row to get in; tap “reset” 20× to choose a different key.</string>
+    <string name="set_cover_hint">Opens to a working calculator. Tap the same key 10× in a row to get in; tap “reset” 20× to choose a different key. It disguises the app while it is open; it does NOT hide CM-Chat from your app list on modern Android.</string>
     <string name="set_server_hint">Your own address that friends connect to.</string>
     <string name="set_bridges">Stealth / Bridges (obfs4 · Snowflake)</string>
     <string name="set_bridges_hint">Hide that you use Tor from your network. Can be slower.</string>
@@ -470,4 +470,5 @@
     <string name="notif_buzz_channel">Buzz</string>
     <string name="notif_engine_channel">Engine</string>
     <string name="decoy_default_name">Notes to self</string>
+    <string name="lock_passphrase_hint">4-digit PINs are weaker if your phone is taken — a passphrase is far stronger.</string>
 </resources>

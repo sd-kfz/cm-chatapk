@@ -14,8 +14,13 @@ object SecurityFactory {
     @Volatile private var instance: VaultManager? = null
 
     fun create(filesDir: File): VaultManager = instance ?: synchronized(this) {
-        instance ?: VaultManager(CryptoManager(LazySodiumAndroid(SodiumAndroid())), File(filesDir, "vault"))
-            .also { instance = it }
+        // The vault is wrapped with a non-exportable AndroidKeyStore key, so a
+        // copied vault file can't be opened off this device (see KeystoreWrap).
+        instance ?: VaultManager(
+            CryptoManager(LazySodiumAndroid(SodiumAndroid())),
+            File(filesDir, "vault"),
+            KeystoreWrap(),
+        ).also { instance = it }
     }
 
     /** Exit / close / screen gone: the vault key leaves RAM (after any queued save). */

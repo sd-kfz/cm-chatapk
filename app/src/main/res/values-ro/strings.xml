@@ -191,7 +191,7 @@
     <string name="help_decoy_t">Chat-capcană</string>
     <string name="help_decoy_b">Un prieten fals. Dacă îl atingi, îți șterge instantaneu chaturile din memorie, te mută pe o adresă nouă și blochează aplicația. Trimite și un semnal de ardere: fiecărui prieten confirmat care e online i se șterge chatul cu tine și pe telefonul lui și vede „Chat-capcană declanșat — chat șters.”</string>
     <string name="help_cover_t">Acoperire calculator</string>
-    <string name="help_cover_b">Setări → Confidențialitate și siguranță → Deschide ca un calculator: aplicația se deschide ca un calculator funcțional. Atinge aceeași tastă de 10 ori la rând ca să intri (prima dată, tasta aceea devine a ta). Atinge „reset” de 20 de ori ca să alegi altă tastă. PIN-ul tău protejează în continuare totul.</string>
+    <string name="help_cover_b">Setări → Confidențialitate și siguranță → Deschide ca un calculator: aplicația se deschide ca un calculator funcțional. Atinge aceeași tastă de 10 ori la rând ca să intri (prima dată, tasta aceea devine a ta). Atinge „reset” de 20 de ori ca să alegi altă tastă. PIN-ul tău protejează în continuare totul. Deghizează aplicația cât e deschisă; NU ascunde CM-Chat din lista de aplicații pe Android modern.</string>
     <string name="help_shredder_t">Tocătorul</string>
     <string name="help_shredder_b">Tastează PIN-ul INVERS pe ecranul de blocare: totul e șters în tăcere și apare un mic mesaj roșu „Eroare. Te rugăm să repornești aplicația.” sub „Bine ai revenit”. Închide și redeschide aplicația și pornește de la zero (fără reinstalare).</string>
     <string name="help_wipe_t">Șterge tot</string>
@@ -304,7 +304,7 @@
     <string name="set_set_up">configurează</string>
     <string name="set_privacy_pin_hint">Blochează acest grup (doar cifre).</string>
     <string name="set_cover">Deschide ca un calculator (acoperire)</string>
-    <string name="set_cover_hint">Se deschide ca un calculator funcțional. Atinge aceeași tastă de 10× la rând ca să intri; atinge „reset” de 20× ca să alegi altă tastă.</string>
+    <string name="set_cover_hint">Se deschide ca un calculator funcțional. Atinge aceeași tastă de 10× la rând ca să intri; atinge „reset” de 20× ca să alegi altă tastă. Deghizează aplicația cât e deschisă; NU ascunde CM-Chat din lista de aplicații pe Android modern.</string>
     <string name="set_server_hint">Propria ta adresă la care se conectează prietenii.</string>
     <string name="set_bridges">Ascundere / Punți (obfs4 · Snowflake)</string>
     <string name="set_bridges_hint">Ascunde de rețeaua ta că folosești Tor. Poate fi mai lent.</string>
@@ -416,4 +416,5 @@
     <string name="notif_buzz_channel">Buzz</string>
     <string name="notif_engine_channel">Motor</string>
     <string name="decoy_default_name">Notițe pentru mine</string>
+    <string name="lock_passphrase_hint">PIN-urile de 4 cifre sunt mai slabe dacă îți ia cineva telefonul — o frază de acces e mult mai puternică.</string>
 </resources>

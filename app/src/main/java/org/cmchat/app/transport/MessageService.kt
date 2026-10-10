@@ -314,6 +314,12 @@ object MessageService {
     internal fun keysInRam(): Boolean =
         channel != null || mySecHex != null || myPubHex != null || contacts.isNotEmpty()
 
+    /** How many friends are in the RAM table (test/observability). */
+    internal fun contactCount(): Int = contacts.size
+
+    /** Is the outgoing queue empty? (test/observability; Exit must leave none.) */
+    internal fun outboxIsEmpty(): Boolean = outbox.isEmpty()
+
     /** Drop every queued outgoing frame (wipe/exit paths). */
     fun clearOutbox() = outbox.clear()
 

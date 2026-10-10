@@ -92,7 +92,24 @@ class TorService : Service() {
         /** Tor's local SOCKS port (for outgoing connections through Tor). */
         fun socksPort(): Int = instance?.gpService?.socksPort ?: 9050
 
+        /**
+         * Set on the Exit path only. While true, a (re)started engine service
+         * refuses to run and reports START_NOT_STICKY, so killing the process on
+         * Exit can't be undone by Android's sticky-service restart. Reset by
+         * [start] (a fresh unlock) and gone anyway once the process dies.
+         */
+        @Volatile var exiting = false
+            private set
+
+        /** Exit only: don't let START_STICKY bring the engine back after the kill. */
+        fun stopForExit(context: Context) {
+            exiting = true
+            instance?.let { runCatching { it.stopForeground(STOP_FOREGROUND_REMOVE) } }
+            stop(context)
+        }
+
         fun start(context: Context) {
+            exiting = false
             // FAST REOPEN: a healthy running Tor is reused, never re-bootstrapped.
             // If we already have a live instance that is Online (or still coming
             // up), startForegroundService only re-delivers onStartCommand to that
@@ -261,6 +278,9 @@ class TorService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Exit in progress (process about to be killed): do NOT re-foreground, and
+        // report NOT_STICKY so the OS won't recreate the engine after the kill.
+        if (exiting) { stopSelf(); return START_NOT_STICKY }
         // Re-assert foreground on every (re)start, incl. START_STICKY restarts.
         goForeground()
         return START_STICKY

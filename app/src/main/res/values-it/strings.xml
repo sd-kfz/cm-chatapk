@@ -191,7 +191,7 @@
     <string name="help_decoy_t">Chat esca</string>
     <string name="help_decoy_b">Un falso amico. Toccarlo cancella all\'istante le tue chat dalla memoria, ti sposta su un nuovo indirizzo e blocca l\'app. Invia anche un segnale di distruzione: per ogni amico confermato che è online, la vostra chat viene cancellata anche sul suo telefono e vede «Chat esca attivata — chat cancellata.»</string>
     <string name="help_cover_t">Copertura calcolatrice</string>
-    <string name="help_cover_b">Impostazioni → Privacy e sicurezza → Apri come calcolatrice: l\'app si apre come una calcolatrice funzionante. Tocca lo stesso tasto 10 volte di fila per entrare (la prima volta, quel tasto diventa il tuo). Tocca «reset» 20 volte per scegliere un altro tasto. Il tuo PIN protegge comunque tutto.</string>
+    <string name="help_cover_b">Impostazioni → Privacy e sicurezza → Apri come calcolatrice: l\'app si apre come una calcolatrice funzionante. Tocca lo stesso tasto 10 volte di fila per entrare (la prima volta, quel tasto diventa il tuo). Tocca «reset» 20 volte per scegliere un altro tasto. Il tuo PIN protegge comunque tutto. Maschera l\'app mentre è aperta; NON nasconde CM-Chat dall\'elenco delle app su Android moderno.</string>
     <string name="help_shredder_t">Distruggidocumenti</string>
     <string name="help_shredder_b">Digita il PIN AL CONTRARIO nella schermata di blocco: tutto viene cancellato in silenzio e sotto «Bentornato» compare un piccolo «Errore. Riavvia l\'app.» rosso. Chiudi e riapri l\'app: riparte da zero (senza reinstallare).</string>
     <string name="help_wipe_t">Cancella tutto</string>
@@ -304,7 +304,7 @@
     <string name="set_set_up">configura</string>
     <string name="set_privacy_pin_hint">Blocca questo gruppo (solo cifre).</string>
     <string name="set_cover">Apri come calcolatrice (copertura)</string>
-    <string name="set_cover_hint">Si apre come una calcolatrice funzionante. Tocca lo stesso tasto 10× di fila per entrare; tocca «reset» 20× per scegliere un altro tasto.</string>
+    <string name="set_cover_hint">Si apre come una calcolatrice funzionante. Tocca lo stesso tasto 10× di fila per entrare; tocca «reset» 20× per scegliere un altro tasto. Maschera l\'app mentre è aperta; NON nasconde CM-Chat dall\'elenco delle app su Android moderno.</string>
     <string name="set_server_hint">Il tuo indirizzo, a cui si collegano gli amici.</string>
     <string name="set_bridges">Mimetizzazione / Bridge (obfs4 · Snowflake)</string>
     <string name="set_bridges_hint">Nasconde alla tua rete che usi Tor. Può essere più lento.</string>
@@ -416,4 +416,5 @@
     <string name="notif_buzz_channel">Buzz</string>
     <string name="notif_engine_channel">Motore</string>
     <string name="decoy_default_name">Note per me</string>
+    <string name="lock_passphrase_hint">Un PIN di 4 cifre è più debole se ti prendono il telefono — una passphrase è molto più forte.</string>
 </resources>

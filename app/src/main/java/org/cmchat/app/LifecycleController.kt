@@ -169,16 +169,39 @@ object LifecycleController {
         listening = false
     }
 
-    /** Exit: stop the server, clear RAM, drop the listener, and log out. */
+    /**
+     * Exit: stop the server, clear RAM, drop the listener, log out — then END THE
+     * PROCESS so NO key material survives. [dropSessionKeys] zeroes every secret
+     * held as a byte array, but copies of the identity key held as immutable
+     * Strings (decrypted vault, channel) can't be overwritten; killing the
+     * process is the only way to wipe them. The engine was just stopped with the
+     * exit flag set, so START_STICKY can't bring it back; Android relaunches to
+     * the lock screen if the app is reopened.
+     */
     fun exit(context: Context) {
         val ctx = context.applicationContext
         dropSessionKeys()
         Notifier.clearAll(ctx)
         fullClose(ctx)
         lockRequests.tryEmit(Unit)
+        hardKill()
     }
 
-    /** Fully go dark: stop the server and Tor. */
+    /**
+     * Wipe RAM for good by ending the process. A short main-thread delay lets the
+     * just-issued stopService take the engine out of the started-service set
+     * before the kill, so it is not recreated (belt-and-braces with
+     * [TorService.exiting] = NOT_STICKY). Byte-array secrets are already zeroed,
+     * so the brief wait exposes nothing a live RAM capture couldn't already see.
+     */
+    private fun hardKill() {
+        val kill = Runnable { runCatching { android.os.Process.killProcess(android.os.Process.myPid()) } }
+        runCatching {
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(kill, 300)
+        }.onFailure { kill.run() }
+    }
+
+    /** Fully go dark: stop the server and Tor (and keep the engine from restarting). */
     private fun fullClose(ctx: Context) {
         MessageService.buzzOnlyMode = false
         MessageService.activeChatCmId = null
@@ -186,7 +209,7 @@ object LifecycleController {
         org.cmchat.app.transport.CoverTraffic.stop()
         org.cmchat.app.tools.Flashlight.off(ctx)
         ServerController.stop()
-        TorService.stop(ctx)
+        TorService.stopForExit(ctx)
         Diag.i("life", "closed -> fully offline")
     }
 }

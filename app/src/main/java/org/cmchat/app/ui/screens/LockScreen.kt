@@ -157,6 +157,12 @@ fun LockScreen(manager: VaultManager, onUnlocked: (VaultData) -> Unit) {
                 fontStyle = FontStyle.Italic, textAlign = TextAlign.Center,
                 modifier = Modifier.padding(top = 4.dp))
         }
+        // Honest nudge at PIN creation: longer is far stronger if the phone is taken.
+        if (phase == Phase.NEW_PIN && !shredded) {
+            Text(Tr.s(R.string.lock_passphrase_hint), color = CmTextFaint, fontFamily = Nunito,
+                fontSize = 12.sp, textAlign = TextAlign.Center,
+                modifier = Modifier.padding(top = 6.dp, start = 24.dp, end = 24.dp))
+        }
         Spacer(Modifier.height(if (compact || bigKeys) 8.dp else 20.dp))
 
         if (phase == Phase.NICKNAME) {

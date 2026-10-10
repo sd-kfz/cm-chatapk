@@ -191,7 +191,7 @@
     <string name="help_decoy_t">Conversation leurre</string>
     <string name="help_decoy_b">Un faux ami. Le toucher efface instantanément vos conversations de la mémoire, vous déplace vers une nouvelle adresse et verrouille l\'application. Il envoie aussi un signal de destruction : chaque ami confirmé en ligne voit votre conversation effacée sur son téléphone aussi, avec « Conversation leurre déclenchée — conversation effacée. »</string>
     <string name="help_cover_t">Camouflage calculatrice</string>
-    <string name="help_cover_b">Réglages → Confidentialité et sécurité → Ouvrir comme une calculatrice : l\'application s\'ouvre sur une calculatrice qui fonctionne. Touchez la même touche 10 fois de suite pour entrer (la première fois, cette touche devient la vôtre). Touchez « reset » 20 fois pour choisir une autre touche. Votre PIN protège toujours tout.</string>
+    <string name="help_cover_b">Réglages → Confidentialité et sécurité → Ouvrir comme une calculatrice : l\'application s\'ouvre sur une calculatrice qui fonctionne. Touchez la même touche 10 fois de suite pour entrer (la première fois, cette touche devient la vôtre). Touchez « reset » 20 fois pour choisir une autre touche. Votre PIN protège toujours tout. Cela déguise l\'application quand elle est ouverte ; cela NE cache PAS CM-Chat de votre liste d\'applications sur Android récent.</string>
     <string name="help_shredder_t">Broyeur</string>
     <string name="help_shredder_b">Tapez votre PIN À L\'ENVERS sur l\'écran de verrouillage : tout est effacé en silence et un petit « Erreur. Veuillez redémarrer l\'application. » rouge apparaît sous « Bon retour ». Fermez et rouvrez l\'application : elle repart de zéro (sans réinstallation).</string>
     <string name="help_wipe_t">Tout effacer</string>
@@ -304,7 +304,7 @@
     <string name="set_set_up">configurer</string>
     <string name="set_privacy_pin_hint">Verrouille ce groupe (chiffres uniquement).</string>
     <string name="set_cover">Ouvrir comme une calculatrice (camouflage)</string>
-    <string name="set_cover_hint">S\'ouvre sur une calculatrice qui fonctionne. Touchez la même touche 10× de suite pour entrer ; touchez « reset » 20× pour choisir une autre touche.</string>
+    <string name="set_cover_hint">S\'ouvre sur une calculatrice qui fonctionne. Touchez la même touche 10× de suite pour entrer ; touchez « reset » 20× pour choisir une autre touche. Cela déguise l\'application quand elle est ouverte ; cela NE cache PAS CM-Chat de votre liste d\'applications sur Android récent.</string>
     <string name="set_server_hint">Votre propre adresse, à laquelle vos amis se connectent.</string>
     <string name="set_bridges">Discrétion / Ponts (obfs4 · Snowflake)</string>
     <string name="set_bridges_hint">Cache à votre réseau que vous utilisez Tor. Peut être plus lent.</string>
@@ -416,4 +416,5 @@
     <string name="notif_buzz_channel">Buzz</string>
     <string name="notif_engine_channel">Moteur</string>
     <string name="decoy_default_name">Notes perso</string>
+    <string name="lock_passphrase_hint">Un PIN à 4 chiffres est plus faible si l\'on vous prend le téléphone — une phrase de passe est bien plus solide.</string>
 </resources>

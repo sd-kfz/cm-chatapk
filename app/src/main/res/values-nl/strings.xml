@@ -191,7 +191,7 @@
     <string name="help_decoy_t">Lokaaschat</string>
     <string name="help_decoy_b">Een nepvriend. Tik je erop, dan worden je chats meteen uit het geheugen gewist, ga je naar een nieuw adres en wordt de app vergrendeld. Er gaat ook een wissignaal uit: bij elke bevestigde vriend die online is wordt je chat ook op diens telefoon gewist, en die ziet \'Lokaaschat geactiveerd — chat gewist.\'</string>
     <string name="help_cover_t">Rekenmachine-dekmantel</string>
-    <string name="help_cover_b">Instellingen → Privacy en veiligheid → Openen als rekenmachine: de app opent als een werkende rekenmachine. Tik 10 keer achter elkaar op dezelfde toets om binnen te komen (de eerste keer wordt die toets de jouwe). Tik 20 keer op \'reset\' om een andere toets te kiezen. Je pincode beschermt nog steeds alles.</string>
+    <string name="help_cover_b">Instellingen → Privacy en veiligheid → Openen als rekenmachine: de app opent als een werkende rekenmachine. Tik 10 keer achter elkaar op dezelfde toets om binnen te komen (de eerste keer wordt die toets de jouwe). Tik 20 keer op \'reset\' om een andere toets te kiezen. Je pincode beschermt nog steeds alles. Dit vermomt de app terwijl hij open is; het verbergt CM-Chat NIET uit je app-lijst op modern Android.</string>
     <string name="help_shredder_t">Versnipperaar</string>
     <string name="help_shredder_b">Typ je pincode ACHTERSTEVOREN op het vergrendelscherm: alles wordt ongemerkt gewist en er verschijnt een kleine rode \'Fout. Start de app opnieuw.\' onder \'Welkom terug\'. Sluit de app en open hem opnieuw: hij begint helemaal fris (geen herinstallatie nodig).</string>
     <string name="help_wipe_t">Alles wissen</string>
@@ -304,7 +304,7 @@
     <string name="set_set_up">instellen</string>
     <string name="set_privacy_pin_hint">Vergrendelt deze groep (alleen cijfers).</string>
     <string name="set_cover">Openen als rekenmachine (dekmantel)</string>
-    <string name="set_cover_hint">Opent als een werkende rekenmachine. Tik 10× achter elkaar op dezelfde toets om binnen te komen; tik 20× op \'reset\' om een andere toets te kiezen.</string>
+    <string name="set_cover_hint">Opent als een werkende rekenmachine. Tik 10× achter elkaar op dezelfde toets om binnen te komen; tik 20× op \'reset\' om een andere toets te kiezen. Dit vermomt de app terwijl hij open is; het verbergt CM-Chat NIET uit je app-lijst op modern Android.</string>
     <string name="set_server_hint">Je eigen adres waarmee vrienden verbinden.</string>
     <string name="set_bridges">Verhulling / Bruggen (obfs4 · Snowflake)</string>
     <string name="set_bridges_hint">Verbergt voor je netwerk dat je Tor gebruikt. Kan trager zijn.</string>
@@ -416,4 +416,5 @@
     <string name="notif_buzz_channel">Buzz</string>
     <string name="notif_engine_channel">Motor</string>
     <string name="decoy_default_name">Notities voor mezelf</string>
+    <string name="lock_passphrase_hint">Een pincode van 4 cijfers is zwakker als je telefoon wordt afgepakt — een wachtwoordzin is veel sterker.</string>
 </resources>

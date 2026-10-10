@@ -17,10 +17,66 @@ continue.
   `assembleDebug` and `assembleRelease`, uploads `cm-chat-debug-apk`
   (installs on any phone, debug-signed), `cm-chat-apk` (release, unsigned
   for now), and the gradle build log. Green as of the icon commit.
-- Release signing: not set up yet (release APK is unsigned). Stable-key
-  signing via GitHub secrets is a later step; see "Signing TODO" below.
+- Release signing: wired. The RELEASE build is what ships (not debuggable,
+  minified, FLAG_SECURE on). CI signs it from four repo secrets
+  (`KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`); with
+  none set it falls back to an ephemeral per-run key so the APK still installs.
 
-## Final batch — everything remaining (after build81) (latest)
+## Hardening batch — safe for real use (after build82, 00074a7) (latest)
+Status words as below: "tested" = JVM unit/loopback test; "device" = needs a
+phone (no JVM equivalent). All JVM tests green: app 220, twin 5, 0 failures.
+- **H1 Exit leaves zero key material in RAM.** `exit()` now, after the existing
+  teardown, stops the engine with the exit flag set and ENDS THE PROCESS, so even
+  identity-key copies held as immutable Strings (which can't be overwritten in
+  place) are gone. `TorService.stopForExit()` sets `exiting=true` →
+  `onStartCommand` returns `START_NOT_STICKY` + `stopSelf`, so Android's sticky
+  restart can't revive the engine after the kill; `start()` (a fresh unlock)
+  clears the flag. The kill is a 300 ms-delayed `killProcess(myPid())` on the main
+  thread so the `stopService` settles first. The vault is already persisted before
+  this path. The RAM-zeroing half (`dropSessionKeys`) is JVM-testable and tested:
+  `SelfAttackTest.exit_wipes_every_key_from_ram` builds a live session (identity +
+  friend + a received message over the wire), then asserts after it that
+  `keysInRam()` is false, the friend table is empty, the vault reports closed, no
+  chat content remains and the outbox is empty. The actual process-kill is device.
+- **H2 Signed RELEASE build (stop shipping debug).** `release { isDebuggable=false;
+  isMinifyEnabled=true; isShrinkResources=true }`, proguard kept for
+  JNA/libsodium/Tor/IPtProxy/ZXing/serialization; FLAG_SECURE applied in release
+  only (`!BuildConfig.DEBUG` in MainActivity). Manifest `allowBackup="false"`, no
+  `android:debuggable`. `assembleRelease` builds clean with minify (tested here;
+  unsigned locally — CI signs). CI publishes `CM-Chat-arm64-RELEASE.apk` +
+  `CM-Chat-arm32-RELEASE.apk` as the builds to use, the debug APK only as
+  `CM-Chat-arm64-debug-TESTING.apk`, plus `Calculator-twin.apk`. Not-debuggable /
+  screenshot-block / recents-blank are device.
+- **H3 Hardware-bind the vault (short PIN not crackable off-device).** New
+  `KeystoreWrap` (AndroidKeyStore, alias `cmc_vault_wrap`, AES-256-GCM,
+  `BLOCK_MODE_GCM` / `ENCRYPTION_PADDING_NONE`, 256-bit, `setUnlockedDeviceRequired`
+  on API 28+, StrongBox with TEE fallback). The on-disk sealed region becomes
+  `MAGIC(8) || iv(12) || AES-GCM(Argon2 secretbox)`: save wraps the Argon2
+  ciphertext a SECOND time; load unwraps with the Keystore FIRST, then Argon2(PIN).
+  Opening needs BOTH the PIN and this phone's secure element, so a copied vault is
+  dead off-device however short the PIN. Argon2id params unchanged (ops 2, 64 MiB),
+  Argon2 still only on PIN entry. Migration: a build82 vault (no wrap) is detected
+  on first unlock, opened with Argon2 and silently re-saved WITH the wrap (cheap
+  re-seal, no Argon2) — one-time. A wrap failure while the screen is locked defers
+  the save (re-queued as pending, retried at next unlock), never corrupts the live
+  vault (wrap runs before the temp file is touched). Trade-off (documented in the
+  code): wiped / app-cleared / uninstalled / factory-reset = unrecoverable — correct
+  for anti-seizure. PIN screen shows an honest hint at creation (passphrase > 4-digit
+  if the phone is taken; hint only, not forced). Tested: `VaultWrapTest` (5) proves
+  same-device opens / wrong-device + brute-forced PINs / plain copy all fail,
+  legacy→wrapped migration, tamper→refused-never-plaintext, PIN change keeps the
+  wrap, marker never collides with a legacy nonce. The real AndroidKeyStore binding
+  (StrongBox/TEE, unlocked-device-required) is device.
+- **H4 Twin calculator — honest concealment.** Cover-mode help (`help_cover_b`,
+  `set_cover_hint`, all 14 locales) and the twin's release notes now say plainly:
+  it disguises the app while open; it does NOT hide CM-Chat from your app list on
+  modern Android. No false security claim.
+- **H5 Lock-screen language — confirmed, no change.** Before the first unlock the
+  app follows the phone's system language; the choice is stored ONLY inside the
+  encrypted vault (`VaultData.language`), never as an unencrypted hint on disk
+  (no SharedPreferences for language anywhere). Verified by reading the code.
+
+## Final batch — everything remaining (after build81)
 Status words as below: "tested" = JVM unit/loopback test; "device" = needs a
 phone. Commits: 096ab67, d37309e, 43c46f4, 74187aa, 2c959f9, then the twin.
 - **A Delivery (Moto "can't receive")** — wire v6 receipts (OK/RETRY/REJECTED/

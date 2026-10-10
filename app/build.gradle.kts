@@ -65,6 +65,10 @@ android {
             if (hasKeystore) signingConfig = signingConfigs.getByName("stable")
         }
         release {
+            // Not debuggable (no attachable debugger, no run-as file access) and
+            // FLAG_SECURE is applied in release (MainActivity) to block screenshots
+            // and the recent-apps preview. This is the build to ship.
+            isDebuggable = false
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
