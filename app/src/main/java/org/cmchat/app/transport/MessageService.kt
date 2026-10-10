@@ -1215,7 +1215,7 @@ object MessageService {
         val cur = _incomingKnocks.value
         if (cur.any { it.cmId == kp.cmId } || cur.size >= MAX_PENDING_KNOCKS) return
         ConnDiag.inc("KNOCK received (waiting for you to accept)")
-        _incomingKnocks.value = cur + KnockRequest(kp.displayName.take(24), kp.cmId)
+        _incomingKnocks.value = cur + KnockRequest(cleanName(kp.displayName) ?: "", kp.cmId)
         // A friend request always notifies (also while Invisible).
         if (notify) notify(Notice.FRIEND_REQUEST)
     }
@@ -1304,7 +1304,7 @@ object MessageService {
             ?.let { addressReached(currentId(fromCmId), it) }
         resendAddress()
         // Their OWN nickname travels in the acceptance: shown unless I named them.
-        kp.displayName.trim().take(24).takeIf { it.isNotEmpty() }?.let { onFriendName?.invoke(currentId(fromCmId), it) }
+        cleanName(kp.displayName)?.let { onFriendName?.invoke(currentId(fromCmId), it) }
     }
 
     /** They removed me from their list: remove them from mine too. */
@@ -1330,10 +1330,15 @@ object MessageService {
     /** A nickname frame: short, plain text (no control / invisible characters). */
     private fun nicknameFrom(body: ByteArray): String? {
         if (body.isEmpty() || body.size > 96) return null
-        val n = String(body, Charsets.UTF_8).filter { !it.isISOControl() && Character.getType(it) != Character.FORMAT.toInt() }
-            .trim().take(24)
-        return n.ifEmpty { null }
+        return cleanName(String(body, Charsets.UTF_8))
     }
+
+    /** A name that came from another phone, made safe to show: no control or
+     * invisible formatting characters (a right-to-left override can make a name
+     * read as something else), trimmed, at most 24 characters. Null if empty. */
+    internal fun cleanName(raw: String): String? =
+        raw.filter { !it.isISOControl() && Character.getType(it) != Character.FORMAT.toInt() }
+            .trim().take(24).ifEmpty { null }
 
     /** The new CMC-ID in an address update — only if it keeps the SAME identity key. */
     private fun addressFrom(peer: CmIdData, body: ByteArray): CmIdData? {

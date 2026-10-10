@@ -33,8 +33,14 @@ class MainActivity : ComponentActivity() {
             androidx.compose.runtime.CompositionLocalProvider(
                 androidx.compose.ui.platform.LocalContext provides ctx,
             ) {
-                CmChatTheme {
-                    AppNav()
+                // Every text field (messages, nicknames, PINs, notes) tells the
+                // keyboard not to learn what is typed: nothing from CM-Chat ends
+                // up in the keyboard's own dictionary or suggestion history.
+                @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+                androidx.compose.ui.platform.InterceptPlatformTextInput(IncognitoKeyboard) {
+                    CmChatTheme {
+                        AppNav()
+                    }
                 }
             }
         }
@@ -78,4 +84,20 @@ class MainActivity : ComponentActivity() {
         super.onStop()
         org.cmchat.app.LifecycleController.onAppBackground()
     }
+}
+
+/** Asks the keyboard for "incognito" input: no personalised learning. */
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+private object IncognitoKeyboard : androidx.compose.ui.platform.PlatformTextInputInterceptor {
+    override suspend fun interceptStartInputMethod(
+        request: androidx.compose.ui.platform.PlatformTextInputMethodRequest,
+        nextHandler: androidx.compose.ui.platform.PlatformTextInputSession,
+    ): Nothing = nextHandler.startInputMethod(object : androidx.compose.ui.platform.PlatformTextInputMethodRequest {
+        override fun createInputConnection(outAttributes: android.view.inputmethod.EditorInfo): android.view.inputmethod.InputConnection {
+            val ic = request.createInputConnection(outAttributes)
+            outAttributes.imeOptions = outAttributes.imeOptions or
+                android.view.inputmethod.EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+            return ic
+        }
+    })
 }
