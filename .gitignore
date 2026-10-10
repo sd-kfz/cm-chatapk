@@ -5,9 +5,11 @@
 .DS_Store
 /build/
 /app/build/
+/twin/build/
 /captures
 .externalNativeBuild
 .cxx
 *.apk
 *.keystore
 *.jks
+/.kotlin/

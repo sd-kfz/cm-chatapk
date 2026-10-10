@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Calculator</string>
+    <string name="hint">atinge de 10 ori</string>
+    <string name="reset">reset</string>
+</resources>

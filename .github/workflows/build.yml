@@ -60,7 +60,7 @@ jobs:
       - name: Run unit tests and build debug and release APKs
         run: |
           set +e
-          ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease --no-daemon --stacktrace 2>&1 | tee gradle-build.log
+          ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease :twin:testDebugUnitTest :twin:assembleDebug --no-daemon --stacktrace 2>&1 | tee gradle-build.log
           status=${PIPESTATUS[0]}
           exit $status
 
@@ -78,6 +78,14 @@ jobs:
         with:
           name: cm-chat-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload twin calculator APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: calculator-twin-apk
+          path: twin/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
       - name: Upload release APKs
@@ -101,11 +109,14 @@ jobs:
           D=app/build/outputs/apk/debug
           cp "$D/app-arm64-v8a-debug.apk"   "$RUNNER_TEMP/CM-Chat-arm64-debug.apk"
           cp "$D/app-armeabi-v7a-debug.apk" "$RUNNER_TEMP/CM-Chat-arm32-debug.apk"
+          cp twin/build/outputs/apk/debug/twin-debug.apk "$RUNNER_TEMP/Calculator-twin-debug.apk"
           NOTES="$(cat <<'EOF'
           **Download the ONE file for your phone:**
 
           - **CM-Chat-arm64-debug.apk** — Modern phones (Ulefone Armor 22, Samsung, Moto G5s, basically any phone from the last several years).
           - **CM-Chat-arm32-debug.apk** — Older 32-bit phones only.
+
+          Optional: **Calculator-twin-debug.apk** — a separate, plain calculator app (any phone). Tapping the same key 10 times opens CM-Chat; "reset" 20 times forgets that key.
 
           These are debug test builds signed with a stable key, so they install and upgrade in place.
 
@@ -115,5 +126,6 @@ jobs:
           gh release create "$TAG" \
             "$RUNNER_TEMP/CM-Chat-arm64-debug.apk" \
             "$RUNNER_TEMP/CM-Chat-arm32-debug.apk" \
+            "$RUNNER_TEMP/Calculator-twin-debug.apk" \
             --title "CM-Chat $TAG" \
             --notes "$NOTES"

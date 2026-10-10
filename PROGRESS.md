@@ -20,7 +20,52 @@ continue.
 - Release signing: not set up yet (release APK is unsigned). Stable-key
   signing via GitHub secrets is a later step; see "Signing TODO" below.
 
-## Batch 1 — core: works · safe · private (latest)
+## Final batch — everything remaining (after build81) (latest)
+Status words as below: "tested" = JVM unit/loopback test; "device" = needs a
+phone. Commits: 096ab67, d37309e, 43c46f4, 74187aa, 2c959f9, then the twin.
+- **A Delivery (Moto "can't receive")** — wire v6 receipts (OK/RETRY/REJECTED/
+  HAVE): "delivered" only when the other phone stored or durably held it. While
+  locked/closed, frames go to `held/` sealed to the identity key, replayed at
+  unlock as "Missed Message" (tested). Address re-sent to each friend until that
+  friend confirms; a new onion made while locked is kept sealed (tested). Brief
+  network drops → soft reconnect instead of a Tor restart (device). Decoy alerts
+  notify while Invisible; Exit drops all session keys (see self-review #3).
+- **B Contacts** — friend requests break through Invisible/closed; cancel or
+  remove a pending add; red X = Wipe conversation / Delete friend, one confirm
+  each; QR share/copy/scan (tested round trip; camera = device).
+- **C/D Chat UI + notifications** — fixed 🔥, scrolling chips; 🔥 and power
+  pills; Buzz greys out (no countdown); Buzz notification; one quiet engine
+  notification with the flower icon (device).
+- **E Files** — paperclip; streamed over the FS channel, RAM-only; 100 MB cap
+  checked before reading on both phones; photo/video metadata removed or the
+  file refused (fail-closed); names sanitised; never opened by the app (tested).
+- **F Decoy** — burn signal to confirmed friends (best effort, logged honestly).
+- **G Settings** — new order, Yes/No, diagnostics behind the Privacy PIN,
+  Remove Privacy PIN back, Buzz-when-closed always on, numeric Privacy PIN,
+  "nickname"/"+Add" wording (wire codes unchanged).
+- **H Languages** — 416 strings in res/values; ro fr de nl hu cs it es pl ru uk
+  fi nb translated (by the AI assistant — native-speaker review advised); live
+  switch on pick, applied at unlock; before the first unlock the phone's
+  language is used (the choice is only stored inside the vault). TranslationsTest.
+- **I Nicknames** — optional at add; "New Friend" until accepted; then their
+  own nickname; my label wins (tested).
+- **J Team Clock** — alarm-style, no UTC text; per-friend, durable, newest wins
+  across restarts and while locked (tested).
+- **K Calculator** — responsive on short screens; cover mode (same key 10×
+  opens, reset 20× forgets, italic hint; tested); **twin** = separate app
+  `org.pocketcalc.app` (`twin/`), a plain calculator that opens CM-Chat via the
+  same sequence; it holds only a SHA-256 of CM-Chat's package name (tested: no
+  "cmchat" anywhere in its APK). CM-Chat's own launcher icon is unchanged.
+- **L/M Polish + performance** — logo, status dot, eye toggles, wrapped PIN
+  dots, tool icons, equal rows; lazy Settings, no app-wide redraw on Tor
+  progress, no per-second chat redraw, throttled/paused logo glow (device).
+- **N** — `SelfAttackTest` fuzz/flood (mutation-checked);
+  `docs/SECURITY-SELF-REVIEW.md` (internal review, NOT an independent audit);
+  `docs/TWO-PHONE-TEST.md`; incognito keyboard for every field; stranger names
+  cleaned of direction-override characters.
+Tests: 214 app JVM tests + 5 twin tests green.
+
+## Batch 1 — core: works · safe · private
 Status words: "tested" = JVM unit/loopback test; "code" = traced/reviewed only;
 everything Tor/Android-UI still needs a device run.
 1. **Chat bubbles** — no commit ever put engine logs in the chat; the v1.2 palette

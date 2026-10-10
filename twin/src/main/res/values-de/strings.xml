@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Taschenrechner</string>
+    <string name="hint">10-mal tippen</string>
+    <string name="reset">reset</string>
+</resources>

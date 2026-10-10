@@ -16,3 +16,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "CM-Chat"
 include(":app")
+// A separate, plain calculator app that can open CM-Chat (see twin/).
+include(":twin")

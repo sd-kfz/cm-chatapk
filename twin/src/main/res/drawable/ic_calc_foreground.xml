@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A plain calculator: body, display, 3 x 4 keys (the last one orange). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+  <path android:fillColor="#E7EBF1" android:pathData="M37,26h34a5,5 0 0 1 5,5v46a5,5 0 0 1 -5,5h-34a5,5 0 0 1 -5,-5v-46a5,5 0 0 1 5,-5z"/>
+  <path android:fillColor="#0D1117" android:pathData="M38,32h32v10h-32z"/>
+  <path android:fillColor="#565F6C" android:pathData="M38,47h8v6h-8zM50,47h8v6h-8zM62,47h8v6h-8zM38,57h8v6h-8zM50,57h8v6h-8zM62,57h8v6h-8zM38,67h8v6h-8zM50,67h8v6h-8z"/>
+  <path android:fillColor="#E0793E" android:pathData="M62,67h8v6h-8z"/>
+</vector>
