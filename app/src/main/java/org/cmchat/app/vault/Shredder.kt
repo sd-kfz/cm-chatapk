@@ -52,7 +52,6 @@ object Shredder {
         runCatching { org.cmchat.app.guard.GuardController.wipeRamOnly() }   // chats, tools, buzz, diag, notifications, server
         runCatching { org.cmchat.app.transport.MessageService.zeroKeys() }
         runCatching { org.cmchat.app.transport.CoverTraffic.stop() }
-        runCatching { org.cmchat.app.tor.BuzzListenerService.stop(ctx) }
         runCatching { org.cmchat.app.tor.TorService.stop(ctx) }
         // Process-level scope: the shred must finish even if the screen goes away.
         scope.launch {

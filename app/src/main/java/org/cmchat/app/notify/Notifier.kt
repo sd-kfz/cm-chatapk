@@ -23,6 +23,9 @@ object Notifier {
     private const val ID_MESSAGE = 8002
     private const val ID_BUZZ = 8003
 
+    /** The brand cyan, behind the flower in the shade. */
+    const val BRAND_COLOR = 0xFF35C6F2.toInt()
+
     private fun ensureChannel(ctx: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val ch = NotificationChannel(
@@ -39,7 +42,8 @@ object Notifier {
         ensureChannel(ctx)
         // Title only — never a sender name and never any message content.
         val builder = NotificationCompat.Builder(ctx, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_notify_chat)
+            .setSmallIcon(org.cmchat.app.R.drawable.ic_stat_flower)
+            .setColor(BRAND_COLOR)
             .setContentTitle(title)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setAutoCancel(true)
@@ -62,7 +66,8 @@ object Notifier {
             ctx.getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
         }
         val builder = NotificationCompat.Builder(ctx, BUZZ_CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_notify_chat)
+            .setSmallIcon(org.cmchat.app.R.drawable.ic_stat_flower)
+            .setColor(BRAND_COLOR)
             .setContentTitle("Activity")
             .setPriority(NotificationCompat.PRIORITY_HIGH)   // heads-up on Android 7
             .setDefaults(NotificationCompat.DEFAULT_ALL)

@@ -47,11 +47,18 @@ object ChatStore {
         return m
     }
 
-    fun addTheirs(chatId: String, id: String, text: String, timer: SelfTimer, missed: Boolean = false) {
+    /**
+     * [at] = when it arrived (a message held while locked is added later, with
+     * its real time); [closedMiss] = it arrived while the app was closed.
+     */
+    fun addTheirs(chatId: String, id: String, text: String, timer: SelfTimer, missed: Boolean = false,
+                  at: Long? = null, closedMiss: Boolean = false) {
         // A missed (invisible) message isn't "seen" yet, so its self-timer
         // doesn't start until the user goes Online and views it.
+        val now = System.currentTimeMillis()
         val m = ChatMessage(id, mine = false, text = text, state = MsgState.SENT,
-            selfTimer = timer, seenAt = if (missed) null else System.currentTimeMillis(), missed = missed)
+            selfTimer = timer, createdAt = at ?: now, seenAt = if (missed) null else now, missed = missed,
+            closedMiss = closedMiss)
         // Every new message is unread until the chat is viewed while Online.
         update(chatId) { it.copy(messages = it.messages + m, unread = true) }
         touchPeer(chatId)
@@ -158,10 +165,16 @@ object ChatStore {
         it.copy(messages = it.messages + alertLine(DECOY_NOTICE, at), unread = true, decoyErase = true)
     }
 
-    /** Leaving a chat: burn seen view-once messages; erase it if a decoy notice was shown. */
+    /** Leaving a chat: burn seen view-once messages; erase it if a decoy notice was
+     * shown; messages that arrived while the app was closed lose their "Missed"
+     * mark once they've been seen (Online). */
     fun leaveChat(chatId: String) {
         burnViewOnce(chatId)
-        if (thread(chatId).decoyErase) erase(chatId)
+        if (thread(chatId).decoyErase) { erase(chatId); return }
+        update(chatId) { t ->
+            if (t.messages.none { it.closedMiss && it.seenAt != null }) t
+            else t.copy(messages = t.messages.map { if (it.closedMiss && it.seenAt != null) it.copy(closedMiss = false) else it })
+        }
     }
 
     /** Seed/set the Team clock without a system message (used when loading it). */
@@ -180,13 +193,15 @@ object ChatStore {
         )
     }
 
-    /** Drop self-timer-expired messages across all threads. */
+    /** Drop self-timer-expired messages across all threads. (Runs every second:
+     * nothing changes — and nothing is redrawn — unless something expired.) */
     fun purgeExpired(now: Long = System.currentTimeMillis()) {
-        _threads.update { m -> m.mapValues { (_, t) ->
-            t.copy(messages = t.messages.filterNot {
-                SelfTimerRules.isExpired(it.seenAt, it.selfTimer, now)
-            })
-        } }
+        _threads.update { m ->
+            if (m.values.none { t -> t.messages.any { SelfTimerRules.isExpired(it.seenAt, it.selfTimer, now) } }) m
+            else m.mapValues { (_, t) ->
+                t.copy(messages = t.messages.filterNot { SelfTimerRules.isExpired(it.seenAt, it.selfTimer, now) })
+            }
+        }
     }
 
     /**

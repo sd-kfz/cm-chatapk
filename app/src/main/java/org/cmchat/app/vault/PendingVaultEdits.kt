@@ -17,6 +17,7 @@ object PendingVaultEdits {
     private val removedBy = HashSet<String>()             // they terminated me
     private val terminationsDone = HashSet<String>()      // my terminate reached them
     private val lastSeen = HashMap<String, Long>()
+    private val addrConfirmed = HashMap<String, String>()  // friend cmId -> my cmId they have
 
     const val HOUR_MS = 60 * 60_000L
     const val LAST_SEEN_KEEP_MS = 24 * HOUR_MS
@@ -30,16 +31,17 @@ object PendingVaultEdits {
     fun seen(cmId: String, atMs: Long) = synchronized(lock) {
         lastSeen[cmId] = maxOf(atMs, lastSeen[cmId] ?: 0L)
     }
+    fun addressConfirmed(friendCmId: String, myCmId: String) = synchronized(lock) { addrConfirmed[friendCmId] = myCmId }
 
     fun isEmpty(): Boolean = synchronized(lock) {
         confirms.isEmpty() && relinks.isEmpty() && teamClock.isEmpty() && removedBy.isEmpty() &&
-            terminationsDone.isEmpty() && lastSeen.isEmpty()
+            terminationsDone.isEmpty() && lastSeen.isEmpty() && addrConfirmed.isEmpty()
     }
 
     /** Wipe paths: forget everything waiting. */
     fun clear() = synchronized(lock) {
         confirms.clear(); relinks.clear(); teamClock.clear(); removedBy.clear()
-        terminationsDone.clear(); lastSeen.clear()
+        terminationsDone.clear(); lastSeen.clear(); addrConfirmed.clear()
     }
 
     /**
@@ -57,6 +59,8 @@ object PendingVaultEdits {
             val id = c.cmId
             if (matches(id, confirms)) c = c.copy(pending = false)
             id?.let { teamClock[it] }?.let { v -> c = c.copy(teamHour = v.ifEmpty { null }) }
+            id?.let { i -> addrConfirmed.entries.firstOrNull { it.key == i || resolve(it.key) == i }?.value }
+                ?.let { c = c.copy(addrConfirmed = it) }
             id?.let { i -> lastSeen.entries.filter { it.key == i || resolve(it.key) == i }.maxOfOrNull { it.value } }
                 ?.let { at ->
                     val hour = at / HOUR_MS * HOUR_MS
@@ -70,7 +74,7 @@ object PendingVaultEdits {
             it.cmId in terminationsDone || nowMs - it.sinceMs > TERMINATION_GIVE_UP_MS
         }
         confirms.clear(); relinks.clear(); teamClock.clear(); removedBy.clear()
-        terminationsDone.clear(); lastSeen.clear()
+        terminationsDone.clear(); lastSeen.clear(); addrConfirmed.clear()
         d.copy(contacts = contacts, terminations = terminations)
     }
 }

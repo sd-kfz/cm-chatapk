@@ -49,11 +49,10 @@ import org.cmchat.app.ui.components.AlarmTimeDialog
 import org.cmchat.app.ui.components.CerberusMark
 import org.cmchat.app.ui.theme.*
 
-/** The three actions behind the red X — each needs TWO confirmations. */
+/** The two actions behind the red X — each with its own confirmation. */
 private enum class ChatAction(val title: String, val confirm: String) {
     WIPE("Wipe conversation", "Wipe"),
     DELETE("Delete friend", "Delete"),
-    TERMINATE("Terminate", "Terminate"),
 }
 
 /**
@@ -74,7 +73,6 @@ fun ChatScreen(
     /** Persisted (vault) "last seen", so it survives restarts and erases. */
     lastSeenSaved: Long? = null,
     onDeleteFriend: () -> Unit = {},
-    onTerminate: () -> Unit = {},
 ) {
     val chatId = chatCmId ?: contactName
     var renaming by remember { mutableStateOf(false) }
@@ -82,7 +80,6 @@ fun ChatScreen(
     var editingTeam by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     var action by remember { mutableStateOf<ChatAction?>(null) }
-    var confirmStep by remember { mutableStateOf(1) }
 
     // Load the persisted Team clock into this thread when the chat opens.
     LaunchedEffect(chatId, teamHour) { ChatStore.setTeamHourValue(chatId, teamHour) }
@@ -94,11 +91,13 @@ fun ChatScreen(
     var input by remember { mutableStateOf("") }
     var logRefused by remember { mutableStateOf(false) }
     var selfTimer by remember { mutableStateOf(SelfTimer.OFF) }
-    var now by remember { mutableStateOf(System.currentTimeMillis()) }
     val context = LocalContext.current
 
+    // Self-timers: drop expired messages once a second. No screen state is
+    // touched here, so the chat is redrawn only when something actually goes
+    // (the clocks on screen tick by themselves — see KillPill / TeamClockPill).
     LaunchedEffect(Unit) {
-        while (true) { now = System.currentTimeMillis(); ChatStore.purgeExpired(now); delay(1000) }
+        while (true) { ChatStore.purgeExpired(); delay(1000) }
     }
 
     // Mark this chat as the one on screen (so a message here doesn't also notify).
@@ -144,33 +143,26 @@ fun ChatScreen(
         }
     }
 
-    // ---- the X menu's two-step confirmation ---------------------------------
+    // ---- the X menu: each action has its own confirmation -------------------
     action?.let { a ->
-        val first = when (a) {
-            ChatAction.WIPE -> "Delete this whole conversation on BOTH phones, right now?"
-            ChatAction.DELETE -> "Remove $contactName from your friends? (Only on your phone.)"
-            ChatAction.TERMINATE -> "Remove $contactName AND remove yourself from their friend list?"
-        }
-        val second = when (a) {
-            ChatAction.WIPE -> "Are you sure? Both copies are erased and can't be brought back."
-            ChatAction.DELETE -> "Are you sure? To talk again, one of you has to add the other again."
-            ChatAction.TERMINATE -> "Are you sure? It applies on their phone as soon as it receives it."
+        val question = when (a) {
+            ChatAction.WIPE -> "Erase this whole conversation on BOTH phones? It can't be brought back."
+            ChatAction.DELETE -> "Remove $contactName from your friends? The chat is erased and they're " +
+                "gone from your list. (Their phone isn't told; to talk again, one of you adds the other.)"
         }
         AlertDialog(
             onDismissRequest = { action = null },
             title = { Text(a.title) },
-            text = { Text(if (confirmStep == 1) first else second) },
+            text = { Text(question) },
             confirmButton = {
                 TextButton(onClick = {
-                    if (confirmStep == 1) { confirmStep = 2; return@TextButton }
                     action = null
                     when (a) {
                         ChatAction.WIPE ->
                             if (chatCmId != null) MessageService.sendErase(chatCmId) else ChatStore.erase(chatId)
                         ChatAction.DELETE -> onDeleteFriend()
-                        ChatAction.TERMINATE -> onTerminate()
                     }
-                }) { Text(if (confirmStep == 1) "Continue" else a.confirm, color = CmRed) }
+                }) { Text(a.confirm, color = CmRed) }
             },
             dismissButton = { TextButton(onClick = { action = null }) { Text("Cancel") } },
         )
@@ -178,7 +170,7 @@ fun ChatScreen(
 
     val teamOffset = TeamClock.decode(thread.teamHour)
     if (editingTeam && chatCmId != null) {
-        val (h, m) = if (teamOffset != null) TeamClock.hourMinuteAt(now, teamOffset)
+        val (h, m) = if (teamOffset != null) TeamClock.hourMinuteAt(System.currentTimeMillis(), teamOffset)
             else java.util.Calendar.getInstance().let {
                 it.get(java.util.Calendar.HOUR_OF_DAY) to it.get(java.util.Calendar.MINUTE)
             }
@@ -208,9 +200,6 @@ fun ChatScreen(
 
     BoxWithConstraints(Modifier.fillMaxSize().background(CmBackground)
         .offset { IntOffset(shakeX.value.roundToInt(), 0) }) {
-        // Very short window (small phone with the keyboard up): drop the status
-        // strip so the messages and the composer keep their room.
-        val roomy = maxHeight >= 380.dp
         val bubbleMax = maxWidth * 0.78f
         Column(Modifier.fillMaxSize()) {
 
@@ -245,30 +234,25 @@ fun ChatScreen(
                             })
                     }
                     // Last seen only — there is NO online indicator on friends, ever.
-                    val seen = listOfNotNull(thread.peerLastSeen, lastSeenSaved).maxOrNull()
-                    LastSeen.bucket(seen, now)?.let {
-                        Text(it, color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp, maxLines = 1)
-                    }
+                    LastSeenLine(listOfNotNull(thread.peerLastSeen, lastSeenSaved).maxOrNull())
                 }
                 Box {
                     Box(Modifier.size(48.dp).clip(CircleShape).clickable { menuOpen = true },
                         contentAlignment = Alignment.Center) { RedX() }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                         DropdownMenuItem(text = { Text("Wipe conversation", fontFamily = Nunito) },
-                            onClick = { menuOpen = false; confirmStep = 1; action = ChatAction.WIPE })
-                        DropdownMenuItem(text = { Text("Delete friend", fontFamily = Nunito) },
-                            onClick = { menuOpen = false; confirmStep = 1; action = ChatAction.DELETE })
-                        DropdownMenuItem(text = { Text("Terminate", color = CmRed, fontFamily = Nunito) },
-                            enabled = chatCmId != null,
-                            onClick = { menuOpen = false; confirmStep = 1; action = ChatAction.TERMINATE })
+                            onClick = { menuOpen = false; action = ChatAction.WIPE })
+                        DropdownMenuItem(text = { Text("Delete friend", color = CmRed, fontFamily = Nunito) },
+                            onClick = { menuOpen = false; action = ChatAction.DELETE })
                     }
                 }
             }
 
             // ---- status strip: each item its own pill, one scrollable line ----
-            if (roomy) {
+            // Always shown — also with the keyboard up on a small phone (it is
+            // one short line; the messages give way instead).
+            run {
                 val generalTimer by org.cmchat.app.settings.AppSettings.generalTimer.collectAsState()
-                val killDeadline by org.cmchat.app.guard.GuardController.killDeadline.collectAsState()
                 val cerberusMin by org.cmchat.app.guard.GuardController.cerberusMinutes.collectAsState()
                 val nextTimer = if (selfTimer != SelfTimer.OFF) selfTimer else generalTimer
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
@@ -283,21 +267,9 @@ fun ChatScreen(
                             fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     }
                     TimerPill(nextTimer)
-                    Pill(outline = if (killDeadline != null) CmRed else CmTextFaint) {
-                        Text(killDeadline?.let { "Kill " + countdown(it - now) } ?: "Kill off",
-                            color = if (killDeadline != null) CmRed else CmTextDim,
-                            fontFamily = Nunito, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                    }
+                    KillPill()
                     // Team Clock: a shared clock for THIS chat, set like an alarm.
-                    Pill(outline = CmBlue, onClick = if (chatCmId != null) ({ editingTeam = true }) else null) {
-                        if (teamOffset != null) {
-                            Text("Team ", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
-                            Text(TeamClock.time12(now, teamOffset), color = CmBlue, fontFamily = Nunito,
-                                fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                        } else {
-                            Text("Set Team Clock", color = CmBlue, fontFamily = Nunito, fontSize = 12.sp)
-                        }
-                    }
+                    TeamClockPill(teamOffset, onClick = if (chatCmId != null) ({ editingTeam = true }) else null)
                 }
             }
 
@@ -333,13 +305,14 @@ fun ChatScreen(
             }
 
             // ---- composer -----------------------------------------------------
-            // Disappear SELECTOR — this ONE message only (resets after send).
+            // Disappear SELECTOR — this ONE message only (resets after send). The
+            // fire icon stays put on the left; only the choices scroll.
             Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 2.dp),
                 verticalAlignment = Alignment.CenterVertically) {
+                Text("🔥", fontSize = 16.sp, modifier = Modifier.padding(end = 6.dp))
                 Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically) {
-                    Text("Disappear:", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
                     for (t in TIMER_CHOICES) {
                         val sel = t == selfTimer
                         Box(Modifier.clip(RoundedCornerShape(10.dp))
@@ -351,17 +324,7 @@ fun ChatScreen(
                     }
                 }
                 Spacer(Modifier.width(8.dp))
-                val buzzLeft = chatCmId?.let { org.cmchat.app.buzz.BuzzPolicy.sendCooldownRemaining(it, now) } ?: 0L
-                Box(Modifier.clip(RoundedCornerShape(10.dp))
-                    .background(if (buzzLeft > 0) CmCard else CmOrange)
-                    .clickable(enabled = buzzLeft <= 0 && chatCmId != null) {
-                        if (chatCmId != null) MessageService.sendBuzz(chatCmId)
-                    }
-                    .padding(horizontal = 12.dp, vertical = 5.dp)) {
-                    Text(if (buzzLeft > 0) "Buzz ${buzzLeft}s" else "⚡ Buzz",
-                        color = if (buzzLeft > 0) CmTextDim else CmBackground,
-                        fontFamily = Nunito, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                }
+                BuzzButton(chatCmId)
             }
             if (selfTimer != SelfTimer.OFF) {
                 Text(if (selfTimer == SelfTimer.VIEW_ONCE) "burns the moment it's read — this message only"
@@ -445,24 +408,104 @@ private fun Pill(
         verticalAlignment = Alignment.CenterVertically, content = content)
 }
 
-/** "Kill 1h23m" style countdown for the status strip. */
+/** "1h23m" style countdown for the Kill pill. */
 private fun countdown(ms: Long): String {
     val secs = (ms / 1000).coerceAtLeast(0)
     return if (secs >= 3600) "${secs / 3600}h${(secs % 3600) / 60}m" else "${secs / 60}m${secs % 60}s"
 }
 
-/** The timer the NEXT message gets, as a small pill. */
+/** The current time, re-read every [periodMs] — ONLY in the composable that shows it. */
+@Composable
+private fun tick(periodMs: Long, active: Boolean = true): Long {
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    if (active) LaunchedEffect(periodMs) {
+        while (true) {
+            now = System.currentTimeMillis()
+            delay(periodMs - now % periodMs)      // on the boundary, not drifting
+        }
+    }
+    return now
+}
+
+/** The timer the NEXT message gets, as a small pill (🔥 = self-destruct). */
 @Composable
 private fun TimerPill(t: SelfTimer) {
     val on = t != SelfTimer.OFF
     val label = when (t) {
-        SelfTimer.OFF -> "timer off"
+        SelfTimer.OFF -> "off"
         SelfTimer.VIEW_ONCE -> "view once"
-        else -> "timer ${t.label}"
+        else -> t.label
     }
     Pill(outline = if (on) CmRed else CmTextFaint) {
+        Text("🔥", fontSize = 12.sp)
+        Spacer(Modifier.width(4.dp))
         Text(label, color = if (on) CmRed else CmTextDim, fontFamily = Nunito, fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold, maxLines = 1)
+    }
+}
+
+/** The Kill Timer: a drawn power symbol + its countdown (ticks only while armed). */
+@Composable
+private fun KillPill() {
+    val deadline by org.cmchat.app.guard.GuardController.killDeadline.collectAsState()
+    val now = tick(1000, active = deadline != null)
+    val armed = deadline != null
+    Pill(outline = if (armed) CmRed else CmTextFaint) {
+        org.cmchat.app.ui.components.PowerGlyph(if (armed) CmRed else CmTextDim, sizeDp = 14, strokeUnits = 2.6f)
+        Spacer(Modifier.width(5.dp))
+        Text(deadline?.let { countdown(it - now) } ?: "off",
+            color = if (armed) CmRed else CmTextDim,
+            fontFamily = Nunito, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+/** This chat's Team Clock (ticks once a minute, only while set). */
+@Composable
+private fun TeamClockPill(teamOffset: Int?, onClick: (() -> Unit)?) {
+    val now = tick(60_000, active = teamOffset != null)
+    Pill(outline = CmBlue, onClick = onClick) {
+        if (teamOffset != null) {
+            Text("Team ", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
+            Text(TeamClock.time12(now, teamOffset), color = CmBlue, fontFamily = Nunito,
+                fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        } else {
+            Text("Set Team Clock", color = CmBlue, fontFamily = Nunito, fontSize = 12.sp)
+        }
+    }
+}
+
+/** "last seen recently" (coarse: re-checked once a minute). */
+@Composable
+private fun LastSeenLine(seenMs: Long?) {
+    val now = tick(60_000, active = seenMs != null)
+    LastSeen.bucket(seenMs, now)?.let {
+        Text(it, color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp, maxLines = 1)
+    }
+}
+
+/**
+ * Buzz: no countdown on screen. After a Buzz it is greyed out and disabled
+ * until it may send again, then it comes back by itself.
+ */
+@Composable
+private fun BuzzButton(chatCmId: String?) {
+    var ready by remember(chatCmId) {
+        mutableStateOf(chatCmId != null && org.cmchat.app.buzz.BuzzPolicy.canSend(chatCmId))
+    }
+    LaunchedEffect(chatCmId, ready) {
+        if (chatCmId != null && !ready) {
+            delay(org.cmchat.app.buzz.BuzzPolicy.sendCooldownRemainingMs(chatCmId) + 50)
+            ready = org.cmchat.app.buzz.BuzzPolicy.canSend(chatCmId)
+        }
+    }
+    Box(Modifier.clip(RoundedCornerShape(10.dp))
+        .background(if (ready) CmOrange else CmCard)
+        .clickable(enabled = ready) {
+            if (chatCmId != null && MessageService.sendBuzz(chatCmId)) ready = false
+        }
+        .padding(horizontal = 12.dp, vertical = 5.dp)) {
+        Text("⚡ Buzz", color = if (ready) CmBackground else CmTextFaint,
+            fontFamily = Nunito, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
     }
 }
 
@@ -488,7 +531,7 @@ private fun Bubble(m: ChatMessage, maxBubble: androidx.compose.ui.unit.Dp) {
     Row(Modifier.fillMaxWidth(),
         horizontalArrangement = if (m.mine) Arrangement.End else Arrangement.Start) {
         Column(horizontalAlignment = if (m.mine) Alignment.End else Alignment.Start) {
-            if (m.missed) {
+            if (m.missed || m.closedMiss) {
                 Text("Missed Message", color = CmRed, fontFamily = Nunito, fontSize = 11.sp,
                     fontStyle = FontStyle.Italic, modifier = Modifier.padding(bottom = 2.dp))
             }
@@ -496,7 +539,7 @@ private fun Bubble(m: ChatMessage, maxBubble: androidx.compose.ui.unit.Dp) {
                 .background(if (m.mine) CmBubbleMine else CmBubbleTheirs)
                 .padding(horizontal = 14.dp, vertical = 10.dp)) {
                 Text(m.text, color = if (m.mine) CmBubbleMineText else CmBubbleText, fontFamily = Nunito,
-                    fontSize = 15.sp, fontStyle = if (m.missed) FontStyle.Italic else null)
+                    fontSize = 15.sp, fontStyle = if (m.missed || m.closedMiss) FontStyle.Italic else null)
             }
             // Time only (h:mm AM/PM) — no delivery/read receipts. A timed message
             // also shows its small RED self-timer (no countdown).

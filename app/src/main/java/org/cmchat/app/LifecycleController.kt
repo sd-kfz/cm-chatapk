@@ -7,23 +7,25 @@ import org.cmchat.app.diag.Diag
 import org.cmchat.app.notify.Notifier
 import org.cmchat.app.settings.AppSettings
 import org.cmchat.app.tools.ToolsState
-import org.cmchat.app.tor.BuzzListenerService
 import org.cmchat.app.tor.ServerController
 import org.cmchat.app.tor.TorService
 import kotlinx.coroutines.launch
 import org.cmchat.app.transport.MessageService
 
 /**
- * App open/close lifecycle policy (item 6 of the batch):
+ * App open/close lifecycle policy:
  *
- *  - Swiped from recents (onTaskRemoved) = CLOSED: stop messaging, go OFFLINE,
- *    clear ALL RAM state (messages, notes, statuses). The vault stays, so the
- *    next open needs the PIN. EXCEPTION: if "Let a Buzz reach me when closed"
- *    is ON (and not in Invisible mode), a minimal buzz-listener stays alive so a
- *    BUZZ can still post an "Activity" notification; everything else is dropped.
+ *  - Swiped from recents (onTaskRemoved) = CLOSED: the vault key and the chats
+ *    leave RAM (messages, notes, statuses); the next open needs the PIN. The
+ *    Buzz listener is ALWAYS on now: Tor and my onion stay up (the one engine
+ *    notification), a BUZZ still notifies, and everything else that arrives is
+ *    HELD — sealed to my identity key, on flash — and shown as "Missed Message"
+ *    after the next unlock. Nothing is dropped and then counted as delivered.
  *  - Minimised (still in recents): stays ONLINE and keeps RAM (handled by not
  *    calling this); Cerberus keeps counting because minimising is NOT "touching".
  *  - Returning to the foreground resumes normal messaging.
+ *  - Exit: every key leaves RAM (identity, friends, vault key) and the engine
+ *    stops — also when the app had been closed with the listener running.
  */
 object LifecycleController {
 
@@ -107,31 +109,34 @@ object LifecycleController {
             Diag.i("life", "closed but staying reachable")
             return
         }
-        // RAM is dropped either way (incl. anything still queued to send), and
-        // the vault key leaves RAM.
+        closeToListener()
+        Notifier.clearAll(ctx)
+        Diag.i("life", "closed -> listening")
+        org.cmchat.app.diag.ConnDiag.sys("App closed: listening — a Buzz notifies; messages are held " +
+            "(sealed) and shown as Missed after you unlock")
+    }
+
+    /**
+     * The RAM side of closing (no Android Context, so a JVM test runs exactly
+     * this). The vault key leaves RAM; from now on what arrives is HELD until
+     * the next unlock. Queued chat content is dropped from RAM; what the
+     * friendship needs (my address, an acceptance, a terminate) keeps going.
+     * The Buzz listener is always on: Tor + my onion stay up under the one
+     * engine notification. (Identity keys stay in RAM for it — decision B; Exit
+     * removes them.)
+     */
+    internal fun closeToListener() {
+        MessageService.closeVault()
         org.cmchat.app.vault.SecurityFactory.lockIfCreated()
-        MessageService.clearOutbox()
+        MessageService.dropQueuedContent()
         ChatStore.clearAll()
         ToolsState.clear()
         BuzzPolicy.clear()
-        Notifier.clearAll(ctx)
-
-        val keepListening = AppSettings.buzzListenerWhenClosed.value &&
-            !AppSettings.invisibleMode.value
         // Closing ends this start: the next open starts Invisible.
         AppSettings.startupPresence()
-        if (keepListening) {
-            // Buzz-only: Tor + onion stay up; only a BUZZ does anything now.
-            MessageService.buzzOnlyMode = true
-            MessageService.activeChatCmId = null
-            BuzzListenerService.start(ctx)
-            listening = true
-            Diag.i("life", "closed -> buzz-listener alive")
-            org.cmchat.app.diag.ConnDiag.sys("App closed: Buzz-only — messages are dropped until you reopen the app")
-        } else {
-            fullClose(ctx)
-            org.cmchat.app.diag.ConnDiag.sys("App closed: fully offline — nothing reaches you until you reopen")
-        }
+        MessageService.buzzOnlyMode = true
+        MessageService.activeChatCmId = null
+        listening = true
     }
 
     /** The user came back to the foreground. */
@@ -142,30 +147,38 @@ object LifecycleController {
         ownLaunchUntil = 0L
         if (listening) {
             MessageService.buzzOnlyMode = false
-            AppSettings.appContext?.let { BuzzListenerService.stop(it) }
             listening = false
             Diag.i("life", "foreground -> normal")
         }
     }
 
-    /** Exit: stop the server, clear RAM, drop the listener, and log out. */
-    fun exit(context: Context) {
-        val ctx = context.applicationContext
+    /**
+     * Exit / anti-seizure: every key leaves RAM — the identity keys and friend
+     * table (they come back from the vault at the next unlock), the vault key,
+     * the chats — also when the app had been closed with the listener running.
+     * No Android Context needed, so a JVM test runs exactly this.
+     */
+    internal fun dropSessionKeys() {
         MessageService.clearOutbox()
-        // Anti-seizure: the identity keys and the friend table leave RAM too.
-        // They come back from the vault at the next unlock.
         MessageService.zeroKeys()
         org.cmchat.app.vault.SecurityFactory.lockIfCreated()   // the vault key too
         AppSettings.startupPresence()
         ChatStore.clearAll()
         ToolsState.clear()
         BuzzPolicy.clear()
+        listening = false
+    }
+
+    /** Exit: stop the server, clear RAM, drop the listener, and log out. */
+    fun exit(context: Context) {
+        val ctx = context.applicationContext
+        dropSessionKeys()
         Notifier.clearAll(ctx)
         fullClose(ctx)
         lockRequests.tryEmit(Unit)
     }
 
-    /** Fully go dark: stop the server and Tor, and drop the listener. */
+    /** Fully go dark: stop the server and Tor. */
     private fun fullClose(ctx: Context) {
         MessageService.buzzOnlyMode = false
         MessageService.activeChatCmId = null
@@ -173,7 +186,6 @@ object LifecycleController {
         org.cmchat.app.transport.CoverTraffic.stop()
         org.cmchat.app.tools.Flashlight.off(ctx)
         ServerController.stop()
-        BuzzListenerService.stop(ctx)
         TorService.stop(ctx)
         Diag.i("life", "closed -> fully offline")
     }

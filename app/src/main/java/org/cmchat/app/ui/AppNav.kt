@@ -177,18 +177,45 @@ private fun AppNavContent() {
         cmId?.let { MessageService.deleteFriend(it) }
         saveVault { removeContact(it, cmId, name) }
     }
-    fun terminateFriend(cmId: String?, name: String) {
-        if (cmId == null) { deleteFriend(null, name); return }
-        MessageService.terminateFriend(cmId)
-        // Kept in the vault until it reaches them (survives a restart).
-        saveVault { d ->
-            removeContact(d, cmId, name).copy(terminations = d.terminations.filterNot { it.cmId == cmId } +
-                org.cmchat.app.vault.PendingTermination(cmId, System.currentTimeMillis()))
-        }
-    }
     fun cancelPendingAdd(cmId: String?, name: String) {
         cmId?.let { MessageService.cancelPending(it) }
         saveVault { removeContact(it, cmId, name) }
+    }
+    // My onion key/address changed (first publish, rotation). Saved in the vault
+    // when it's unlocked; otherwise sealed aside for the next unlock — a key that
+    // is lost means a NEW address next start, and friends could never reach me.
+    fun keepMyOnion(face: org.cmchat.app.vault.Face, pub: org.cmchat.app.tor.OnionPublish) {
+        val key = pub.newPrivateKey ?: face.onionKey ?: return
+        val saved = saveVault { cur ->
+            cur.copy(faces = cur.faces.map {
+                if (it.id == face.id) it.copy(onionKey = key, onionAddress = pub.onion) else it
+            })
+        }
+        if (!saved) {
+            val ok = org.cmchat.app.vault.OwnOnionStash.put(context.filesDir, manager.crypto, face.publicKey, key, pub.onion)
+            org.cmchat.app.diag.ConnDiag.sys(if (ok) "My server: new address kept sealed until you unlock"
+                else "My server: new address could NOT be kept — it may change after a restart")
+        }
+    }
+    // At unlock: a key that was made while locked goes into the vault now.
+    fun withStashedOnion(d: VaultData): VaultData {
+        val face = d.faces.firstOrNull() ?: return d
+        val dir = context.filesDir
+        val st = org.cmchat.app.vault.OwnOnionStash.read(dir, manager.crypto, face.publicKey, face.secretKey) ?: return d
+        if (face.onionKey == st.key && face.onionAddress == st.onion) {
+            org.cmchat.app.vault.OwnOnionStash.clear(dir); return d
+        }
+        val updated = d.copy(faces = d.faces.map {
+            if (it.id == face.id) it.copy(onionKey = st.key, onionAddress = st.onion) else it
+        })
+        if (org.cmchat.app.vault.VaultIO.save(manager, updated)) {
+            scope.launch(Dispatchers.IO) {
+                // Shredded only once the vault on disk has it.
+                if (runCatching { manager.flush() }.isSuccess) org.cmchat.app.vault.OwnOnionStash.clear(dir)
+            }
+            org.cmchat.app.diag.ConnDiag.sys("My server: the address made while locked is now saved")
+        }
+        return updated
     }
 
     // Surface a crash from a previous run (debug-phase aid), then delete it.
@@ -202,8 +229,9 @@ private fun AppNavContent() {
     // queued save is written) and the decrypted vault leaves the UI.
     LaunchedEffect(Unit) {
         // A recreated screen starts locked: never leave an earlier unlock's key behind.
-        if (data == null) manager.lock()
+        if (data == null) { MessageService.closeVault(); manager.lock() }
         org.cmchat.app.LifecycleController.lockRequests.collect {
+            MessageService.closeVault()   // what arrives from now on is held until unlock
             manager.lock()
             if (nav != Nav.Lock) {
                 data = null
@@ -259,13 +287,12 @@ private fun AppNavContent() {
                 TextButton(onClick = {
                     showWipeConfirm = false
                     // Log out first so nothing decrypted stays on screen or in RAM.
-                    manager.lock(); data = null; nav = Nav.Lock
+                    MessageService.closeVault(); manager.lock(); data = null; nav = Nav.Lock
                     scope.launch {
                         try {
                             // 1) stop the engine so nothing is still writing files…
                             runCatching { org.cmchat.app.transport.CoverTraffic.stop() }
                             runCatching { ServerController.stop() }
-                            runCatching { org.cmchat.app.tor.BuzzListenerService.stop(context) }
                             runCatching { TorService.stop(context) }
                             // 2) …wipe RAM…
                             runCatching { ChatStore.clearAll() }
@@ -308,6 +335,7 @@ private fun AppNavContent() {
             contactNames = d.contacts.mapNotNull { c -> c.cmId?.let { it to c.name } }.toMap(),
             pendingCmIds = d.contacts.filter { it.pending }.mapNotNull { it.cmId },
             pendingTerminations = d.terminations.map { it.cmId },
+            confirmedAddresses = d.contacts.mapNotNull { c -> c.cmId?.let { id -> c.addrConfirmed?.let { id to it } } }.toMap(),
         )
         val edits = org.cmchat.app.vault.PendingVaultEdits
         // A friend I added proved they accepted me → no longer pending.
@@ -329,6 +357,10 @@ private fun AppNavContent() {
         MessageService.onTerminationDelivered = { cmId -> edits.terminationDelivered(cmId); flushEdits() }
         // A friend was active: keep a coarse "last seen" (survives restarts).
         MessageService.onPeerSeen = { cmId, at -> edits.seen(cmId, at); flushEdits() }
+        // A friend's phone confirmed my current address: stop re-sending it.
+        MessageService.onAddressConfirmed = { cmId, mine -> edits.addressConfirmed(cmId, mine); flushEdits() }
+        // Held frames are shredded only after what they changed is on disk.
+        MessageService.flushVault = { manager.flush() }
         // Anything friends changed while the app was locked lands now.
         flushEdits()
         // Persist an accepted knock as a contact in the vault.
@@ -348,6 +380,9 @@ private fun AppNavContent() {
                 }
             }
         }
+        // Everything is wired: deliver what was held while locked (in order), then
+        // new frames go straight into the chats.
+        MessageService.openVault()
     }
 
     // Once Tor is ONLINE, publish the active Tag's onion service. The server
@@ -359,14 +394,9 @@ private fun AppNavContent() {
         // (Stopped on My Server = stays down: ServerController.start refuses.)
         if (torStatus is TorStatus.Online) {
             ServerController.start(face.name, face.onionKey, face.onionAddress) { pub ->
-                val keyChanged = pub.newPrivateKey != null && face.onionKey == null
+                val keyChanged = pub.newPrivateKey != null && pub.newPrivateKey != face.onionKey
                 val addrChanged = face.onionAddress != pub.onion
-                if (keyChanged || addrChanged) saveVault { cur ->
-                    cur.copy(faces = cur.faces.map {
-                        if (it.id == face.id) it.copy(onionKey = pub.newPrivateKey ?: it.onionKey, onionAddress = pub.onion)
-                        else it
-                    })
-                }
+                if (keyChanged || addrChanged) keepMyOnion(face, pub)
             }
         }
     }
@@ -374,7 +404,10 @@ private fun AppNavContent() {
     when (val n = nav) {
         // A fresh lock screen after the Shredder's error is cleared (the app was
         // closed and reopened) — it then starts clean, never stuck.
-        Nav.Lock -> key(shredEpoch) { LockScreen(manager) { unlocked ->
+        Nav.Lock -> key(shredEpoch) { LockScreen(manager) { opened ->
+            // A new address made while the app was locked goes into the vault
+            // FIRST — before the server starts with an older key.
+            val unlocked = withStashedOnion(opened)
             // Saved choices back into the live settings BEFORE anything reads them
             // (and before the settings mirror above starts saving).
             org.cmchat.app.settings.AppSettings.restoreFrom(unlocked.settings)
@@ -409,7 +442,7 @@ private fun AppNavContent() {
                         cmId = it.cmId,
                         // RAM (this run) or the vault's coarse copy (survives restarts).
                         lastSeenMs = listOfNotNull(t?.peerLastSeen, it.lastSeenAt).maxOrNull(),
-                        missed = t?.messages?.any { m -> m.missed } == true,
+                        missed = t?.messages?.any { m -> m.missed || m.closedMiss } == true,
                         buzzed = t?.buzzed ?: false,
                         pending = it.pending)
                 }
@@ -445,13 +478,19 @@ private fun AppNavContent() {
                                     if (f.id == me.id) f.copy(onionKey = pub.newPrivateKey ?: f.onionKey,
                                         onionAddress = pub.onion) else f
                                 })
+                                // The late save below can time out on a slow Tor: the
+                                // sealed copy makes sure the next unlock still gets it.
+                                pub.newPrivateKey?.let { k ->
+                                    org.cmchat.app.vault.OwnOnionStash.put(context.filesDir, manager.crypto,
+                                        me.publicKey, k, pub.onion)
+                                }
                                 // Saved to disk only — the decrypted vault is NOT put
                                 // back into RAM, since we're locked now.
                                 late.save(updated)
                                 myCmId(updated)?.let { id -> MessageService.sendAddressUpdate(id) }
                             }
                         }
-                        manager.lock(); data = null; nav = Nav.Lock
+                        MessageService.closeVault(); manager.lock(); data = null; nav = Nav.Lock
                         // …and leave the app (Home screen). The engine keeps running
                         // briefly so the alerts + new address can go out silently;
                         // reopening needs the PIN.
@@ -461,6 +500,7 @@ private fun AppNavContent() {
                 onOpenSettings = { nav = Nav.Settings },
                 onAddFriend = { nav = Nav.Knock },
                 onCancelPending = { c -> cancelPendingAdd(c.cmId, c.name) },
+                onRemovePending = { c -> deleteFriend(c.cmId, c.name) },
                 onOpenTool = { nav = Nav.Tool(it) },
                 onMinimise = { findActivity(context)?.moveTaskToBack(true) },
                 onExit = {
@@ -478,7 +518,6 @@ private fun AppNavContent() {
             teamHour = data?.contacts?.firstOrNull { it.cmId == n.cmId }?.teamHour,
             lastSeenSaved = data?.contacts?.firstOrNull { it.cmId == n.cmId }?.lastSeenAt,
             onDeleteFriend = { deleteFriend(n.cmId, n.name); nav = Nav.Friends },
-            onTerminate = { terminateFriend(n.cmId, n.name); nav = Nav.Friends },
             onSetTeamHour = { value ->
                 if (n.cmId != null) saveVault { cur ->
                     cur.copy(contacts = cur.contacts.map {
@@ -645,15 +684,12 @@ private fun AppNavContent() {
                 onRequestNewAddress = {
                     if (data != null && face != null) {
                         ServerController.requestNewAddress { pub ->
-                            // Persist the new onion key/address, recompute my
-                            // CMC-ID, and tell contacts (signed address-update).
-                            if (saveVault { cur ->
-                                    cur.copy(faces = cur.faces.map {
-                                        if (it.id == face.id) it.copy(onionKey = pub.newPrivateKey ?: it.onionKey,
-                                            onionAddress = pub.onion)
-                                        else it
-                                    })
-                                }) data?.let { myCmId(it) }?.let { MessageService.sendAddressUpdate(it) }
+                            // Persist the new onion key/address (sealed aside if the
+                            // app locked meanwhile) and tell every friend (signed
+                            // address-update, re-sent until each one confirms) —
+                            // whether or not the vault could be written right now.
+                            keepMyOnion(face, pub)
+                            MessageService.sendAddressUpdate(CmId.encode(pub.onion, face.publicKey))
                         }
                     }
                 },

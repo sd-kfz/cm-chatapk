@@ -52,12 +52,6 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
-        <!-- Scout listener: stays alive after swipe-away so a Buzz can arrive. -->
-        <service
-            android:name=".tor.BuzzListenerService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
-
         <!-- Guardian's bundled Tor service: force it NOT exported (we only bind
              it in-process; nothing outside the app may reach it). -->
         <service

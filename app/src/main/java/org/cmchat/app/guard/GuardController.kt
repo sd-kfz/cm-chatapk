@@ -100,6 +100,7 @@ object GuardController {
      */
     fun wipeRamOnly() {
         org.cmchat.app.transport.MessageService.clearOutbox()
+        org.cmchat.app.transport.MessageService.dropHeld()
         ChatStore.clearAll()
         org.cmchat.app.tools.ToolsState.clear()
         org.cmchat.app.buzz.BuzzPolicy.clear()
@@ -115,6 +116,8 @@ object GuardController {
     /** Silent RAM wipe: drop chats, stop server + Tor, kill the process. */
     fun wipeAndDie() {
         org.cmchat.app.transport.MessageService.clearOutbox()
+        // Held (unread) messages are conversation content too: shredded.
+        org.cmchat.app.transport.MessageService.dropHeld()
         ChatStore.clearAll()
         org.cmchat.app.tools.ToolsState.clear()
         org.cmchat.app.buzz.BuzzPolicy.clear()
@@ -122,7 +125,6 @@ object GuardController {
         appContext?.let {
             org.cmchat.app.diag.CrashCatcher.delete(it)
             org.cmchat.app.notify.Notifier.clearAll(it)
-            org.cmchat.app.tor.BuzzListenerService.stop(it)
             org.cmchat.app.tools.Flashlight.off(it)
         }
         ServerController.stop()

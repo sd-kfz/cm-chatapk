@@ -272,15 +272,19 @@ object SelfTest {
             runCatching {
                 server.accept().use { s ->
                     s.soTimeout = 5_000
-                    got.set(org.cmchat.app.transport.SecureWire.receive(bob, s.getInputStream(), s.getOutputStream(), contacts))
+                    val r = org.cmchat.app.transport.SecureWire.receive(bob, s.getInputStream(), s.getOutputStream(), contacts)
+                    // The receipt: "stored" (here: kept for the check below).
+                    (r as? org.cmchat.app.transport.SecureWire.Received.Message)?.reply(org.cmchat.app.transport.Ack.OK)
+                    got.set(r)
                 }
             }.onFailure { got.set(it) }
         }.also { it.start() }
+        var receipt: org.cmchat.app.transport.Ack? = null
         try {
             Socket().use { c ->
                 c.connect(InetSocketAddress("127.0.0.1", server.localPort), 2_000)
                 c.soTimeout = 5_000
-                org.cmchat.app.transport.SecureWire.send(alice, c.getInputStream(), c.getOutputStream(), bPub,
+                receipt = org.cmchat.app.transport.SecureWire.send(alice, c.getInputStream(), c.getOutputStream(), bPub,
                     org.cmchat.app.transport.FrameType.MSG, secret)
             }
             t.join(6_000)
@@ -290,6 +294,10 @@ object SelfTest {
         val r = got.get() as? org.cmchat.app.transport.SecureWire.Received.Message
         if (r == null || !r.body.contentEquals(secret)) {
             SelfTestLog.record("forward secrecy: handshake", "loopback message NOT delivered intact", Severity.HIGH)
+            return
+        }
+        if (receipt != org.cmchat.app.transport.Ack.OK) {
+            SelfTestLog.record("forward secrecy: handshake", "delivered, but no valid receipt came back", Severity.HIGH)
             return
         }
 

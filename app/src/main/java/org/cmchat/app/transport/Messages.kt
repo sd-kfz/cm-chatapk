@@ -13,6 +13,11 @@ data class KnockPayload(
     val cmId: String,
     /** true = "I cancelled my request": the recipient just removes the card. */
     val withdraw: Boolean = false,
+    /** 16 random bytes (hex) the recipient echoes in the knock's receipt. */
+    val nonce: String = "",
+    /** In an ACCEPTANCE: the address (CMC-ID) the accepter stored for the knocker
+     * — so the knocker knows whether my current address still has to follow. */
+    val yours: String = "",
 )
 
 @kotlinx.serialization.Serializable

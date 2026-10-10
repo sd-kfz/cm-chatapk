@@ -11,6 +11,7 @@ import org.cmchat.app.crypto.CryptoManager
 import org.cmchat.app.diag.ConnDiag
 import org.cmchat.app.settings.AppSettings
 import org.cmchat.app.tor.ServerController
+import org.cmchat.app.transport.Ack
 import org.cmchat.app.transport.FrameType
 import org.cmchat.app.transport.InnerCodec
 import org.cmchat.app.transport.KnockPayload
@@ -89,6 +90,8 @@ class SpineLoopbackTest {
         /** Who this phone accepts frames from: cmId -> identity key. */
         val friends = ConcurrentHashMap<String, String>()
         val inbox = LinkedBlockingQueue<SecureWire.Received>()
+        /** The receipt this phone answers with; null = it stores nothing, no receipt. */
+        @Volatile var receipt: Ack? = Ack.OK
         @Volatile private var server: ServerSocket? = null
 
         fun up() {
@@ -101,7 +104,17 @@ class SpineLoopbackTest {
                     thread(isDaemon = true) {
                         s.use {
                             it.soTimeout = 5_000
-                            inbox.put(SecureWire.receive(ch, it.getInputStream(), it.getOutputStream(), friends))
+                            val r = SecureWire.receive(ch, it.getInputStream(), it.getOutputStream(), friends)
+                            val ack = receipt
+                            if (ack != null) when (r) {
+                                is SecureWire.Received.Message -> r.reply(ack)
+                                is SecureWire.Received.Knock -> {
+                                    val kp = Messages.json.decodeFromString(KnockPayload.serializer(), String(r.body))
+                                    r.reply(hex(kp.nonce), CmId.decode(kp.cmId)!!.identityPubKeyHex, ack)
+                                }
+                                else -> {}
+                            }
+                            inbox.put(r)
                         }
                     }
                 }
@@ -114,14 +127,14 @@ class SpineLoopbackTest {
             server = null
         }
 
-        private fun toAlice(block: (Socket) -> Unit) = Socket().use { s ->
+        private fun <T> toAlice(block: (Socket) -> T): T = Socket().use { s ->
             s.connect(InetSocketAddress(loop, aliceServer.localPort), 2_000)
             s.soTimeout = 5_000
             block(s)
         }
 
-        /** One forward-secret frame to Alice (the real app). */
-        fun send(type: FrameType, payload: ByteArray) = toAlice { s ->
+        /** One forward-secret frame to Alice (the real app); her receipt. */
+        fun send(type: FrameType, payload: ByteArray): Ack = toAlice { s ->
             SecureWire.send(ch, s.getInputStream(), s.getOutputStream(), aPub, type, payload)
         }
 
@@ -129,12 +142,13 @@ class SpineLoopbackTest {
             Messages.json.encodeToString(TextPayload.serializer(), TextPayload(id, text, "off")).toByteArray())
 
         /** "Add friend" from this phone: an anonymous sealed knock to Alice
-         * ([withdraw] = "I cancelled my request"). */
-        fun knock(withdraw: Boolean = false) {
+         * ([withdraw] = "I cancelled my request"). Returns her receipt. */
+        fun knock(withdraw: Boolean = false): Ack {
+            val nonce = crypto.randomBytes(16)
             val body = Messages.json.encodeToString(KnockPayload.serializer(),
-                KnockPayload(name, cmId, withdraw)).toByteArray()
+                KnockPayload(name, cmId, withdraw, nonce = nonce.joinToString("") { "%02x".format(it) })).toByteArray()
             val sealed = ch.sealKnock(body, aPub)
-            toAlice { s -> Transport.writeFrame(s.getOutputStream(), sealed) }
+            return toAlice { s -> SecureWire.sendKnock(ch, s.getInputStream(), s.getOutputStream(), sealed, nonce, aPub) }
         }
 
         /** The next knock this phone received, decoded. */
@@ -154,6 +168,8 @@ class SpineLoopbackTest {
         }
     }
 
+    private fun hex(s: String) = ByteArray(s.length / 2) { i -> s.substring(2 * i, 2 * i + 2).toInt(16).toByte() }
+
     private fun waitUntil(what: String, ms: Long = 15_000, cond: () -> Boolean) {
         val end = System.currentTimeMillis() + ms
         while (!cond()) {
@@ -165,12 +181,29 @@ class SpineLoopbackTest {
     private fun textOf(m: SecureWire.Received.Message) =
         Messages.json.decodeFromString(TextPayload.serializer(), String(m.body)).text
 
+    /** Alice's app after an unlock: configured, and (unless [locked]) the vault open. */
     private fun configureAlice(
         friends: List<String> = emptyList(),
         pending: List<String> = emptyList(),
         terminations: List<String> = emptyList(),
-    ) = MessageService.configure(crypto, "Alice", aPub, aSec, aliceId, friends,
-        pendingCmIds = pending, pendingTerminations = terminations)
+        confirmed: Map<String, String> = friends.associateWith { aliceId },
+        locked: Boolean = false,
+    ) {
+        MessageService.configure(crypto, "Alice", aPub, aSec, aliceId, friends,
+            pendingCmIds = pending, pendingTerminations = terminations, confirmedAddresses = confirmed)
+        if (!locked) {
+            MessageService.openVault()
+            waitUntil("vault open") { MessageService.vaultIsOpen() }
+        }
+    }
+
+    /** Alice swipes her app away: exactly what the app runs (vault locked, chats
+     *  out of RAM, Buzz listener on). */
+    private fun aliceClosesTheApp() = LifecycleController.closeToListener()
+
+    private fun heldFiles() = heldDir.listFiles { f -> f.name.endsWith(".held") }?.size ?: 0
+
+    private lateinit var heldDir: java.io.File
 
     @Before
     fun setUp() {
@@ -178,6 +211,8 @@ class SpineLoopbackTest {
         ChatStore.clearAll()
         ConnDiag.clear()
         AppSettings.invisibleMode.value = false
+        heldDir = java.nio.file.Files.createTempDirectory("held").toFile()
+        MessageService.heldDir = heldDir
         val (p, s) = crypto.newIdentityKeypair(); aPub = p; aSec = s
         aliceId = CmId.encode(onionOf('a'), aPub)
 
@@ -228,11 +263,16 @@ class SpineLoopbackTest {
         MessageService.onFriendTerminated = null
         MessageService.onTerminationDelivered = null
         MessageService.onPeerSeen = null
+        MessageService.onAddressConfirmed = null
+        MessageService.onContactAddressUpdated = null
+        MessageService.onTeamClockChanged = null
         ServerController.onIncoming = null
         runCatching { aliceServer.close() }
         phones.forEach { it.down() }
         ChatStore.clearAll()
         AppSettings.invisibleMode.value = false
+        heldDir.deleteRecursively()
+        MessageService.heldDir = null
     }
 
     /** THE SPINE: Add friend → they accept → messages both ways. */
@@ -251,10 +291,11 @@ class SpineLoopbackTest {
         assertEquals("Alice", kp.displayName)
         assertEquals(aliceId, kp.cmId)
 
-        // 3) Bob taps Accept: he adds Alice and sends KNOCK_ACCEPT (forward-secret).
+        // 3) Bob taps Accept: he adds Alice and sends KNOCK_ACCEPT (forward-secret),
+        //    saying which address of hers he stored.
         bob.friends[aliceId] = aPub
-        bob.send(FrameType.KNOCK_ACCEPT,
-            Messages.json.encodeToString(KnockPayload.serializer(), KnockPayload("Bob", bob.cmId)).toByteArray())
+        bob.send(FrameType.KNOCK_ACCEPT, Messages.json.encodeToString(KnockPayload.serializer(),
+            KnockPayload("Bob", bob.cmId, yours = aliceId)).toByteArray())
         waitUntil("Alice sees Bob's acceptance") { bob.cmId in confirmed }
         assertFalse(MessageService.isPending(bob.cmId))
 
@@ -332,6 +373,41 @@ class SpineLoopbackTest {
         assertEquals(FrameType.KNOCK_ACCEPT, acc.type)
         assertEquals(aliceId, acc.cmId)
         assertTrue("no duplicate knock card", MessageService.incomingKnocks.value.isEmpty())
+    }
+
+    /** B2 "stuck on Pending": my acceptance never reached him, and meanwhile his
+     *  address changed. His new knock (from the new address) gets the acceptance
+     *  THERE — no duplicate card, and no move on an unproven hint. */
+    @Test
+    fun a_friend_whose_address_changed_before_my_acceptance_arrived_still_gets_it() {
+        val bob = Phone("Bob", 'b')
+        bob.friends[aliceId] = aPub                 // Alice is still pending on his side
+        val oldId = bob.cmId
+        configureAlice(friends = listOf(oldId))     // she accepted him at his OLD address
+        bob.onion = onionOf('f'); bob.up()          // the old address is dead
+        assertEquals(Ack.OK, bob.knock())
+        val acc = bob.nextFrame()
+        assertEquals("the acceptance reached him at the new address", FrameType.KNOCK_ACCEPT, acc.type)
+        assertTrue("no duplicate request card", MessageService.incomingKnocks.value.isEmpty())
+        assertEquals("not moved on an unproven hint", oldId, MessageService.currentId(oldId))
+    }
+
+    /** His acceptance says which address of mine he stored: if it's an older
+     *  one (mine changed while he hadn't accepted yet), my current one follows. */
+    @Test
+    fun if_they_accepted_my_old_address_my_current_one_follows() {
+        val bob = Phone("Bob", 'b').also { it.up() }
+        configureAlice()
+        assertEquals(KnockResult.QUEUED, MessageService.sendKnock(bob.cmId))
+        bob.nextKnock()
+        val newMine = CmId.encode(onionOf('g'), aPub)
+        MessageService.sendAddressUpdate(newMine)          // mine changed; he's still pending
+        bob.friends[aliceId] = aPub
+        bob.send(FrameType.KNOCK_ACCEPT, Messages.json.encodeToString(KnockPayload.serializer(),
+            KnockPayload("Bob", bob.cmId, yours = aliceId)).toByteArray())   // he has the OLD one
+        val up = bob.nextFrame()
+        assertEquals(FrameType.ADDR_UPDATE, up.type)
+        assertEquals(newMine, String(up.body))
     }
 
     @Test
@@ -466,8 +542,8 @@ class SpineLoopbackTest {
         assertFalse(k.withdraw)
         // Bob had already accepted: his acceptance resolves the pending.
         bob.friends[aliceId] = aPub
-        bob.send(FrameType.KNOCK_ACCEPT,
-            Messages.json.encodeToString(KnockPayload.serializer(), KnockPayload("Bob", bob.cmId)).toByteArray())
+        bob.send(FrameType.KNOCK_ACCEPT, Messages.json.encodeToString(KnockPayload.serializer(),
+            KnockPayload("Bob", bob.cmId, yours = aliceId)).toByteArray())
         waitUntil("pending resolved") { !MessageService.isPending(bob.cmId) && bob.cmId in confirmed }
         // No knock storm: configuring again right away doesn't re-knock.
         configureAlice(friends = listOf(bob.cmId))
@@ -595,6 +671,274 @@ class SpineLoopbackTest {
         assertFalse(t.unread)
         assertTrue(t.messages.none { it.missed })
         assertTrue(t.messages.single().seenAt != null)
+    }
+
+    // ---- A. delivery reliability: held, never dropped -----------------------------
+
+    /** A1: the app was swiped away (Buzz listener on) — a message is HELD, sealed,
+     *  and after the next unlock it shows as "Missed Message". */
+    @Test
+    fun a_message_that_arrives_while_my_app_is_closed_is_held_and_shows_as_missed() {
+        val bob = Phone("Bob", 'b').also { it.up() }
+        bob.friends[aliceId] = aPub
+        configureAlice(friends = listOf(bob.cmId))
+        aliceClosesTheApp()
+
+        assertEquals("her phone says it's stored", Ack.OK, bob.text("b-1", "while you were away"))
+        assertTrue("not in RAM — the chats left with the app", ChatStore.thread(bob.cmId).messages.isEmpty())
+        assertEquals("held on flash", 1, heldFiles())
+        assertFalse("sealed: no plaintext on disk", heldDir.walk().filter { it.isFile }
+            .any { String(it.readBytes(), Charsets.ISO_8859_1).contains("while you were away") })
+
+        // Reopen + unlock (every start is Invisible):
+        MessageService.buzzOnlyMode = false
+        configureAlice(friends = listOf(bob.cmId))
+        val m = ChatStore.thread(bob.cmId).messages.single()
+        assertEquals("while you were away", m.text)
+        assertTrue(m.missed && m.closedMiss)
+        assertEquals("shredded once delivered", 0, heldFiles())
+        // Online: still "Missed Message" (it came while the app was closed)…
+        AppSettings.invisibleMode.value = false
+        ChatStore.deliverMissed()
+        assertTrue(ChatStore.thread(bob.cmId).messages.single().closedMiss)
+        // …until it has been seen and the chat left.
+        ChatStore.markSeen(bob.cmId)
+        ChatStore.leaveChat(bob.cmId)
+        assertFalse(ChatStore.thread(bob.cmId).messages.single().closedMiss)
+    }
+
+    /** A1: the sender NEVER sees "delivered" for a frame the other phone didn't store. */
+    @Test
+    fun a_frame_my_friend_did_not_store_is_never_counted_as_delivered() {
+        val bob = Phone("Bob", 'b').also { it.up() }
+        bob.friends[aliceId] = aPub
+        configureAlice(friends = listOf(bob.cmId))
+
+        bob.receipt = null                       // his phone opens it but stores nothing
+        MessageService.sendText(bob.cmId, "did you get this?", SelfTimer.OFF)
+        bob.nextFrame()                          // it reached his socket…
+        waitUntil("no receipt logged") { ConnDiag.dump().contains("no receipt") }
+        assertEquals("…but without a receipt it is NOT delivered", MsgState.SENDING,
+            ChatStore.thread(bob.cmId).messages.single().state)
+
+        bob.receipt = Ack.RETRY                  // "full — try later"
+        bob.text("b-1", "ping")                  // a frame from him makes Alice retry now
+        bob.nextFrame()
+        waitUntil("retry asked") { ConnDiag.dump().contains("asked to retry later") }
+        assertEquals(MsgState.SENDING, ChatStore.thread(bob.cmId).messages.first { it.mine }.state)
+
+        bob.receipt = Ack.OK
+        bob.text("b-2", "ping again")
+        assertEquals("did you get this?", textOf(bob.nextFrame()))
+        waitUntil("delivered only now") { ChatStore.thread(bob.cmId).messages.first { it.mine }.state == MsgState.SENT }
+    }
+
+    /** A receipt that got lost makes the sender send it again: shown once. */
+    @Test
+    fun a_message_resent_after_a_lost_receipt_shows_only_once() {
+        val bob = Phone("Bob", 'b').also { it.up() }
+        bob.friends[aliceId] = aPub
+        configureAlice(friends = listOf(bob.cmId))
+        assertEquals(Ack.OK, bob.text("b-1", "once"))
+        assertEquals("the re-send is confirmed…", Ack.OK, bob.text("b-1", "once"))
+        assertEquals("…but shown once", 1, ChatStore.thread(bob.cmId).messages.size)
+        // The same while locked: held once.
+        MessageService.closeVault()
+        bob.text("b-2", "held once"); bob.text("b-2", "held once")
+        assertEquals(1, heldFiles())
+        configureAlice(friends = listOf(bob.cmId))
+        assertEquals(listOf("once", "held once"), ChatStore.thread(bob.cmId).messages.map { it.text })
+    }
+
+    /** Held = on flash: the OS killing the app before the next unlock loses nothing. */
+    @Test
+    fun held_messages_survive_the_app_being_killed_before_the_next_unlock() {
+        val bob = Phone("Bob", 'b').also { it.up() }
+        bob.friends[aliceId] = aPub
+        configureAlice(friends = listOf(bob.cmId))
+        aliceClosesTheApp()
+        bob.text("b-1", "first"); bob.text("b-2", "second")
+        assertEquals(2, heldFiles())
+
+        MessageService.zeroKeys(); ChatStore.clearAll()        // RAM gone, flash stays
+        configureAlice(friends = listOf(bob.cmId))             // a fresh start + unlock
+        assertEquals("in order", listOf("first", "second"), ChatStore.thread(bob.cmId).messages.map { it.text })
+        assertEquals(0, heldFiles())
+    }
+
+    /** A friend's new address while I'm locked works AT ONCE, and still reaches the
+     *  vault after a killed app (its held copy is replayed). */
+    @Test
+    fun a_friends_new_address_while_locked_works_at_once_and_survives_a_killed_app() {
+        val moved = CopyOnWriteArrayList<Pair<String, String>>()
+        MessageService.onContactAddressUpdated = { o, n -> moved += o to n }
+        val bob = Phone("Bob", 'b').also { it.up() }
+        bob.friends[aliceId] = aPub
+        configureAlice(friends = listOf(bob.cmId))
+        val oldId = bob.cmId
+        MessageService.closeVault()                            // minimised + re-locked
+
+        bob.down(); bob.onion = onionOf('d'); bob.up()
+        val newId = bob.cmId
+        assertEquals(Ack.OK, bob.send(FrameType.ADDR_UPDATE, newId.toByteArray()))
+        assertEquals("relinked at once", newId, MessageService.currentId(oldId))
+        assertEquals(listOf(oldId to newId), moved)
+        MessageService.sendText(oldId, "reaches the new address", SelfTimer.OFF)
+        assertEquals("reaches the new address", textOf(bob.nextFrame()))
+
+        // Killed before the next unlock: the vault still has the old address.
+        MessageService.zeroKeys(); moved.clear()
+        configureAlice(friends = listOf(oldId))
+        assertEquals("the held update is applied again", listOf(oldId to newId), moved)
+        assertEquals(newId, MessageService.currentId(oldId))
+    }
+
+    /** A2: my address goes to each friend until THEIR phone confirms it — also
+     *  after my app is closed, and again for every new address. */
+    @Test
+    fun my_address_is_resent_until_each_friend_confirms_it() {
+        val confirmedBy = CopyOnWriteArrayList<Pair<String, String>>()
+        MessageService.onAddressConfirmed = { f, mine -> confirmedBy += f to mine }
+        val bob = Phone("Bob", 'b').also { it.up() }
+        bob.friends[aliceId] = aPub
+        bob.receipt = null                                     // his phone doesn't confirm yet
+        configureAlice(friends = listOf(bob.cmId), confirmed = emptyMap())
+        val f = bob.nextFrame()
+        assertEquals(FrameType.ADDR_UPDATE, f.type)
+        assertEquals(aliceId, String(f.body))
+        assertTrue(confirmedBy.isEmpty())
+
+        aliceClosesTheApp()                                    // not dropped with the chat content
+        bob.receipt = Ack.OK
+        bob.send(FrameType.BUZZ, ByteArray(0))                 // he shows up → retried at once
+        assertEquals(FrameType.ADDR_UPDATE, bob.nextFrame().type)
+        waitUntil("confirmed") { confirmedBy == listOf(bob.cmId to aliceId) }
+
+        // Confirmed (and saved): the next start doesn't send it again…
+        configureAlice(friends = listOf(bob.cmId), confirmed = mapOf(bob.cmId to aliceId))
+        assertNull(bob.inbox.poll(800, TimeUnit.MILLISECONDS))
+        // …but a NEW address of mine goes out until he confirms that one.
+        val newMine = CmId.encode(onionOf('e'), aPub)
+        MessageService.sendAddressUpdate(newMine)
+        assertEquals(newMine, String(bob.nextFrame().body))
+        waitUntil("new one confirmed") { confirmedBy.lastOrNull() == (bob.cmId to newMine) }
+    }
+
+    /** B1 + A1: a friend request reaches me while my app is closed (Invisible),
+     *  notifies, and survives the app being killed before I look. */
+    @Test
+    fun a_friend_request_while_my_app_is_closed_gets_through_and_survives_a_restart() {
+        val notices = CopyOnWriteArrayList<MessageService.Notice>()
+        val before = MessageService.notify
+        MessageService.notify = { notices += it }
+        try {
+            configureAlice()
+            aliceClosesTheApp()
+            val carol = Phone("Carol", 'c').also { it.up() }
+            assertEquals("her phone stored it", Ack.OK, carol.knock())
+            assertTrue(MessageService.incomingKnocks.value.any { it.cmId == carol.cmId })
+            assertTrue("a friend request notifies even while Invisible",
+                MessageService.Notice.FRIEND_REQUEST in notices)
+            assertEquals(1, heldFiles())
+
+            MessageService.zeroKeys()                          // killed before I looked
+            configureAlice()
+            assertEquals(listOf("Carol"), MessageService.incomingKnocks.value.map { it.displayName })
+            assertEquals(0, heldFiles())
+        } finally {
+            MessageService.notify = before
+        }
+    }
+
+    @Test
+    fun a_request_withdrawn_while_locked_does_not_come_back_at_unlock() {
+        configureAlice()
+        MessageService.closeVault()
+        val carol = Phone("Carol", 'c').also { it.up() }
+        assertEquals(Ack.OK, carol.knock())
+        assertEquals(1, heldFiles())
+        assertEquals(Ack.OK, carol.knock(withdraw = true))
+        assertEquals(0, heldFiles())
+        configureAlice()
+        assertTrue(MessageService.incomingKnocks.value.isEmpty())
+    }
+
+    /** A5: a friend's decoy alert notifies even while I'm Invisible — unlocked or
+     *  locked; while locked, what they sent that's still held is shredded. */
+    @Test
+    fun a_friends_decoy_alert_notifies_even_while_i_am_invisible() {
+        val notices = CopyOnWriteArrayList<MessageService.Notice>()
+        val before = MessageService.notify
+        MessageService.notify = { notices += it }
+        try {
+            val bob = Phone("Bob", 'b').also { it.up() }
+            bob.friends[aliceId] = aPub
+            configureAlice(friends = listOf(bob.cmId))
+            AppSettings.invisibleMode.value = true
+            assertEquals(Ack.OK, bob.send(FrameType.DECOY_ALERT, ByteArray(0)))
+            assertTrue(MessageService.Notice.MESSAGE in notices)
+
+            notices.clear()
+            MessageService.closeVault()
+            bob.text("b-1", "plans")
+            assertEquals(1, heldFiles())
+            assertFalse("a message doesn't notify while Invisible", MessageService.Notice.MESSAGE in notices)
+            assertEquals(Ack.OK, bob.send(FrameType.DECOY_ALERT, ByteArray(0)))
+            assertTrue("the decoy alert does", MessageService.Notice.MESSAGE in notices)
+            assertEquals("his held message is shredded; only the notice waits", 1, heldFiles())
+            configureAlice(friends = listOf(bob.cmId))
+            val t = ChatStore.thread(bob.cmId)
+            assertTrue(t.messages.none { it.text == "plans" })
+            assertTrue(t.messages.any { it.alert && it.text == ChatStore.DECOY_NOTICE })
+        } finally {
+            MessageService.notify = before
+        }
+    }
+
+    /** Can't hold it (storage full / not writable): the sender is told to retry —
+     *  never "delivered". */
+    @Test
+    fun a_message_that_cannot_be_held_is_never_confirmed() {
+        val bob = Phone("Bob", 'b').also { it.up() }
+        bob.friends[aliceId] = aPub
+        val notADir = java.io.File.createTempFile("held", ".x")
+        try {
+            MessageService.heldDir = notADir                   // set before the engine starts
+            configureAlice(friends = listOf(bob.cmId))
+            MessageService.closeVault()
+            assertEquals(Ack.RETRY, bob.text("b-1", "kept by Bob for later"))
+        } finally {
+            notADir.delete()
+        }
+    }
+
+    @Test
+    fun an_erase_while_locked_shreds_what_they_sent_that_was_held() {
+        val bob = Phone("Bob", 'b').also { it.up() }
+        bob.friends[aliceId] = aPub
+        configureAlice(friends = listOf(bob.cmId))
+        MessageService.closeVault()
+        bob.text("b-1", "oops")
+        assertEquals(1, heldFiles())
+        assertEquals(Ack.OK, bob.send(FrameType.ERASE_CHAT, ByteArray(0)))
+        assertEquals(0, heldFiles())
+        configureAlice(friends = listOf(bob.cmId))
+        assertTrue(ChatStore.thread(bob.cmId).messages.isEmpty())
+    }
+
+    /** A6: Exit wipes every key — also when the app had been closed with the Buzz
+     *  listener running (decision B: the listener keeps them until Exit). */
+    @Test
+    fun exit_wipes_every_key_even_with_the_buzz_listener_running() {
+        val bob = Phone("Bob", 'b').also { it.up() }
+        bob.friends[aliceId] = aPub
+        configureAlice(friends = listOf(bob.cmId))
+        aliceClosesTheApp()
+        assertTrue("the listener holds the keys", MessageService.keysInRam())
+        LifecycleController.dropSessionKeys()                 // exactly what Exit runs
+        assertFalse("no identity key, friend table or channel left", MessageService.keysInRam())
+        assertTrue("and nothing gets in any more", runCatching { bob.text("b-1", "anyone?") }.isFailure)
+        assertEquals(0, heldFiles())
     }
 
     @Test

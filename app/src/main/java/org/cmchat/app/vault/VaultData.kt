@@ -37,6 +37,9 @@ data class ContactRec(
     /** When they were last active, rounded DOWN to the hour, kept at most 24 h —
      * so "last seen recently" survives restarts and chat erases. Never exact. */
     val lastSeenAt: Long? = null,
+    /** The address (CMC-ID) of MINE their phone confirmed. While it isn't my
+     * current one, my address keeps being re-sent to them (across restarts). */
+    val addrConfirmed: String? = null,
 )
 
 /** A TERMINATE I sent that hasn't reached the ex-friend's phone yet. */

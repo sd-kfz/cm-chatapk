@@ -69,6 +69,8 @@ fun FriendsScreen(
     onAddFriend: () -> Unit = {},
     /** Cancel a still-pending add (removes them; withdraws the request card). */
     onCancelPending: (Contact) -> Unit = {},
+    /** Remove a pending contact from MY list only (nothing is sent). */
+    onRemovePending: (Contact) -> Unit = {},
     onOpenTool: (String) -> Unit = {},
     onMinimise: () -> Unit = {},
     onExit: () -> Unit = {},
@@ -82,20 +84,28 @@ fun FriendsScreen(
     val invisible by org.cmchat.app.settings.AppSettings.invisibleMode.collectAsState()
     val versionMismatch by MessageService.versionMismatch.collectAsState()
     val online = torStatus is TorStatus.Online
-    var cancelFor by remember { mutableStateOf<Contact?>(null) }
-    cancelFor?.let { c ->
+    // A pending friend: tapping the row opens what you can do about it — never a
+    // dead end ("stuck on Pending").
+    var pendingFor by remember { mutableStateOf<Contact?>(null) }
+    pendingFor?.let { c ->
         androidx.compose.material3.AlertDialog(
-            onDismissRequest = { cancelFor = null },
-            title = { Text("Cancel your request?") },
-            text = { Text("${c.name} is removed from your list, and your friend request is " +
-                "taken back from their phone.") },
+            onDismissRequest = { pendingFor = null },
+            title = { Text("Waiting for ${c.name}") },
+            text = { Text("Your friend request hasn't been accepted yet.\n\n" +
+                "Cancel request: takes it back from their phone and removes ${c.name} here.\n" +
+                "Remove: removes ${c.name} from your list only.") },
             confirmButton = {
-                androidx.compose.material3.TextButton(onClick = { cancelFor = null; onCancelPending(c) }) {
-                    Text("Cancel request", color = CmRed)
+                Row {
+                    androidx.compose.material3.TextButton(onClick = { pendingFor = null; onRemovePending(c) }) {
+                        Text("Remove", color = CmRed)
+                    }
+                    androidx.compose.material3.TextButton(onClick = { pendingFor = null; onCancelPending(c) }) {
+                        Text("Cancel request", color = CmRed)
+                    }
                 }
             },
             dismissButton = {
-                androidx.compose.material3.TextButton(onClick = { cancelFor = null }) { Text("Keep waiting") }
+                androidx.compose.material3.TextButton(onClick = { pendingFor = null }) { Text("Keep waiting") }
             },
         )
     }
@@ -151,7 +161,7 @@ fun FriendsScreen(
                         .clip(RoundedCornerShape(10.dp)).background(CmCard).padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("Knock from ${k.displayName}", color = CmText, fontFamily = Nunito,
+                    Text("Friend request from ${k.displayName}", color = CmText, fontFamily = Nunito,
                         fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Box(Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).background(CmTeal)
@@ -182,7 +192,7 @@ fun FriendsScreen(
                 verticalArrangement = Arrangement.spacedBy(5.dp),
                 contentPadding = PaddingValues(bottom = 80.dp),  // clear the "+"
             ) {
-                items(contacts) { c -> FriendRow(c, onOpenChat, onCancel = { cancelFor = c }) }
+                items(contacts) { c -> FriendRow(c, onOpenChat = { if (it.pending) pendingFor = it else onOpenChat(it) }) }
             }
 
             // Tools dock (only when a tool is enabled) — behaviour unchanged.
@@ -266,26 +276,9 @@ private fun MinimiseIcon() {
     }
 }
 
-/** EXIT — a red power symbol: stem "M12 3.5v8" + open ring "M6.8 7a8 8 0 1 0 10.4 0". */
+/** EXIT — the red power symbol (drawn; shared with the chat's Kill pill). */
 @Composable
-private fun PowerIcon() {
-    androidx.compose.foundation.Canvas(Modifier.size(24.dp)) {
-        val s = size.minDimension / 24f
-        val stroke = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.2f * s, cap = StrokeCap.Round)
-        // The SVG arc is a radius-8 circle through (6.8,7) and (17.2,7), drawn the
-        // long way round the bottom: centre (12, 13.08). Its gap at the top spans
-        // ±40.5° either side of straight up, i.e. start -49.5°, sweep 279°.
-        val r = 8f * s
-        val cx = 12f * s; val cy = 13.08f * s
-        drawArc(
-            color = WordRed, startAngle = -49.5f, sweepAngle = 279f, useCenter = false,
-            topLeft = Offset(cx - r, cy - r), size = androidx.compose.ui.geometry.Size(2 * r, 2 * r),
-            style = stroke,
-        )
-        drawLine(WordRed, Offset(12f * s, 3.5f * s), Offset(12f * s, 11.5f * s),
-            strokeWidth = 2.2f * s, cap = StrokeCap.Round)
-    }
-}
+private fun PowerIcon() = org.cmchat.app.ui.components.PowerGlyph(WordRed, 24)
 
 /** The "+" on the cyan button, drawn (crisp at any size). */
 @Composable
@@ -332,7 +325,7 @@ private fun StatusLine(online: Boolean, status: TorStatus, invisible: Boolean, s
  * no "online" dot). Presence is only the coarse "last seen recently" line.
  */
 @Composable
-private fun FriendRow(c: Contact, onOpenChat: (Contact) -> Unit, onCancel: () -> Unit = {}) {
+private fun FriendRow(c: Contact, onOpenChat: (Contact) -> Unit) {
     val recent = c.lastSeenMs != null && System.currentTimeMillis() - c.lastSeenMs <= 24 * 3_600_000L
     @OptIn(ExperimentalFoundationApi::class)
     Row(
@@ -353,8 +346,8 @@ private fun FriendRow(c: Contact, onOpenChat: (Contact) -> Unit, onCancel: () ->
             Text(c.name, color = CmText, fontFamily = Nunito, fontSize = 15.sp,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
             when {
-                c.pending -> Text("Waiting for them to accept", color = CmTextDim, fontFamily = Nunito,
-                    fontSize = 11.sp, fontStyle = FontStyle.Italic)
+                c.pending -> Text("Waiting for them to accept · tap for options", color = CmTextDim,
+                    fontFamily = Nunito, fontSize = 11.sp, fontStyle = FontStyle.Italic)
                 c.missed -> Text("Missed Message", color = WordRed, fontFamily = Nunito, fontSize = 11.sp,
                     fontStyle = FontStyle.Italic)
                 c.buzzed -> Text("Buzzed you", color = CmBuzzBlue, fontFamily = Nunito, fontSize = 11.sp)
@@ -362,10 +355,9 @@ private fun FriendRow(c: Contact, onOpenChat: (Contact) -> Unit, onCancel: () ->
             }
         }
         if (c.pending) {
-            // A pending add can be cancelled right here.
-            Text("Cancel", color = CmRed, fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { onCancel() }
-                    .padding(horizontal = 10.dp, vertical = 6.dp))
+            // Visible on every row that's waiting: tap → Cancel request / Remove.
+            Text("Pending", color = CmRed, fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
         }
         // The only dot: BLUE = a new message is waiting (incl. one held while
         // Invisible). A Buzz shows as its "Buzzed you" line.

@@ -2,7 +2,7 @@ package org.cmchat.app.transport
 
 import org.cmchat.app.crypto.CryptoManager
 
-/** Wire frame types. Only KNOCK is wired this phase; the rest are reserved. */
+/** Wire frame types. The code is the wire value — never renumber one. */
 enum class FrameType(val code: Int) {
     KNOCK(1),
     KNOCK_ACCEPT(2),
@@ -40,7 +40,10 @@ enum class FrameType(val code: Int) {
     TEAM_CLOCK(18),
 
     /** "Remove me": the sender deleted me; the receiver removes the sender too. */
-    TERMINATE(19);
+    TERMINATE(19),
+
+    /** The sender's own nickname changed: payload = the new nickname (UTF-8). */
+    NICKNAME(20);
 
     companion object {
         fun fromCode(code: Int): FrameType? = entries.firstOrNull { it.code == code }

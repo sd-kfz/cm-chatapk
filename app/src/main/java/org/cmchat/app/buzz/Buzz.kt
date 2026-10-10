@@ -58,11 +58,11 @@ object BuzzPolicy {
     @Synchronized
     fun markSent(cmId: String, now: Long = System.currentTimeMillis()) { lastSent[cmId] = now }
 
-    /** Seconds left on the send cooldown, or 0 if ready. */
+    /** Milliseconds left on the send cooldown, or 0 if ready. */
     @Synchronized
-    fun sendCooldownRemaining(cmId: String, now: Long = System.currentTimeMillis()): Long {
+    fun sendCooldownRemainingMs(cmId: String, now: Long = System.currentTimeMillis()): Long {
         val last = lastSent[cmId] ?: return 0
-        return ((SEND_COOLDOWN_MS - (now - last)) / 1000L).coerceAtLeast(0)
+        return (SEND_COOLDOWN_MS - (now - last)).coerceAtLeast(0)
     }
 
     /** Decide whether an incoming buzz from [cmId] is accepted right now. */

@@ -19,6 +19,7 @@ import org.cmchat.app.diag.Redact
 import org.cmchat.app.tor.ServerController
 import org.cmchat.app.tor.TorService
 import org.cmchat.app.tor.TorStatus
+import java.io.File
 import java.io.IOException
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
@@ -38,8 +39,14 @@ import java.util.concurrent.ConcurrentHashMap
  *                 be CANCELLED (their request card is withdrawn).
  *  REMOVE         delete a friend (my side only), or TERMINATE (also removes me
  *                 from their list when it reaches them; kept until delivered).
- *  MESSAGES       every frame to a friend goes over the v4 handshake in
- *                 [SecureChannel] (one-time prekey + X3DH + AEAD).
+ *  MESSAGES       every frame to a friend goes over the handshake in
+ *                 [SecureChannel] (one-time prekey + X3DH + AEAD + receipt).
+ *  DELIVERED      means THEIR phone said "stored" in an authenticated receipt.
+ *                 While my vault is locked (minimised and re-locked, or the app
+ *                 swiped away with the Buzz listener on) what arrives is HELD on
+ *                 flash ([HeldInbox], sealed to my identity key) BEFORE the
+ *                 receipt goes out, and replayed at the next unlock — nothing
+ *                 is dropped and then counted as delivered.
  *  NO RETRY BUTTON  everything outgoing goes through the silent [Outbox]: it
  *                 retries in the background, and the screen never shows whether
  *                 a friend is online or offline.
@@ -85,20 +92,38 @@ object MessageService {
     @Volatile
     var onPeerSeen: ((cmId: String, atMs: Long) -> Unit)? = null
 
+    /** Set by AppNav: [friendCmId]'s phone confirmed it has my address [myCmId]
+     * → persist, so it isn't sent again (until my address changes again). */
+    @Volatile
+    var onAddressConfirmed: ((friendCmId: String, myCmId: String) -> Unit)? = null
+
+    /**
+     * Set by AppNav: write any queued vault save NOW (blocking; called off the
+     * main thread). Held records are shredded only after it returns, so a
+     * friend's change that was held can't be lost between the two.
+     */
+    @Volatile
+    var flushVault: (() -> Unit)? = null
+
+    /** Where held frames are kept (filesDir/held). Set by MainActivity; tests use a temp dir. */
+    @Volatile
+    var heldDir: File? = null
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private var myName: String = ""
     private var myCmId: String? = null
     private var myPubHex: String? = null
+    private var mySecHex: String? = null
 
     /** The forward-secret channel for my identity; null until configured. */
     @Volatile
     private var channel: SecureChannel? = null
 
     /**
-     * Buzz-only mode: the app was swiped away but the scout listener is alive.
-     * Only BUZZ frames (and decoy alerts) do anything; everything else is
-     * dropped, and no chat state is kept (ChatStore is already cleared).
+     * The app was swiped away and only the Buzz listener runs. A Buzz still
+     * notifies; everything else that arrives is HELD (the vault is locked) and
+     * shows as "Missed Message" after the next unlock.
      */
     @Volatile
     var buzzOnlyMode: Boolean = false
@@ -161,6 +186,10 @@ object MessageService {
     /** Ex-friends I TERMINATED whose phones haven't received it yet. */
     private val terminations: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
+    /** friend cmId -> the address of MINE their phone confirmed (from the vault).
+     * Anyone not on my current address gets it again until they confirm it. */
+    private val addressConfirmed = ConcurrentHashMap<String, String>()
+
     /** "Last seen" is persisted at most this often per friend (it's coarse anyway). */
     private const val SEEN_PERSIST_EVERY_MS = 30 * 60_000L
     private val seenPersistedAt = ConcurrentHashMap<String, Long>()
@@ -168,9 +197,7 @@ object MessageService {
     /**
      * Wire protocol version. Bumped whenever the framing/crypto changes so two
      * peers on different builds detect the mismatch instead of failing silently.
-     * v5 = v4 + TERMINATE + knock withdrawal + minute-precise Team Clock;
-     * v4 = forward-secret handshake + decoy alert + Team Clock (v3 = forward
-     * secrecy only; v2 = static crypto_box + replay counter).
+     * See [SecureChannel.WIRE_VERSION] for what each version added.
      */
     const val WIRE_VERSION = SecureChannel.WIRE_VERSION
 
@@ -179,7 +206,7 @@ object MessageService {
     private val codec = InnerCodec()
     private val replayGuard = ReplayGuard()
 
-    /** How long a sender waits for the contact's prekey reply over Tor. */
+    /** How long a sender waits for the contact's prekey reply / receipt over Tor. */
     private const val HANDSHAKE_READ_TIMEOUT_MS = 30_000
 
     /** Set true when an authenticated frame from a DIFFERENT wire version arrives;
@@ -193,6 +220,26 @@ object MessageService {
     private val outbox = Outbox(scope)
     @Volatile private var torWatch: Job? = null
 
+    // ---- locked: HOLD, never drop -------------------------------------------------
+
+    /** Unlocked, and everything held has been replayed: frames go straight into
+     * the chat. Otherwise they are HELD ([HeldInbox]) until the next unlock. */
+    @Volatile private var vaultOpen = false
+    @Volatile private var vaultWanted = false
+    /** Taken while deciding hold-vs-deliver and while replaying, so a new frame
+     * can never overtake an older held one. Never held across network I/O. */
+    private val holdLock = Any()
+    @Volatile private var held: HeldInbox? = null
+
+    /** MSG ids already put in a chat ("identity:msgId"): a frame re-sent after
+     * a lost receipt never shows twice. Bounded; guarded by [holdLock]. */
+    private const val MAX_DEDUP = 4096
+    private val deliveredIds = object : LinkedHashMap<String, Boolean>(256, 0.75f, false) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Boolean>?) = size > MAX_DEDUP
+    }
+    /** MSG ids held but not replayed yet (guarded by [holdLock]). */
+    private val heldIds = HashSet<String>()
+
     /**
      * How a socket to a friend's onion is opened. Production: through Tor (fails
      * closed if Tor is down). The loopback tests swap ONLY this, so everything
@@ -203,14 +250,20 @@ object MessageService {
 
     /**
      * Anti-forensics: drop the identity key material, contact table and queued
-     * frames held in RAM. Called from wipe paths and the crash handler; safe to
-     * call anytime (the next configure() repopulates it).
+     * frames held in RAM. Called from Exit, wipe paths and the crash handler;
+     * safe to call anytime (the next configure() repopulates it). Held records
+     * stay on flash, sealed to the identity key that just left RAM.
      */
     fun zeroKeys() {
+        vaultWanted = false
+        vaultOpen = false
         channel = null
         myName = ""
         myCmId = null
         myPubHex = null
+        mySecHex = null
+        held = null
+        buzzOnlyMode = false
         contacts.clear()
         names.clear()
         pending.clear()
@@ -220,14 +273,35 @@ object MessageService {
         declinedAt.clear()
         relinked.clear()
         terminations.clear()
+        addressConfirmed.clear()
         seenPersistedAt.clear()
+        knockRate.clear()
+        contactRate.clear()
+        synchronized(holdLock) { deliveredIds.clear(); heldIds.clear() }
         _incomingKnocks.value = emptyList()   // a stranger's name + ID must not survive a wipe
         activeChatCmId = null
         org.cmchat.app.vault.PendingVaultEdits.clear()
     }
 
+    /** Is any identity key / friend table still in RAM? (Exit must leave none.) */
+    internal fun keysInRam(): Boolean =
+        channel != null || mySecHex != null || myPubHex != null || contacts.isNotEmpty()
+
     /** Drop every queued outgoing frame (wipe/exit paths). */
     fun clearOutbox() = outbox.clear()
+
+    /**
+     * The app was swiped away: queued chat content leaves RAM, but what the
+     * friendship itself needs (my new address, an acceptance, a terminate, a
+     * knock) keeps going out — otherwise a friend could silently lose me.
+     */
+    fun dropQueuedContent() = outbox.retainOnly { it.keepOnClose }
+
+    /** Wipe paths (Cerberus, Kill, decoy): shred everything held, unread. */
+    fun dropHeld() {
+        heldDir?.let { HeldInbox.shredAll(it) }
+        synchronized(holdLock) { heldIds.clear() }
+    }
 
     fun configure(
         crypto: CryptoManager,
@@ -239,11 +313,15 @@ object MessageService {
         contactNames: Map<String, String> = emptyMap(),
         pendingCmIds: Collection<String> = emptyList(),
         pendingTerminations: Collection<String> = emptyList(),
+        /** friend cmId -> the address of mine they confirmed (null/absent = never). */
+        confirmedAddresses: Map<String, String> = emptyMap(),
     ) {
         this.myName = myDisplayName
         this.myCmId = myCmId
         this.myPubHex = myIdentityPubHex
+        this.mySecHex = myIdentitySecHex
         this.channel = SecureChannel(crypto, myIdentityPubHex, myIdentitySecHex, codec, replayGuard)
+        heldDir?.let { dir -> if (held == null) held = HeldInbox(dir, crypto) }
         // Update the friend table WITHOUT an empty moment: configure() re-runs on
         // every vault save, and a clear-then-refill would let a frame arriving
         // in between be dropped as "not from a known contact".
@@ -259,22 +337,33 @@ object MessageService {
         val freshPending = pendingCmIds.map { currentId(it) }.toSet()
         pending.retainAll(freshPending)
         pending.addAll(freshPending)
+        // What the vault says each friend confirmed; a confirmation that arrived
+        // this run (not saved yet) is kept.
+        confirmedAddresses.forEach { (id, mine) -> addressConfirmed.putIfAbsent(currentId(id), mine) }
+        addressConfirmed.keys.retainAll(contacts.keys)
         ServerController.onIncoming = { socket -> handleIncoming(socket) }
         // Terminations not yet delivered (kept in the vault) go out again.
         pendingTerminations.forEach { id -> if (id !in terminations) queueTerminate(id) }
-        // Whenever Tor comes (back) online, retry anything queued right away and
-        // re-knock friends still pending.
+        // Whenever Tor comes (back) online, retry anything queued right away,
+        // re-knock friends still pending, and re-send my address to anyone who
+        // hasn't confirmed it.
         if (torWatch == null) {
             torWatch = scope.launch {
-                TorService.status.collect {
-                    if (it is TorStatus.Online) {
-                        outbox.kickAll(); resendPendingKnocks()
-                        org.cmchat.app.tor.TorClock.log()   // diagnostics: is this phone's clock off?
+                launch {
+                    TorService.status.collect {
+                        if (it is TorStatus.Online) {
+                            outbox.kickAll(); resendPendingKnocks(); resendAddress()
+                            org.cmchat.app.tor.TorClock.log()   // diagnostics: is this phone's clock off?
+                        }
                     }
                 }
+                // A soft reconnect after a network change: the onion stayed up, so
+                // there is no Offline→Online edge — retry right away anyway.
+                TorService.reconnects.collect { if (it > 0) { outbox.kickAll(); resendAddress() } }
             }
         }
         resendPendingKnocks()
+        resendAddress()
     }
 
     // ---- outgoing ----------------------------------------------------------
@@ -304,28 +393,32 @@ object MessageService {
 
     /**
      * Queue an anonymous knock (or, with [withdraw], the withdrawal of one) to
-     * [target]. It carries my CURRENT name + CMC-ID; latest one per friend wins.
+     * [target]. It carries my CURRENT name + CMC-ID and a nonce for its receipt;
+     * latest one per friend wins. Delivered = their phone's receipt says stored.
      */
     private fun queueKnock(cmId: String, target: CmIdData, withdraw: Boolean = false) {
         val ch = channel ?: return
         val myId = myCmId ?: return
+        val nonce = java.security.SecureRandom().let { r -> ByteArray(SecureChannel.CHALLENGE).also { r.nextBytes(it) } }
         val payload = Messages.json.encodeToString(KnockPayload.serializer(),
-            KnockPayload(myName, myId, withdraw)).toByteArray()
+            KnockPayload(myName, myId, withdraw, nonce = toHex(nonce))).toByteArray()
         val sealed = ch.sealKnock(payload, target.identityPubKeyHex)
         val what = if (withdraw) "request withdrawal" else "knock"
         ConnDiag.sys("Add friend: $what queued → ${Redact.onionShort(target.onion)}")
         outbox.enqueue(Outbox.Item(
-            peer = cmId, label = what, replaceKey = "knock",
+            peer = cmId, label = what, replaceKey = "knock", keepOnClose = true,
             deliver = {
                 withConnection(target) { s ->
-                    Transport.writeFrame(s.getOutputStream(), sealed)
-                    ConnDiag.out("$what sent (anonymous sealed box, ${sealed.size}b)")
+                    s.soTimeout = HANDSHAKE_READ_TIMEOUT_MS
+                    val ack = SecureWire.sendKnock(ch, s.getInputStream(), s.getOutputStream(), sealed, nonce,
+                        target.identityPubKeyHex, onStage = { ConnDiag.out(it) })
+                    requireStored(ack)
                 }
             },
             onDelivered = {
                 if (!withdraw) knockDelivered.add(cmId)
                 ConnDiag.sys(if (withdraw) "Add friend: request withdrawn on their phone"
-                    else "Add friend: knock delivered — waiting for them to accept")
+                    else "Add friend: knock delivered (their phone confirmed) — waiting for them to accept")
             },
         ))
     }
@@ -363,9 +456,15 @@ object MessageService {
         return true
     }
 
-    /** Delete a friend on MY side only (their phone isn't told). */
+    /**
+     * Delete a friend on MY side only (their phone isn't told): gone from the
+     * list, the chat, the queue — and anything of theirs still held is shredded.
+     */
     fun deleteFriend(cmId: String) {
-        forget(currentId(cmId))
+        val id = currentId(cmId)
+        val pub = contacts[id]?.identityPubKeyHex ?: CmId.decode(id)?.identityPubKeyHex
+        forget(id)
+        if (pub != null) scope.launch { synchronized(holdLock) { dropHeldFrom(pub) } }
         ConnDiag.sys("Friend deleted (my side)")
     }
 
@@ -386,7 +485,7 @@ object MessageService {
     private fun queueTerminate(cmId: String, peer: CmIdData? = CmId.decode(cmId)) {
         if (peer == null || channel == null) return
         terminations.add(cmId)
-        outbox.enqueue(Outbox.Item(peer = cmId, label = "terminate", replaceKey = "terminate",
+        outbox.enqueue(Outbox.Item(peer = cmId, label = "terminate", replaceKey = "terminate", keepOnClose = true,
             deliver = {
                 try {
                     sendSecure(peer, FrameType.TERMINATE, ByteArray(0))
@@ -415,7 +514,7 @@ object MessageService {
             relinked.keys.filter { currentId(it) == cmId }.forEach { keys += it }
             keys.forEach { k ->
                 relinked.remove(k)
-                contacts.remove(k); names.remove(k); pending.remove(k)
+                contacts.remove(k); names.remove(k); pending.remove(k); addressConfirmed.remove(k)
                 ChatStore.forget(k)
                 if (activeChatCmId == k) activeChatCmId = null
             }
@@ -427,8 +526,8 @@ object MessageService {
     fun isPending(cmId: String): Boolean = currentId(cmId) in pending
 
     /**
-     * Fire-and-forget BUZZ: no ack, no retry, no state, no content. Rate-limited
-     * to one per contact per [BuzzPolicy.SEND_COOLDOWN_MS]. Returns false if on
+     * Fire-and-forget BUZZ: no retry, no state, no content. Rate-limited to one
+     * per contact per [BuzzPolicy.SEND_COOLDOWN_MS]. Returns false if on
      * cooldown or not configured.
      */
     fun sendBuzz(cmId: String): Boolean {
@@ -499,24 +598,25 @@ object MessageService {
 
     /**
      * Decoy tripped (this phone may be in someone else's hands): INSTANTLY wipe
-     * MY side from RAM — every conversation, queued frame, buzz marker and note —
-     * and queue a DECOY_ALERT to every friend. It does NOT instantly destroy their
-     * copy: they see "Decoy chat triggered — chat erased." in the chat, and it's
-     * erased for them once they leave it. Delivered silently in the background
-     * (a friend who's offline gets it when they're back, while my engine runs).
-     * The caller then rotates the onion address and locks the app.
+     * MY side from RAM — every conversation, queued frame, buzz marker, note and
+     * held frame — and queue a DECOY_ALERT to every friend. It does NOT instantly
+     * destroy their copy: they see "Decoy chat triggered — chat erased." in the
+     * chat, and it's erased for them once they leave it. Delivered silently in
+     * the background (a friend who's offline gets it when they're back, while my
+     * engine runs). The caller then rotates the onion address and locks the app.
      */
     fun tripDecoy() {
         val peers = contacts.keys.toList()
         outbox.clear()
         ChatStore.clearAll()
+        dropHeld()
         org.cmchat.app.buzz.BuzzPolicy.clear()
         org.cmchat.app.tools.ToolsState.clear()
         activeChatCmId = null
         ConnDiag.sys("Decoy tripped: my chats wiped; alerting ${peers.size} friend(s)")
         if (channel == null) return
         peers.forEach { id ->
-            outbox.enqueue(Outbox.Item(peer = id, label = "decoy alert", replaceKey = "decoy",
+            outbox.enqueue(Outbox.Item(peer = id, label = "decoy alert", replaceKey = "decoy", keepOnClose = true,
                 deliver = { sendSecureTo(id, FrameType.DECOY_ALERT, ByteArray(0)) },
                 onDelivered = { ConnDiag.out("decoy alert delivered") }))
         }
@@ -537,21 +637,44 @@ object MessageService {
     }
 
     /**
-     * Tell every contact my new CMC-ID after rotating my onion. Authenticated by
+     * Tell every friend my new CMC-ID after rotating my onion. Authenticated by
      * my identity key inside the forward-secret frame (only I can produce it) —
-     * the "signed" address-update. Contacts auto-relink to the new onion.
+     * the "signed" address-update. It is re-sent to each friend until THEIR
+     * phone confirms it ([onAddressConfirmed], saved in the vault), across app
+     * restarts — a friend who misses it would otherwise keep dialing a dead
+     * address and never reach me.
      */
     fun sendAddressUpdate(newCmId: String) {
         if (channel == null) return
         myCmId = newCmId
-        val payload = newCmId.toByteArray()
-        val friends = contacts.keys.toList()
-        ConnDiag.sys("Telling ${friends.size} friend(s) my new address (each must receive it, or they keep dialing the old one)")
-        friends.forEach { id ->
-            outbox.enqueue(Outbox.Item(peer = id, label = "address update", replaceKey = "addr",
-                deliver = { sendSecureTo(id, FrameType.ADDR_UPDATE, payload) },
-                onDelivered = { ConnDiag.sys("New address delivered to a friend") }))
+        val friends = contacts.keys.filter { it !in pending }
+        ConnDiag.sys("Telling ${friends.size} friend(s) my new address (re-sent until each one confirms)")
+        resendAddress()
+    }
+
+    /** Queue my CURRENT address to every confirmed friend who hasn't confirmed it. */
+    private fun resendAddress() {
+        if (channel == null) return
+        val mine = myCmId ?: return
+        for (id in contacts.keys.toList()) {
+            if (id in pending || addressConfirmed[id] == mine) continue
+            // Already on its way (configure() re-runs on every vault save).
+            if (outbox.has(id) { it.replaceKey == "addr" && it.tag == mine }) continue
+            outbox.enqueue(Outbox.Item(peer = id, label = "address update", replaceKey = "addr", keepOnClose = true,
+                tag = mine,
+                deliver = { sendSecureTo(id, FrameType.ADDR_UPDATE, mine.toByteArray()) },
+                stillWanted = { myCmId == mine && addressConfirmed[currentId(id)] != mine },
+                onDelivered = { addressReached(id, mine) }))
         }
+    }
+
+    /** [friendCmId]'s phone has my address [mine] (an update or my acceptance reached it). */
+    private fun addressReached(friendCmId: String, mine: String) {
+        val now = currentId(friendCmId)
+        if (!contacts.containsKey(now)) return
+        addressConfirmed[now] = mine
+        ConnDiag.sys("My address: confirmed by a friend's phone")
+        onAddressConfirmed?.invoke(now, mine)
     }
 
     fun acceptKnock(req: KnockRequest) {
@@ -564,21 +687,90 @@ object MessageService {
     }
 
     /** Tell [cmId] we accepted (forward-secret, since we know their key) —
-     * silently retried until it reaches them. */
-    private fun queueAccept(cmId: String) {
+     * silently retried until it reaches them. It carries my CURRENT address, so
+     * once it's delivered they have that address. */
+    private fun queueAccept(cmId: String, via: String? = null) {
         val myId = myCmId ?: return
         if (channel == null || !contacts.containsKey(cmId)) return
         val payload = Messages.json.encodeToString(KnockPayload.serializer(),
-            KnockPayload(myName, myId)).toByteArray()
-        outbox.enqueue(Outbox.Item(peer = cmId, label = "accept", replaceKey = "accept",
-            deliver = { sendSecureTo(cmId, FrameType.KNOCK_ACCEPT, payload) },
-            onDelivered = { ConnDiag.sys("Add friend: acceptance delivered") }))
+            KnockPayload(myName, myId, yours = cmId)).toByteArray()
+        val viaPeer = via?.let { CmId.decode(it) }
+            ?.takeIf { it.identityPubKeyHex.equals(contacts[cmId]?.identityPubKeyHex, ignoreCase = true) }
+        outbox.enqueue(Outbox.Item(peer = cmId, label = "accept", replaceKey = "accept", keepOnClose = true,
+            deliver = { if (viaPeer != null) sendSecure(viaPeer, FrameType.KNOCK_ACCEPT, payload)
+                        else sendSecureTo(cmId, FrameType.KNOCK_ACCEPT, payload) },
+            onDelivered = {
+                ConnDiag.sys("Add friend: acceptance delivered")
+                addressReached(cmId, myId)
+            }))
     }
 
     fun declineKnock(req: KnockRequest) {
         ConnDiag.sys("Add friend: knock declined (ignored from them for 1 h)")
         declinedAt[req.cmId] = System.currentTimeMillis()
         _incomingKnocks.value = _incomingKnocks.value.filterNot { it.cmId == req.cmId }
+    }
+
+    // ---- unlock / lock: replay what was held -------------------------------------
+
+    /**
+     * The vault was unlocked (AppNav, after [configure] and its callbacks): replay
+     * everything held while locked into the normal dispatch — in arrival order,
+     * before any newer frame — then shred it. Idempotent.
+     */
+    fun openVault() {
+        vaultWanted = true
+        if (vaultOpen) return
+        scope.launch {
+            synchronized(holdLock) {
+                if (!vaultWanted || vaultOpen) return@synchronized
+                replayHeldLocked()
+                vaultOpen = vaultWanted
+            }
+        }
+    }
+
+    /** The vault was locked: from now on what arrives is held until the next unlock. */
+    fun closeVault() {
+        vaultWanted = false
+        vaultOpen = false
+    }
+
+    /** Unlocked and replayed (tests wait for this after [openVault]). */
+    internal fun vaultIsOpen(): Boolean = vaultOpen
+
+    /** Caller holds [holdLock]. */
+    private fun replayHeldLocked() {
+        val h = held ?: return
+        val pub = myPubHex ?: return
+        val sec = mySecHex ?: return
+        val entries = h.readAll(pub, sec)
+        if (entries.isEmpty()) return
+        ConnDiag.sys("Unlocked: ${entries.size} item(s) that arrived while locked → delivered now")
+        for (e in entries) {
+            runCatching { replayOne(e.record) }
+                .onFailure { ConnDiag.sys("a held item couldn't be replayed (${it.javaClass.simpleName})") }
+        }
+        // Anything a held frame changed in the vault is ON DISK before the held
+        // copy goes (a crash in between replays it again — replay is idempotent).
+        val saved = runCatching { flushVault?.invoke() }.isSuccess
+        if (saved) entries.forEach { h.remove(it) }
+        heldIds.clear()
+    }
+
+    private fun replayOne(rec: HeldInbox.Record) {
+        if (rec.type == FrameType.KNOCK) {
+            val kp = decodeKnock(rec.body) ?: return
+            val knocker = CmId.decode(kp.cmId) ?: return
+            val declined = declinedAt[kp.cmId]?.let { System.currentTimeMillis() - it < DECLINE_COOLDOWN_MS } == true
+            if (!declined) addKnockCard(kp, knocker, notify = false)
+            return
+        }
+        val from = rec.fromPub ?: return
+        val id = contactIdFor(from) ?: return            // no longer a friend: nothing to deliver
+        val peer = contacts[id] ?: return
+        confirmIfPending(id)
+        dispatchFromContact(id, peer, rec.type, rec.body, replay = rec)
     }
 
     // ---- incoming ----------------------------------------------------------
@@ -589,8 +781,10 @@ object MessageService {
      * the socket afterward). [SecureWire.receive] reads one length-bounded frame
      * and authenticates it BEFORE doing anything else: an anonymous knock, or a
      * prekey request from a known contact — answered with a one-time prekey, then
-     * exactly one forward-secret frame is read and opened. Everything else is
-     * dropped. Received bytes are only ever decrypted/parsed — never executed.
+     * exactly one forward-secret frame is read and opened. It is then STORED
+     * (chat, or held while locked) and only then answered with an OK receipt.
+     * Everything else is dropped. Received bytes are only ever decrypted/parsed
+     * — never executed.
      */
     private fun handleIncoming(socket: Socket) {
         // Any failure (truncated frame, malformed crypto, bad JSON, a peer that
@@ -609,9 +803,10 @@ object MessageService {
             when (r) {
                 is SecureWire.Received.Knock -> {
                     ConnDiag.inc("opened as KNOCK (anonymous sealed box)")
-                    dispatchAnonymous(r.body)
+                    onKnock(r)
                 }
                 is SecureWire.Received.Message -> {
+                    // Removed meanwhile: no receipt — nothing was stored.
                     val peer = contacts[r.cmId] ?: return
                     ConnDiag.inc("forward-secret frame opened from ${Redact.onionShort(peer.onion)}")
                     // Any authenticated frame proves this friend has me: confirm a
@@ -621,8 +816,13 @@ object MessageService {
                     // Anything they deliberately sent = they were around ("last
                     // seen recently"). Cover traffic is noise and doesn't count.
                     if (r.type != FrameType.COVER) markSeen(r.cmId)
-                    if (buzzOnlyMode) dispatchBuzzOnly(r.cmId, r.type)
-                    else dispatchFromContact(r.cmId, peer, r.type, r.body)
+                    val ack = try {
+                        take(r.cmId, peer, r.type, r.body)
+                    } catch (_: Exception) {
+                        ConnDiag.inc("${r.type} couldn't be stored → they'll retry")
+                        Ack.RETRY
+                    }
+                    ConnDiag.inc(if (r.reply(ack)) "receipt sent: ${ack.name}" else "receipt not sent (connection gone) — they'll retry")
                 }
                 SecureWire.Received.VersionMismatch -> {
                     versionMismatch.value = true
@@ -658,105 +858,284 @@ object MessageService {
         }
     }
 
+    /** The friend whose identity key is [pubHex] (their current cmId), if any. */
+    private fun contactIdFor(pubHex: String): String? =
+        contacts.entries.firstOrNull { it.value.identityPubKeyHex.equals(pubHex, ignoreCase = true) }?.key
+
     /**
-     * A knock (friend request). It ALWAYS reaches the Friends screen, even while
-     * I'm Invisible — first contact has to get through somehow — but it's
-     * one-time and rate-limited: duplicates are merged, at most
-     * [MAX_PENDING_KNOCKS] wait at once, a declined sender is ignored for an
-     * hour, and bursts are throttled.
+     * One authenticated frame: deliver it now, or HOLD it while locked — and say
+     * whether it is safely stored (the receipt). A Buzz and cover traffic carry
+     * no state, so they never wait.
      */
-    private fun dispatchAnonymous(body: ByteArray) {
-        val kp = decodeKnock(body) ?: return
-        if (CmId.decode(kp.cmId) == null || kp.cmId == myCmId) {
-            ConnDiag.inc("KNOCK ignored (malformed or my own ID)"); return
+    private fun take(fromCmId: String, peer: CmIdData, type: FrameType, body: ByteArray): Ack {
+        ConnDiag.inc("dispatched $type")
+        when (type) {
+            FrameType.COVER -> { ConnDiag.inc("cover frame discarded"); return Ack.OK }
+            FrameType.BUZZ -> { onBuzz(fromCmId); return Ack.OK }
+            else -> {}
+        }
+        synchronized(holdLock) {
+            return if (vaultOpen) dispatchFromContact(fromCmId, peer, type, body, replay = null)
+                else hold(fromCmId, peer, type, body)
+        }
+    }
+
+    /**
+     * Locked: keep the frame on flash (sealed) until the next unlock, then OK.
+     * What the RUNNING engine needs right away also applies now: a new address
+     * (so my replies go to it), a terminate (so they're dropped), an erase or a
+     * decoy (their held frames are shredded at once). Caller holds [holdLock].
+     */
+    private fun hold(fromCmId: String, peer: CmIdData, type: FrameType, body: ByteArray): Ack {
+        val now = System.currentTimeMillis()
+        // Nothing malformed is ever stored.
+        var msgKey: String? = null
+        when (type) {
+            FrameType.MSG -> {
+                val t = decodeText(body) ?: return Ack.REJECTED
+                val key = "${peer.identityPubKeyHex.lowercase()}:${t.id}"
+                if (key in deliveredIds || key in heldIds) return Ack.OK   // a re-send after a lost receipt
+                msgKey = key
+            }
+            FrameType.TEAM_CLOCK -> if (teamClockValue(body) == null) return Ack.REJECTED
+            FrameType.ADDR_UPDATE -> if (addressFrom(peer, body) == null) return Ack.REJECTED
+            FrameType.ERASE_CHAT -> {
+                // Their earlier held frames go now, and the chat in RAM too.
+                val gone = dropHeldFrom(peer.identityPubKeyHex)
+                inChat(fromCmId) { ChatStore.erase(it) }
+                ConnDiag.inc("erase while locked → chat erased (+$gone held item(s) shredded)")
+                return Ack.OK
+            }
+            FrameType.KNOCK_ACCEPT, FrameType.TERMINATE, FrameType.DECOY_ALERT, FrameType.NICKNAME -> {}
+            else -> return Ack.REJECTED
+        }
+        if (type == FrameType.DECOY_ALERT) {
+            // Their phone may be in someone else's hands: what they sent and is
+            // still held is shredded now; the notice waits for the unlock.
+            dropHeldFrom(peer.identityPubKeyHex)
+        }
+        val h = held
+        val pub = myPubHex
+        if (h == null || pub == null ||
+            !h.put(HeldInbox.Record(type, peer.identityPubKeyHex, body, now, closed = buzzOnlyMode), pub)) {
+            ConnDiag.inc("couldn't hold $type (storage full or unavailable) → they'll retry")
+            return Ack.RETRY
+        }
+        msgKey?.let { heldIds += it }
+        ConnDiag.inc("held while locked: $type (shown after unlock)")
+        when (type) {
+            FrameType.ADDR_UPDATE -> onAddressUpdate(currentId(fromCmId), peer, body)
+            FrameType.KNOCK_ACCEPT -> followAcceptance(fromCmId, peer, body)
+            FrameType.TERMINATE -> friendTerminated(fromCmId)
+            FrameType.MSG -> {
+                // Same rule as when unlocked: a message notifies only while Online.
+                // (Closing the app always makes the next start Invisible.)
+                if (!org.cmchat.app.settings.AppSettings.invisibleMode.value) notify(Notice.MESSAGE)
+            }
+            // A friend's decoy notifies even while I'm Invisible (decision A).
+            FrameType.DECOY_ALERT -> notify(Notice.MESSAGE)
+            else -> {}
+        }
+        return Ack.OK
+    }
+
+    /** Shred every held frame from [pubHex]. Caller holds [holdLock]. */
+    private fun dropHeldFrom(pubHex: String): Int {
+        val h = held ?: return 0
+        val pub = myPubHex ?: return 0
+        val sec = mySecHex ?: return 0
+        return h.removeFrom(pubHex, pub, sec)
+    }
+
+    /**
+     * An anonymous knock (friend request): decode it, store the request card,
+     * and answer with a receipt — OK only once it's stored. It ALWAYS reaches
+     * the Friends screen, even while I'm Invisible or the app is closed (then
+     * it's also held, so a killed app can't lose it). One-time and rate-limited:
+     * duplicates are merged, at most [MAX_PENDING_KNOCKS] wait at once, a
+     * declined sender is ignored for an hour, and bursts are asked to retry.
+     */
+    private fun onKnock(r: SecureWire.Received.Knock) {
+        val kp = decodeKnock(r.body)
+        val knocker = kp?.let { CmId.decode(it.cmId) }
+        val nonce = kp?.nonce?.let { fromHex(it) }?.takeIf { it.size == SecureChannel.CHALLENGE }
+        if (kp == null || knocker == null || nonce == null) {
+            ConnDiag.inc("KNOCK ignored (malformed)"); return           // no one to send a receipt to
+        }
+        val ack = try {
+            synchronized(holdLock) { takeKnock(kp, knocker, r.body) }
+        } catch (_: Exception) {
+            Ack.RETRY
+        }
+        ConnDiag.inc(if (r.reply(nonce, knocker.identityPubKeyHex, ack)) "knock receipt sent: ${ack.name}"
+            else "knock receipt not sent (connection gone)")
+    }
+
+    /** Caller holds [holdLock]. */
+    private fun takeKnock(kp: KnockPayload, knocker: CmIdData, raw: ByteArray): Ack {
+        if (kp.cmId == myCmId || knocker.identityPubKeyHex.equals(myPubHex, ignoreCase = true)) {
+            ConnDiag.inc("KNOCK ignored (my own ID)"); return Ack.REJECTED
         }
         if (kp.withdraw) {
-            // They cancelled their request: take the card away (nothing else).
+            // They cancelled their request: take the card away (nothing else) —
+            // also the held copy, or the next unlock would bring it back.
             val cur = _incomingKnocks.value
             if (cur.any { it.cmId == kp.cmId }) {
                 _incomingKnocks.value = cur.filterNot { it.cmId == kp.cmId }
                 ConnDiag.inc("KNOCK withdrawn by the sender → request removed")
             }
-            return
+            val h = held; val pub = myPubHex; val sec = mySecHex
+            if (h != null && pub != null && sec != null) {
+                h.removeIf(pub, sec) { it.type == FrameType.KNOCK && decodeKnock(it.body)?.cmId == kp.cmId }
+            }
+            return Ack.OK
         }
         val now = System.currentTimeMillis()
         declinedAt[kp.cmId]?.let { if (now - it < DECLINE_COOLDOWN_MS) {
-            ConnDiag.inc("KNOCK ignored (declined recently)"); return
+            ConnDiag.inc("KNOCK ignored (declined recently)"); return Ack.OK
         } }
-        // Already my (confirmed) friend: they never got my acceptance (e.g. my app
-        // closed before it went out) and knocked again. No duplicate card — just
-        // re-send the acceptance. A knock isn't authenticated, but this only ever
-        // sends to that friend's REAL key + address, so a forged one gains nothing.
-        if (contacts.containsKey(kp.cmId) && kp.cmId !in pending) {
-            if (!knockRate.allow("knock")) { ConnDiag.inc("KNOCK ignored (rate limit)"); return }
+        // Already my (confirmed) friend — same identity key: they never got my
+        // acceptance (e.g. my app closed before it went out) and knocked again.
+        // No duplicate card — just re-send the acceptance. A knock isn't
+        // authenticated, but this only ever sends to that friend's REAL key +
+        // stored address, so a forged one gains nothing.
+        val friendId = contactIdFor(knocker.identityPubKeyHex)
+        if (friendId != null && friendId !in pending) {
+            if (!knockRate.allow("knock")) { ConnDiag.inc("KNOCK ignored (rate limit)"); return Ack.RETRY }
             ConnDiag.inc("KNOCK from an existing friend → acceptance re-sent")
-            queueAccept(kp.cmId)
-            return
+            // They may knock from a NEW address (theirs changed before my
+            // acceptance reached them — the "stuck on Pending" case): send it
+            // there. Only their identity key can answer that handshake, so a
+            // forged address gets nothing; I don't move them on this unproven
+            // hint — once confirmed, their own signed address update does that.
+            queueAccept(friendId, via = kp.cmId.takeIf { it != friendId })
+            return Ack.OK
         }
         val cur = _incomingKnocks.value
-        if (cur.size >= MAX_PENDING_KNOCKS || cur.any { it.cmId == kp.cmId }) {
-            ConnDiag.inc("KNOCK ignored (pending cap or duplicate)"); return
+        if (cur.any { it.cmId == kp.cmId }) { ConnDiag.inc("KNOCK ignored (duplicate)"); return Ack.OK }
+        if (cur.size >= MAX_PENDING_KNOCKS) { ConnDiag.inc("KNOCK ignored (pending cap)"); return Ack.RETRY }
+        if (!knockRate.allow("knock")) { ConnDiag.inc("KNOCK ignored (rate limit)"); return Ack.RETRY }
+        if (!vaultOpen) {
+            // Locked or closed: keep it on flash too, so it survives a killed app.
+            val h = held; val pub = myPubHex
+            if (h == null || pub == null || !h.put(HeldInbox.Record(FrameType.KNOCK, null, raw, now,
+                    closed = buzzOnlyMode), pub)) {
+                ConnDiag.inc("couldn't hold the knock → they'll retry"); return Ack.RETRY
+            }
         }
-        if (!knockRate.allow("knock")) {
-            ConnDiag.inc("KNOCK ignored (rate limit)"); return
-        }
+        addKnockCard(kp, knocker, notify = true)
+        return Ack.OK
+    }
+
+    /** Show a request card (deduplicated). [notify]: a friend request always notifies. */
+    private fun addKnockCard(kp: KnockPayload, knocker: CmIdData, notify: Boolean) {
+        if (contactIdFor(knocker.identityPubKeyHex)?.let { it !in pending } == true) return   // already a friend
+        val cur = _incomingKnocks.value
+        if (cur.any { it.cmId == kp.cmId } || cur.size >= MAX_PENDING_KNOCKS) return
         ConnDiag.inc("KNOCK received (waiting for you to accept)")
         _incomingKnocks.value = cur + KnockRequest(kp.displayName.take(24), kp.cmId)
         // A friend request always notifies (also while Invisible).
-        notify(Notice.FRIEND_REQUEST)
+        if (notify) notify(Notice.FRIEND_REQUEST)
     }
 
-    private fun dispatchFromContact(fromCmId: String, peer: CmIdData, type: FrameType, body: ByteArray) {
-        ConnDiag.inc("dispatched $type")
+    /**
+     * Deliver one frame from a contact (unlocked, or replaying a held one) and
+     * return its receipt. [replay] = the held record being replayed (no
+     * notification then: it was notified when it arrived).
+     */
+    private fun dispatchFromContact(
+        fromCmId: String, peer: CmIdData, type: FrameType, body: ByteArray, replay: HeldInbox.Record?,
+    ): Ack {
+        if (replay != null) ConnDiag.inc("replayed $type")
         when (type) {
             FrameType.MSG -> {
-                val t = runCatching {
-                    Messages.json.decodeFromString(TextPayload.serializer(), String(body))
-                }.getOrNull() ?: return
+                val t = decodeText(body) ?: return Ack.REJECTED
+                val key = "${peer.identityPubKeyHex.lowercase()}:${t.id}"
+                if (deliveredIds.containsKey(key)) return Ack.OK   // a re-send after a lost receipt
+                deliveredIds[key] = true
                 // A pasted engine log is never shown as a message (logs stay in
                 // Connection/Diagnostics) — a grey notice says one arrived.
                 if (org.cmchat.app.chat.EngineLog.looksLikeLog(t.text)) {
                     ConnDiag.inc("message was an engine log → not shown in the chat")
                     inChat(fromCmId) { id -> ChatStore.addSystemLine(id, org.cmchat.app.chat.EngineLog.HIDDEN_NOTICE) }
-                    return
+                    return Ack.OK
                 }
-                // No delivery/read receipt is ever sent back (receipts dropped).
-                // While Invisible, the message is held as "missed" (blue dot);
-                // the sender learns nothing, and it surfaces once we go Online.
+                // While Invisible, the message is held as "missed" (blue dot); the
+                // receipt says only "stored" (never "read"), so the sender learns
+                // nothing, and it surfaces once we go Online. One that arrived
+                // while the app was CLOSED also shows "Missed Message" after that.
                 val invisible = org.cmchat.app.settings.AppSettings.invisibleMode.value
                 if (invisible) ConnDiag.inc("held (Invisible): message kept as missed")
                 val chatCmId = inChat(fromCmId) { id ->
-                    ChatStore.addTheirs(id, t.id, t.text, SelfTimer.fromLabel(t.selfTimer), missed = invisible); id
+                    ChatStore.addTheirs(id, t.id, t.text, SelfTimer.fromLabel(t.selfTimer), missed = invisible,
+                        at = replay?.atMs, closedMiss = replay?.closed == true); id
                 }
-                // Generic "Notification" — but NOT while Invisible (then only a Buzz
-                // or a friend request notifies; the message waits as "Missed"), and
-                // not for the chat that's open in front of the user.
-                if (!invisible && !chatOnScreen(chatCmId)) notify(Notice.MESSAGE)
+                // Generic "Notification" — but NOT while Invisible (then only a Buzz,
+                // a decoy alert or a friend request notifies; the message waits as
+                // "Missed"), and not for the chat that's open in front of the user.
+                if (replay == null && !invisible && !chatOnScreen(chatCmId)) notify(Notice.MESSAGE)
             }
-            FrameType.DECOY_ALERT -> onDecoyAlert(fromCmId)
+            FrameType.DECOY_ALERT -> onDecoyAlert(fromCmId, peer, replay)
             FrameType.TEAM_CLOCK -> {
-                val v = runCatching { String(body, Charsets.US_ASCII) }.getOrNull() ?: return
-                // Strictly validated: only a canonical offset or "" (off) is accepted.
-                val value = if (v.isEmpty()) null else v.takeIf { org.cmchat.app.chat.TeamClock.decode(it) != null } ?: return
+                val v = teamClockValue(body) ?: return Ack.REJECTED
+                val value = v.ifEmpty { null }
                 val chatCmId = inChat(fromCmId) { id ->
                     ChatStore.setTeamHour(id, value, names[id] ?: "Your friend"); id
                 }
                 onTeamClockChanged?.invoke(chatCmId, value)
             }
             FrameType.ERASE_CHAT -> inChat(fromCmId) { ChatStore.erase(it) }
-            FrameType.KNOCK_ACCEPT -> {}   // confirmed + marked seen above
-            FrameType.TERMINATE -> {
-                // They removed me from their list: remove them from mine too.
-                val id = currentId(fromCmId)
-                ConnDiag.inc("friend removed you (terminate) → removed them too")
-                forget(id)
-                onFriendTerminated?.invoke(id)
-            }
+            FrameType.KNOCK_ACCEPT -> followAcceptance(fromCmId, peer, body)   // confirmed + seen already
+            FrameType.TERMINATE -> friendTerminated(fromCmId)
             FrameType.BUZZ -> onBuzz(fromCmId)
-            FrameType.ADDR_UPDATE -> onAddressUpdate(currentId(fromCmId), peer, body)
+            FrameType.ADDR_UPDATE -> {
+                if (addressFrom(peer, body) == null) return Ack.REJECTED
+                onAddressUpdate(currentId(fromCmId), peer, body)
+            }
             FrameType.COVER -> ConnDiag.inc("cover frame discarded")
-            else -> {}
+            FrameType.NICKNAME -> {}
+            else -> return Ack.REJECTED
         }
+        return Ack.OK
+    }
+
+    /**
+     * Their acceptance carries their CURRENT address (authenticated, like an
+     * address update): if they moved since I scanned them, follow them now.
+     */
+    private fun followAcceptance(fromCmId: String, peer: CmIdData, body: ByteArray) {
+        val kp = decodeKnock(body) ?: return
+        if (kp.cmId != currentId(fromCmId) && addressFrom(peer, kp.cmId.toByteArray()) != null) {
+            onAddressUpdate(currentId(fromCmId), peer, kp.cmId.toByteArray())
+        }
+        // They told me which address of MINE they stored (the one in the request
+        // they accepted). Only if that isn't my current one does mine follow.
+        val mine = myPubHex
+        kp.yours.takeIf { y -> mine != null && CmId.decode(y)?.identityPubKeyHex.equals(mine, ignoreCase = true) }
+            ?.let { addressReached(currentId(fromCmId), it) }
+        resendAddress()
+    }
+
+    /** They removed me from their list: remove them from mine too. */
+    private fun friendTerminated(fromCmId: String) {
+        val id = currentId(fromCmId)
+        if (!contacts.containsKey(id)) return
+        ConnDiag.inc("friend removed you (terminate) → removed them too")
+        forget(id)
+        onFriendTerminated?.invoke(id)
+    }
+
+    /** A Team Clock value, strictly validated: a canonical offset, or "" (off). */
+    private fun teamClockValue(body: ByteArray): String? {
+        val v = runCatching { String(body, Charsets.US_ASCII) }.getOrNull() ?: return null
+        return if (v.isEmpty() || org.cmchat.app.chat.TeamClock.decode(v) != null) v else null
+    }
+
+    /** The new CMC-ID in an address update — only if it keeps the SAME identity key. */
+    private fun addressFrom(peer: CmIdData, body: ByteArray): CmIdData? {
+        val newCmId = runCatching { String(body) }.getOrNull() ?: return null
+        val decoded = CmId.decode(newCmId) ?: return null
+        return decoded.takeIf { it.identityPubKeyHex.equals(peer.identityPubKeyHex, ignoreCase = true) }
     }
 
     /**
@@ -765,9 +1144,8 @@ object MessageService {
      * carries the same identity pubkey — then we re-link to the new onion and persist.
      */
     private fun onAddressUpdate(oldCmId: String, peer: CmIdData, body: ByteArray) {
-        val newCmId = runCatching { String(body) }.getOrNull() ?: return
-        val decoded = CmId.decode(newCmId) ?: return
-        if (!decoded.identityPubKeyHex.equals(peer.identityPubKeyHex, ignoreCase = true)) return
+        val decoded = addressFrom(peer, body) ?: return
+        val newCmId = String(body)
         if (newCmId == oldCmId) return
         synchronized(relinkLock) {
             // Order matters for readers that don't take the lock: the new address
@@ -776,6 +1154,7 @@ object MessageService {
             contacts[newCmId] = decoded
             names[oldCmId]?.let { names[newCmId] = it }
             if (oldCmId in pending) pending.add(newCmId)
+            addressConfirmed.remove(oldCmId)?.let { addressConfirmed[newCmId] = it }
             ChatStore.rekey(oldCmId, newCmId)   // the conversation follows the friend
             relinked.remove(newCmId)            // moving back to an earlier address
             relinked[oldCmId] = newCmId
@@ -789,38 +1168,25 @@ object MessageService {
         org.cmchat.app.diag.Diag.i("addr", "contact relinked to new address")
     }
 
-    /** When the scout listener is alive, only a BUZZ — and a decoy ALERT, which
-     * is a safety signal that mustn't be lost — does anything. */
-    private fun dispatchBuzzOnly(chatCmId: String, type: FrameType) {
-        when (type) {
-            FrameType.BUZZ -> onBuzz(chatCmId)
-            FrameType.DECOY_ALERT -> onDecoyAlert(chatCmId)
-            FrameType.TERMINATE -> {
-                val id = currentId(chatCmId)
-                forget(id)
-                onFriendTerminated?.invoke(id)
-            }
-            FrameType.COVER -> {}
-            // The app was closed (swiped away): only a Buzz gets through. Say so,
-            // so a "my friend's messages never arrive" log shows WHY.
-            else -> ConnDiag.inc("app is closed (Buzz-only) → $type dropped; reopen the app to receive messages")
-        }
-    }
-
-    /** A friend's decoy was tripped: the notice line (chat erased when they leave). */
-    private fun onDecoyAlert(fromCmId: String) {
-        val chatCmId = inChat(fromCmId) { id -> ChatStore.addDecoyNotice(id); id }
+    /**
+     * A friend's decoy was tripped: the notice line (chat erased when I leave
+     * it). It notifies even while I'm Invisible (decision A) — unless that chat
+     * is open in front of me.
+     */
+    private fun onDecoyAlert(fromCmId: String, peer: CmIdData, replay: HeldInbox.Record?) {
+        dropHeldFrom(peer.identityPubKeyHex)
+        val chatCmId = inChat(fromCmId) { id -> ChatStore.addDecoyNotice(id, at = replay?.atMs ?: System.currentTimeMillis()); id }
         ConnDiag.inc("decoy alert received")
-        // Not a Buzz or a friend request: no notification while Invisible.
-        if (!org.cmchat.app.settings.AppSettings.invisibleMode.value && !chatOnScreen(chatCmId)) notify(Notice.MESSAGE)
+        if (replay == null && !chatOnScreen(chatCmId)) notify(Notice.MESSAGE)
     }
 
     /** What a notification is about (its text is always generic). */
     internal enum class Notice { MESSAGE, FRIEND_REQUEST, BUZZ }
 
     /**
-     * Posts a notification. While Invisible only a Buzz or a friend request may
-     * notify (the callers decide). Tests swap this to count them, like [dialer].
+     * Posts a notification. While Invisible only a Buzz, a friend's decoy alert
+     * or a friend request may notify (the callers decide). Tests swap this to
+     * count them, like [dialer].
      */
     @Volatile
     internal var notify: (Notice) -> Unit = { n ->
@@ -846,7 +1212,7 @@ object MessageService {
         org.cmchat.app.buzz.BuzzPolicy.requestShake(chatCmId)
         inChat(chatCmId) { id -> if (activeChatCmId != id) ChatStore.markBuzzed(id) }
         // A real notification in the bar (heads-up + vibration), generic text only —
-        // also while Invisible.
+        // also while Invisible, and also while the app is closed (Buzz listener).
         notify(Notice.BUZZ)
     }
 
@@ -860,20 +1226,29 @@ object MessageService {
 
     /**
      * Send ONE content frame to a contact over the forward-secret handshake:
-     * request a one-time prekey, verify it against their identity key, then send
-     * the X3DH-sealed frame. Throws on any failure (the Outbox retries silently).
+     * request a one-time prekey, verify it against their identity key, send the
+     * X3DH-sealed frame, and read their receipt. Returns only when their phone
+     * confirmed it STORED it; throws otherwise (the Outbox retries silently, or
+     * drops it for good if their phone refused it).
      */
     private fun sendSecure(peer: CmIdData, type: FrameType, payload: ByteArray) {
         val ch = channel ?: throw IOException("engine not ready")
         withConnection(peer) { s ->
-            // The sender READS one frame (the prekey reply): never wait forever.
+            // The sender READS (the prekey reply, the receipt): never wait forever.
             s.soTimeout = HANDSHAKE_READ_TIMEOUT_MS
-            SecureWire.send(
+            requireStored(SecureWire.send(
                 ch, s.getInputStream(), s.getOutputStream(), peer.identityPubKeyHex, type, payload,
                 onStage = { ConnDiag.out(it) },
                 onVersionMismatch = { versionMismatch.value = true },
-            )
+            ))
         }
+    }
+
+    /** OK = stored on their phone. RETRY = keep it and try later; REJECTED = never. */
+    private fun requireStored(ack: Ack) = when (ack) {
+        Ack.OK -> Unit
+        Ack.RETRY -> throw SecureWire.HandshakeFailed("their phone asked to retry later")
+        Ack.REJECTED -> throw Outbox.GiveUp("their phone refused it")
     }
 
     /** Open a connection to [peer]'s onion via [dialer], run [block], close it. */
@@ -890,13 +1265,14 @@ object MessageService {
         try {
             sock.use { block(it) }
         } catch (e: Exception) {
-            // HandshakeFailed carries a fixed, content-free reason; anything else
-            // is reduced to a short category. Never keys, contents or addresses.
-            val why = if (e is SecureWire.HandshakeFailed) e.message else Transport.failureReason(e)
+            // HandshakeFailed / GiveUp carry a fixed, content-free reason; anything
+            // else is reduced to a short category. Never keys, contents or addresses.
+            val why = if (e is SecureWire.HandshakeFailed || e is Outbox.GiveUp) e.message
+                else Transport.failureReason(e)
             ConnDiag.out("FAILED: $why")
             throw e
         }
-        ConnDiag.out("CONNECTED — frame delivered (${System.currentTimeMillis() - t0}ms)")
+        ConnDiag.out("CONNECTED — delivered, their phone confirmed (${System.currentTimeMillis() - t0}ms)")
     }
 
     /** The production dialer: through Tor's SOCKS port to the onion, fail-closed. */
@@ -938,4 +1314,15 @@ object MessageService {
     private fun decodeKnock(body: ByteArray): KnockPayload? = runCatching {
         Messages.json.decodeFromString(KnockPayload.serializer(), String(body))
     }.getOrNull()
+
+    private fun decodeText(body: ByteArray): TextPayload? = runCatching {
+        Messages.json.decodeFromString(TextPayload.serializer(), String(body))
+    }.getOrNull()
+
+    private fun toHex(b: ByteArray): String = b.joinToString("") { "%02x".format(it) }
+
+    private fun fromHex(s: String): ByteArray? {
+        if (s.length % 2 != 0 || s.length > 64) return null
+        return runCatching { ByteArray(s.length / 2) { i -> s.substring(2 * i, 2 * i + 2).toInt(16).toByte() } }.getOrNull()
+    }
 }

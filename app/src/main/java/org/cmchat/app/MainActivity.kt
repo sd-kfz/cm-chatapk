@@ -13,6 +13,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // Application context for background notifications (buzz listener).
         org.cmchat.app.settings.AppSettings.appContext = applicationContext
+        // Where frames that arrive while locked are held (sealed) until unlock.
+        org.cmchat.app.transport.MessageService.heldDir = java.io.File(filesDir, "held")
         org.cmchat.app.diag.CrashCatcher.install(this)
         // No screenshots, blank in recents, no screen recording — ALWAYS in
         // release. In debug builds FLAG_SECURE is left OFF so test builds can be
@@ -54,6 +56,7 @@ class MainActivity : ComponentActivity() {
     // The screen is gone (Exit, swiped away, or recreated): the vault key must not
     // outlive it. A recreated screen starts at the lock screen anyway.
     override fun onDestroy() {
+        org.cmchat.app.transport.MessageService.closeVault()   // what arrives now is held
         org.cmchat.app.vault.SecurityFactory.lockIfCreated()
         super.onDestroy()
     }

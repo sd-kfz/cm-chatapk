@@ -9,6 +9,7 @@ import java.io.OutputStream
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -53,10 +54,10 @@ class InnerCodec(sessionId: ByteArray? = null) {
 }
 
 /**
- * The v3 wire protocol between two contacts: forward-secret, and socket-free so
+ * The wire protocol between two contacts: forward-secret, and socket-free so
  * the exact production logic runs in the loopback unit tests.
  *
- * One connection carries exactly ONE message, in three frames:
+ * One connection carries exactly ONE message, in four frames:
  *
  *  1. A → B  PREKEY_REQ   crypto_box(A_id → B_id) of a fresh 16-byte challenge.
  *                         Only a known contact can make one; others are ignored.
@@ -69,6 +70,14 @@ class InnerCodec(sessionId: ByteArray? = null) {
  *  3. A → B  Fs frame     X3DH(fresh ephemeral, that prekey, both identities) →
  *                         XChaCha20-Poly1305 of the padded inner frame. B opens it
  *                         with the prekey and then wipes the prekey.
+ *  4. B → A  RECEIPT      crypto_box(B_id → A_id) of `challenge | status`
+ *                         ([Ack]). B sends OK only once the frame is STORED (in
+ *                         the chat, or durably held while locked); A counts the
+ *                         frame delivered only on an OK that opens under B's
+ *                         identity key and echoes THIS request's challenge. No
+ *                         receipt (or RETRY) = not delivered: A keeps it and
+ *                         tries again. A receipt carries no content and is never
+ *                         shown to anyone — it is not a read receipt.
  *
  * Why fetch the prekey per message instead of publishing one ahead of time:
  * there is no server, so the recipient is ALWAYS online when a message is sent —
@@ -89,7 +98,7 @@ class InnerCodec(sessionId: ByteArray? = null) {
  * (which carry no user content — a random challenge and a public key) and feed
  * DH2/DH3. ALL user content (messages, buzz, erase, address updates, decoy alerts, Team Clock,
  * cover traffic) travels only in step 3. The anonymous KNOCK to a not-yet-contact
- * stays a sealed box (see [sealKnock]).
+ * stays a sealed box (see [sealKnock]); it gets a receipt too ([knockReceipt]).
  */
 class SecureChannel(
     private val crypto: CryptoManager,
@@ -100,17 +109,21 @@ class SecureChannel(
 ) {
 
     companion object {
-        /** v4 = v3's forward-secret handshake + decoy alert + Team Clock frames.
-         * (v3 = forward secrecy; v2 = static crypto_box + replay counter.) */
-        const val WIRE_VERSION = 5
+        /** v6 = v5 + an authenticated RECEIPT after every frame and every knock
+         * (step 4), the nickname frame, and the timestamped Team Clock.
+         * (v5 = terminate + knock withdrawal; v4 = decoy alert + Team Clock;
+         * v3 = forward secrecy; v2 = static crypto_box + replay counter.) */
+        const val WIRE_VERSION = 6
         const val CHALLENGE = 16
         private const val RESP_BODY = Fs.PKID + Fs.KEY + CHALLENGE
+        /** A receipt: the echoed challenge (or knock nonce) + one [Ack] byte. */
+        private const val RECEIPT_BODY = CHALLENGE + 1
 
         /** Frame types allowed to carry content in step 3 — never handshake types. */
         val CONTENT_TYPES: Set<FrameType> = setOf(
             FrameType.MSG, FrameType.ERASE_CHAT, FrameType.BUZZ, FrameType.ADDR_UPDATE,
             FrameType.COVER, FrameType.KNOCK_ACCEPT, FrameType.DECOY_ALERT, FrameType.TEAM_CLOCK,
-            FrameType.TERMINATE,
+            FrameType.TERMINATE, FrameType.NICKNAME,
         )
     }
 
@@ -119,7 +132,8 @@ class SecureChannel(
     /**
      * KNOCK to someone who isn't a contact yet: an anonymous sealed box to their
      * identity key (unchanged from v2 apart from the version byte). NOT forward
-     * secret — it holds only the knocker's display name and their own CMC-ID.
+     * secret — it holds only the knocker's display name, their own CMC-ID and a
+     * random nonce for the receipt.
      */
     fun sealKnock(payload: ByteArray, recipientIdPubHex: String): ByteArray {
         val inner = codec.wrap(FrameType.KNOCK, payload, recipientIdPubHex)
@@ -129,6 +143,43 @@ class SecureChannel(
         } finally {
             inner.fill(0); plain.fill(0)
         }
+    }
+
+    /**
+     * The knock's receipt, to the knocker's identity key (taken from inside the
+     * knock) and echoing its [nonce]. A forged knock naming someone else gets a
+     * receipt only that someone could open — useless to the forger.
+     */
+    fun knockReceipt(nonce: ByteArray, status: Ack, knockerIdPubHex: String): ByteArray {
+        require(nonce.size == CHALLENGE) { "bad knock nonce" }
+        return sealReceipt(nonce, status, knockerIdPubHex)
+    }
+
+    /** Knocker: the receipt for MY knock carrying [nonce], made by [recipientIdPubHex]; null if not. */
+    fun openKnockReceipt(frame: ByteArray, nonce: ByteArray, recipientIdPubHex: String): Ack? =
+        openReceipt(frame, nonce, recipientIdPubHex)
+
+    // ---- receipts (step 4) -------------------------------------------------
+
+    /**
+     * crypto_box from MY identity key of `echo | status`. Its sequence number
+     * comes from a counter of its own, so receipts never leave gaps in the
+     * counted frames a contact's replay window checks.
+     */
+    private fun sealReceipt(echo: ByteArray, status: Ack, peerIdPubHex: String): ByteArray {
+        val inner = codec.wrap(FrameType.ACK, echo + byteArrayOf(status.code.toByte()), "$peerIdPubHex#receipt")
+        val plain = FramePad.pad(inner)
+        try { return crypto.boxSeal(plain, peerIdPubHex, myIdSecHex) } finally { inner.fill(0); plain.fill(0) }
+    }
+
+    /** The status in a receipt from [peerIdPubHex] that echoes [echo]; null for anything else. */
+    private fun openReceipt(frame: ByteArray, echo: ByteArray, peerIdPubHex: String): Ack? {
+        val opened = crypto.boxOpen(frame, peerIdPubHex, myIdSecHex) ?: return null
+        val inner = FramePad.unpad(opened) ?: return null
+        val f = codec.unwrap(inner) ?: return null
+        if (f.version != WIRE_VERSION || f.type != FrameType.ACK || f.body.size != RECEIPT_BODY) return null
+        if (!MessageDigest.isEqual(f.body.copyOfRange(0, CHALLENGE), echo)) return null
+        return Ack.of(f.body[CHALLENGE].toInt() and 0xff)
     }
 
     // ---- sender side ------------------------------------------------------
@@ -174,6 +225,10 @@ class SecureChannel(
                 pub = f.body.copyOfRange(Fs.PKID, Fs.PKID + Fs.KEY),
             ))
         }
+
+        /** Step 4: the receipt — made by the contact's identity key for THIS
+         * request. Null if it is anything else (forged, replayed, malformed). */
+        fun verifyReceipt(frame: ByteArray): Ack? = openReceipt(frame, challenge, peerIdPubHex)
 
         /** Step 3: the forward-secret frame (fresh ephemeral; wiped inside [Fs.seal]). */
         fun seal(prekey: Prekey, type: FrameType, payload: ByteArray): ByteArray {
@@ -245,7 +300,7 @@ class SecureChannel(
     inner class Server internal constructor(
         val cmId: String,
         private val peerIdPubHex: String,
-        challenge: ByteArray,
+        private val challenge: ByteArray,
     ) : Closeable {
 
         private val prekeyId = crypto.randomBytes(Fs.PKID)
@@ -303,6 +358,10 @@ class SecureChannel(
             }
         }
 
+        /** Step 4: the receipt for this connection's frame — my identity key,
+         * echoing the sender's challenge. Needs no prekey (works after [close]). */
+        fun receipt(status: Ack): ByteArray = sealReceipt(challenge, status, peerIdPubHex)
+
         /** Wipe this connection's prekey secret. Idempotent. */
         override fun close() { prekeySec.fill(0) }
 
@@ -320,17 +379,19 @@ object SecureWire {
     class HandshakeFailed(message: String) : IOException(message)
 
     /**
-     * Sender: fetch + verify a one-time prekey, then send ONE forward-secret
-     * frame. Throws on any failure (the caller's silent outbox retries it later;
-     * nothing on screen changes). [onVersionMismatch] fires if the peer answers
-     * with a different wire version.
+     * Sender: fetch + verify a one-time prekey, send ONE forward-secret frame,
+     * then read the receiver's authenticated receipt and return its status. Only
+     * [Ack.OK] means "stored on their phone". Throws on any failure — including
+     * a missing or forged receipt — so the caller's silent outbox keeps the frame
+     * and retries it later; nothing on screen changes. [onVersionMismatch] fires
+     * if the peer answers with a different wire version.
      */
     fun send(
         ch: SecureChannel, input: InputStream, output: OutputStream,
         peerIdPubHex: String, type: FrameType, payload: ByteArray,
         onStage: (String) -> Unit = {},
         onVersionMismatch: () -> Unit = {},
-    ) {
+    ): Ack {
         val client = ch.Client(peerIdPubHex)
         Transport.writeFrame(output, client.request)
         onStage("prekey requested")
@@ -351,11 +412,56 @@ object SecureWire {
         if (frame.size > Transport.MAX_FRAME_BYTES) throw HandshakeFailed("message too large")
         Transport.writeFrame(output, frame)
         onStage("forward-secret frame sent (${frame.size}b)")
+        // Delivered = THEY say it's stored. A frame that went out but got no
+        // receipt is NOT delivered (they may have crashed or dropped it): retried.
+        val r = Transport.readFrame(input)
+            ?: throw HandshakeFailed("no receipt — not confirmed stored, will retry")
+        val ack = client.verifyReceipt(r) ?: throw HandshakeFailed("receipt not authenticated")
+        onStage("receipt: ${ack.name}")
+        return ack
+    }
+
+    /**
+     * Knocker: send the sealed knock, then read the recipient's receipt (made
+     * by THEIR identity key for THIS knock's [nonce]). Throws when there is none.
+     */
+    fun sendKnock(
+        ch: SecureChannel, input: InputStream, output: OutputStream,
+        sealed: ByteArray, nonce: ByteArray, recipientIdPubHex: String,
+        onStage: (String) -> Unit = {},
+    ): Ack {
+        Transport.writeFrame(output, sealed)
+        onStage("knock sent (anonymous sealed box, ${sealed.size}b)")
+        val r = Transport.readFrame(input)
+            ?: throw HandshakeFailed("no receipt for the knock — not confirmed stored, will retry")
+        val ack = ch.openKnockReceipt(r, nonce, recipientIdPubHex)
+            ?: throw HandshakeFailed("knock receipt not authenticated")
+        onStage("knock receipt: ${ack.name}")
+        return ack
     }
 
     sealed interface Received {
-        class Knock(val body: ByteArray) : Received
-        class Message(val cmId: String, val type: FrameType, val body: ByteArray) : Received
+        /** An anonymous knock. [reply] sends its receipt (who to, and the nonce,
+         * come from inside the knock — the caller decodes it). */
+        class Knock(val body: ByteArray, private val ch: SecureChannel, private val output: OutputStream) : Received {
+            private val replied = AtomicBoolean(false)
+            fun reply(nonce: ByteArray, knockerIdPubHex: String, ack: Ack): Boolean {
+                if (!replied.compareAndSet(false, true)) return false
+                return runCatching { Transport.writeFrame(output, ch.knockReceipt(nonce, ack, knockerIdPubHex)) }.isSuccess
+            }
+        }
+
+        /** A contact's frame. [reply] sends the receipt — OK only once it is stored. */
+        class Message(
+            val cmId: String, val type: FrameType, val body: ByteArray,
+            private val receipt: (Ack) -> ByteArray, private val output: OutputStream,
+        ) : Received {
+            private val replied = AtomicBoolean(false)
+            fun reply(ack: Ack): Boolean {
+                if (!replied.compareAndSet(false, true)) return false
+                return runCatching { Transport.writeFrame(output, receipt(ack)) }.isSuccess
+            }
+        }
         object VersionMismatch : Received
         class Dropped(val reason: String) : Received
     }
@@ -363,6 +469,8 @@ object SecureWire {
     /**
      * Recipient: handle ONE incoming connection. Never throws for bad input; the
      * one-time prekey is wiped on every path (including a sender that vanishes).
+     * A [Received.Message] / [Received.Knock] must then be answered with its
+     * receipt (`reply`) while the connection is still open.
      */
     fun receive(
         ch: SecureChannel, input: InputStream, output: OutputStream,
@@ -372,7 +480,7 @@ object SecureWire {
     ): Received {
         val first = Transport.readFrame(input) ?: return Received.Dropped("no readable frame")
         return when (val f = ch.onFirstFrame(first, contacts, allow)) {
-            is SecureChannel.First.Knock -> Received.Knock(f.body)
+            is SecureChannel.First.Knock -> Received.Knock(f.body, ch, output)
             SecureChannel.First.VersionMismatch -> Received.VersionMismatch
             is SecureChannel.First.Drop -> Received.Dropped(f.reason)
             is SecureChannel.First.Handshake -> f.server.use { server ->
@@ -385,7 +493,8 @@ object SecureWire {
                 val second = Transport.readFrame(input)
                     ?: return Received.Dropped("no frame after the prekey (sender gave up)")
                 when (val o = server.open(second)) {
-                    is SecureChannel.Opened.Delivered -> Received.Message(server.cmId, o.type, o.body)
+                    is SecureChannel.Opened.Delivered ->
+                        Received.Message(server.cmId, o.type, o.body, server::receipt, output)
                     SecureChannel.Opened.VersionMismatch -> Received.VersionMismatch
                     is SecureChannel.Opened.Drop -> Received.Dropped(o.reason)
                 }

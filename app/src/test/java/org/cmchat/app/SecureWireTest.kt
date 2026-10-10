@@ -3,6 +3,7 @@ package org.cmchat.app
 import com.goterl.lazysodium.LazySodiumJava
 import com.goterl.lazysodium.SodiumJava
 import org.cmchat.app.crypto.CryptoManager
+import org.cmchat.app.transport.Ack
 import org.cmchat.app.crypto.Fs
 import org.cmchat.app.transport.FramePad
 import org.cmchat.app.transport.FrameType
@@ -62,8 +63,12 @@ class SecureWireTest {
         }
     }
 
-    private fun bobReceives(s: Socket) =
+    /** Bob receives one frame and answers with [receipt] (null = stores nothing, no receipt). */
+    private fun bobReceives(s: Socket, receipt: Ack? = Ack.OK) =
         SecureWire.receive(bob.ch, s.getInputStream(), s.getOutputStream(), mapOf(alice.cmId to alice.idPub))
+            .also { r -> if (receipt != null) (r as? SecureWire.Received.Message)?.reply(receipt) }
+
+    private fun bobReceives(s: Socket) = bobReceives(s, Ack.OK)
 
     private fun aliceSends(c: Socket, payload: ByteArray, onMismatch: () -> Unit = {}) =
         SecureWire.send(alice.ch, c.getInputStream(), c.getOutputStream(), bob.idPub, FrameType.MSG, payload,
@@ -72,10 +77,87 @@ class SecureWireTest {
     @Test
     fun delivers_a_message_over_real_loopback_sockets() {
         val payload = "hello over the wire".toByteArray()
-        val r = loopback(::bobReceives) { aliceSends(it, payload) } as SecureWire.Received.Message
+        var ack: Ack? = null
+        val r = loopback(::bobReceives) { ack = aliceSends(it, payload) } as SecureWire.Received.Message
         assertEquals("alice", r.cmId)
         assertEquals(FrameType.MSG, r.type)
         assertArrayEquals(payload, r.body)
+        assertEquals("the sender learns it was STORED", Ack.OK, ack)
+    }
+
+    // ---- receipts (v6): "delivered" only when the receiver says stored ----------
+
+    @Test
+    fun a_receiver_that_stores_nothing_never_counts_as_delivered() {
+        // It opened the frame but sent no receipt (crashed, dropped it, closed).
+        val e = assertThrows(SecureWire.HandshakeFailed::class.java) {
+            loopback({ bobReceives(it, receipt = null) }) { aliceSends(it, "x".toByteArray()) }
+        }
+        assertTrue(e.message!!.contains("no receipt"))
+    }
+
+    @Test
+    fun retry_and_refusal_come_back_to_the_sender() {
+        var ack: Ack? = null
+        loopback({ bobReceives(it, Ack.RETRY) }) { ack = aliceSends(it, "x".toByteArray()) }
+        assertEquals(Ack.RETRY, ack)
+        loopback({ bobReceives(it, Ack.REJECTED) }) { ack = aliceSends(it, "x".toByteArray()) }
+        assertEquals(Ack.REJECTED, ack)
+    }
+
+    @Test
+    fun a_receipt_from_anyone_else_is_rejected() {
+        // Mallory (or Bob's onion key without Bob's identity) answers with a
+        // well-formed receipt made with another identity key.
+        val mallory = Device("mallory")
+        val e = assertThrows(SecureWire.HandshakeFailed::class.java) {
+            loopback({ s ->
+                val r = SecureWire.receive(bob.ch, s.getInputStream(), s.getOutputStream(), mapOf(alice.cmId to alice.idPub))
+                    as SecureWire.Received.Message
+                // A receipt sealed by Mallory for Alice, echoing nothing Alice asked.
+                val fake = mallory.ch.knockReceipt(ByteArray(16), Ack.OK, alice.idPub)
+                Transport.writeFrame(s.getOutputStream(), fake)
+                r
+            }) { aliceSends(it, "x".toByteArray()) }
+        }
+        assertTrue(e.message!!.contains("receipt not authenticated"))
+    }
+
+    @Test
+    fun a_receipt_with_the_right_challenge_but_another_key_is_rejected() {
+        val client = alice.ch.Client(bob.idPub)
+        // Whoever sees the challenge (it's inside Bob's box, but say they did)…
+        val challenge = InnerCodec().unwrap(FramePad.unpad(crypto.boxOpen(client.request, alice.idPub, bob.idSec)!!)!!)!!.body
+        val mallory = Device("mallory")
+        assertEquals(null, client.verifyReceipt(mallory.ch.knockReceipt(challenge, Ack.OK, alice.idPub)))
+        // …only Bob's identity key makes a receipt Alice accepts.
+        val srv = (bob.ch.onFirstFrame(client.request, mapOf(alice.cmId to alice.idPub)) as SecureChannel.First.Handshake).server
+        assertEquals(Ack.OK, client.verifyReceipt(srv.receipt(Ack.OK)))
+    }
+
+    @Test
+    fun an_old_receipt_cannot_confirm_a_new_frame() {
+        // Capture Bob's genuine receipt for connection #1 …
+        val client1 = alice.ch.Client(bob.idPub)
+        val srv1 = (bob.ch.onFirstFrame(client1.request, mapOf(alice.cmId to alice.idPub))
+            as SecureChannel.First.Handshake).server
+        val receipt1 = srv1.receipt(Ack.OK)
+        assertEquals(Ack.OK, client1.verifyReceipt(receipt1))
+        // … it is worthless for connection #2 (a different challenge).
+        val client2 = alice.ch.Client(bob.idPub)
+        assertEquals(null, client2.verifyReceipt(receipt1))
+    }
+
+    @Test
+    fun a_knock_gets_a_receipt_only_the_real_recipient_can_make() {
+        val nonce = crypto.randomBytes(16)
+        val good = bob.ch.knockReceipt(nonce, Ack.OK, alice.idPub)
+        assertEquals(Ack.OK, alice.ch.openKnockReceipt(good, nonce, bob.idPub))
+        // Wrong nonce (an old knock), or made by someone else: rejected.
+        assertEquals(null, alice.ch.openKnockReceipt(good, crypto.randomBytes(16), bob.idPub))
+        val mallory = Device("mallory")
+        val forged = mallory.ch.knockReceipt(nonce, Ack.OK, alice.idPub)
+        assertEquals(null, alice.ch.openKnockReceipt(forged, nonce, bob.idPub))
     }
 
     @Test

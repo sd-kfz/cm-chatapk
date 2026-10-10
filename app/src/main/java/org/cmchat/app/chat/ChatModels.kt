@@ -65,6 +65,9 @@ data class ChatMessage(
     val system: Boolean = false,
     /** Arrived while Invisible: shown as a red italic "Missed Message" once Online. */
     val missed: Boolean = false,
+    /** Arrived while the app was CLOSED (held, delivered at the next unlock): keeps
+     * its "Missed Message" mark after going Online, until the chat is left. */
+    val closedMiss: Boolean = false,
     /** A system ALERT (e.g. "Decoy chat tripped."): a small red timestamped line. */
     val alert: Boolean = false,
 )

@@ -178,16 +178,24 @@ object ServerController {
     ) {
         // Stopped by the user: nothing automatic brings it back (only userStart).
         if (stoppedByUser.value) return
-        // Fast path: already online for THIS exact key -> nothing to do. Prevents
-        // the re-publish storm when the start effect re-fires on recomposition.
-        if (_status.value is ServerStatus.Online && activeKey == existingOnionKey) return
+        // Already online: keep the address my friends know. Never republish
+        // under another key (that is a NEW address nobody has). If the caller's
+        // stored key differs — the vault never got the key made or rotated while
+        // it was locked — hand the running one back so it gets saved now.
+        // (Also the fast path that stops a re-publish storm on recomposition.)
+        val running = _status.value as? ServerStatus.Online
+        val runningKey = activeKey
+        if (running != null && runningKey != null) {
+            if (runningKey != existingOnionKey) onPublished(OnionPublish(running.onion, runningKey))
+            return
+        }
         // A publish is already in flight: never queue another one behind it.
         if (_status.value is ServerStatus.Starting) return
         ensureTorWatch()
         scope.launch {
             // Single-flight: never run two publishes concurrently.
             publishMutex.withLock {
-                if (_status.value is ServerStatus.Online && activeKey == existingOnionKey) return@withLock
+                if (_status.value is ServerStatus.Online && activeKey != null) return@withLock
                 _status.value = ServerStatus.Starting
                 val control = TorService.controlConnection()
                 if (control == null) {

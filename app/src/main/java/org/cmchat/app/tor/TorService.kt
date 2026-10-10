@@ -54,8 +54,18 @@ class TorService : Service() {
         private val _status = MutableStateFlow<TorStatus>(TorStatus.Offline)
         val status: StateFlow<TorStatus> = _status.asStateFlow()
 
-        private const val CHANNEL_ID = "cm_net"
+        /** Bumped each time a soft reconnect brought circuits back (the onion
+         * stayed up, so there was no Offline → Online edge): retry queued sends. */
+        private val _reconnects = MutableStateFlow(0)
+        val reconnects: StateFlow<Int> = _reconnects.asStateFlow()
+
+        /** The ONE notification Android requires while the engine runs (a
+         * foreground service). New channel id: the old "Active" one is removed. */
+        private const val CHANNEL_ID = "cm_engine"
         private const val NOTIF_ID = 7001
+        /** Retired channels: the old "Active" (Bluetooth glyph) engine line and the
+         * second "Listening" line of the old Buzz listener. Deleted on start. */
+        private val OLD_CHANNELS = listOf("cm_net", "cm_listen")
 
         /** Watchdog: if not 100% bootstrapped within this, tear down + restart. */
         private const val BOOTSTRAP_TIMEOUT_MS = 60_000L
@@ -110,19 +120,16 @@ class TorService : Service() {
         }
 
         /**
-         * A network change happened. If Tor is settled (Online/Offline/Failed),
-         * tear down and rebuild on the new network; if it is still coming up,
-         * leave it alone. Reuses the watchdog/teardown path.
+         * A network change happened. ONLINE: a soft reconnect — circuits are
+         * rebuilt while the onion stays published ([SoftReconnect]); only if that
+         * fails is Tor restarted. Offline/Failed: restart on the new network.
+         * Still coming up: leave it alone.
          */
         fun onNetworkChanged() {
             val inst = instance ?: return
             when (status.value) {
                 is TorStatus.Starting, is TorStatus.Connecting -> { /* let it finish */ }
-                is TorStatus.Online -> {
-                    org.cmchat.app.diag.ConnDiag.sys("network changed — reconnecting Tor")
-                    restartsUsed = 0
-                    runCatching { inst.restartTor() }
-                }
+                is TorStatus.Online -> inst.softReconnect()
                 is TorStatus.Offline, is TorStatus.Failed -> {
                     org.cmchat.app.diag.ConnDiag.sys("network back — restarting Tor")
                     restartsUsed = 0
@@ -156,6 +163,30 @@ class TorService : Service() {
     private var gpService: GpTorService? = null
     private var bootstrapJob: Job? = null
     private var watchdogJob: Job? = null
+    @Volatile private var softJob: Job? = null
+
+    /**
+     * Network changed while Online: rebuild circuits WITHOUT touching the onion
+     * service (see [SoftReconnect]); fall back to [restartTor] only if no circuit
+     * comes back. One at a time — a flapping network doesn't stack them.
+     */
+    private fun softReconnect() {
+        if (softJob?.isActive == true) return
+        softJob = scope.launch {
+            val control = gpService?.torControlConnection
+            val ok = control != null && SoftReconnect.run(
+                kick = { control.setConf("DisableNetwork", "1"); control.setConf("DisableNetwork", "0") },
+                circuitUp = { control.getInfo("status/circuit-established")?.trim() == "1" },
+                log = { org.cmchat.app.diag.ConnDiag.sys(it) },
+            )
+            if (ok) {
+                _reconnects.value = _reconnects.value + 1
+            } else if (status.value is TorStatus.Online) {
+                restartsUsed = 0
+                runCatching { restartTor() }
+            }
+        }
+    }
 
     private val statusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -289,6 +320,7 @@ class TorService : Service() {
     private fun teardown() {
         bootstrapJob?.cancel()
         watchdogJob?.cancel()
+        softJob?.cancel()
         runCatching { NetworkMonitor.unregister() }
         runCatching { LocalBroadcastManager.getInstance(this).unregisterReceiver(statusReceiver) }
         runCatching { org.cmchat.app.tor.ServerController.stop() }
@@ -399,17 +431,26 @@ class TorService : Service() {
         }.getOrNull()
     }
 
+    /**
+     * The single engine notification (Android shows one for any foreground
+     * service): our flower in the brand colour, the lowest importance (no sound,
+     * folded away at the bottom of the shade), no text of its own. There is no
+     * second "Listening" line any more — the Buzz listener is this same service.
+     */
     private fun buildNotification(): Notification {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val nm = getSystemService(NotificationManager::class.java)
+            OLD_CHANNELS.forEach { runCatching { nm.deleteNotificationChannel(it) } }
             val channel = NotificationChannel(
-                CHANNEL_ID, "Network", NotificationManager.IMPORTANCE_MIN
+                CHANNEL_ID, "Engine", NotificationManager.IMPORTANCE_MIN
             ).apply { setShowBadge(false) }
-            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+            nm.createNotificationChannel(channel)
         }
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-            .setContentTitle("Active")
+            .setSmallIcon(org.cmchat.app.R.drawable.ic_stat_flower)
+            .setColor(org.cmchat.app.notify.Notifier.BRAND_COLOR)
             .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
             .setOngoing(true)
             .setShowWhen(false)
             .build()

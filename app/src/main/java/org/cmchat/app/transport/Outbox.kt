@@ -44,16 +44,26 @@ class Outbox(
     class Item(
         /** Per-friend FIFO key (the friend's cmId). */
         val peer: String,
-        /** Send it. Return normally = delivered; throw = not yet (retried later). */
+        /** Send it. Return normally = delivered (their phone confirmed it is
+         * stored); throw = not yet (retried later); throw [GiveUp] = their phone
+         * refused it for good (dropped, never retried). */
         val deliver: () -> Unit,
         val onDelivered: () -> Unit = {},
         val stillWanted: () -> Boolean = { true },
         val replaceKey: String? = null,
         /** A short, content-free label for the Connection log ("message", "knock"…). */
         val label: String = "frame",
+        /** Carries no chat content (address update, acceptance, terminate,
+         * knock): kept when the app is closed, so the friendship keeps working. */
+        val keepOnClose: Boolean = false,
+        /** What this item carries, for [has] (e.g. which address an update sends). */
+        val tag: Any? = null,
     ) {
         internal var createdAt = 0L
     }
+
+    /** Thrown by [Item.deliver]: their phone REFUSED it (not "try later"). */
+    class GiveUp(message: String) : Exception(message)
 
     private val lock = Any()
     private val queues = HashMap<String, ArrayDeque<Item>>()
@@ -91,6 +101,24 @@ class Outbox(
         }
     }
 
+    /**
+     * The app was closed: drop every queued item that carries chat content,
+     * keep the ones the friendship itself depends on ([Item.keepOnClose]).
+     */
+    fun retainOnly(keep: (Item) -> Boolean) {
+        synchronized(lock) {
+            for (peer in queues.keys.toList()) {
+                val q = queues[peer] ?: continue
+                q.removeAll { !keep(it) }
+                if (q.isEmpty()) {
+                    queues.remove(peer)
+                    workers.remove(peer)?.cancel()
+                    pokes.remove(peer)
+                }
+            }
+        }
+    }
+
     /** Drop everything queued for ONE friend (deleted / cancelled). */
     fun clearPeer(peer: String) {
         synchronized(lock) {
@@ -101,6 +129,10 @@ class Outbox(
     }
 
     fun size(): Int = synchronized(lock) { queues.values.sumOf { it.size } }
+
+    /** Is something matching [match] still queued for [peer]? */
+    fun has(peer: String, match: (Item) -> Boolean): Boolean =
+        synchronized(lock) { queues[peer]?.any(match) == true }
 
     private suspend fun drain(peer: String, poke: MutableStateFlow<Long>) {
         val me = currentCoroutineContext()[Job]
@@ -128,6 +160,10 @@ class Outbox(
                 head.deliver(); true
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: GiveUp) {
+                currentCoroutineContext().ensureActive()
+                org.cmchat.app.diag.ConnDiag.out("${head.label}: refused by their phone (${e.message}) — not retried")
+                drop(peer, head); failures = 0; continue
             } catch (_: Exception) {
                 false
             }
