@@ -25,6 +25,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.security.MessageDigest
 import org.cmchat.app.ui.theme.*
+import org.cmchat.app.R
+import org.cmchat.app.i18n.Tr
 
 /**
  * Verify App Integrity: shows the running app's signing-certificate SHA-256
@@ -42,9 +44,9 @@ fun IntegrityScreen(onBack: () -> Unit) {
 
     Column(Modifier.fillMaxSize().background(CmBackground)) {
         Box(Modifier.fillMaxWidth().padding(16.dp)) {
-            Text("‹ Back", color = CmBlue, fontFamily = Nunito, fontSize = 15.sp,
+            Text(Tr.s(R.string.back), color = CmBlue, fontFamily = Nunito, fontSize = 15.sp,
                 modifier = Modifier.align(Alignment.CenterStart).clickable { onBack() })
-            Text("Verify App Integrity", color = CmText, fontFamily = Nunito, fontSize = 17.sp,
+            Text(Tr.s(R.string.integ_verify_app_integrity), color = CmText, fontFamily = Nunito, fontSize = 17.sp,
                 fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
         }
 
@@ -52,17 +54,14 @@ fun IntegrityScreen(onBack: () -> Unit) {
             .padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
 
             Text(
-                "This is your app's signing fingerprint. Compare it with a friend " +
-                    "(read it aloud or scan): if they match, you're both running the " +
-                    "genuine, unmodified CM-Chat. A different fingerprint means a " +
-                    "repackaged or tampered build.",
+                Tr.s(R.string.integ_explainer),
                 color = CmTextDim, fontFamily = Nunito, fontSize = 13.sp,
             )
 
-            Field("Package", info.pkg)
-            Field("Version", "${info.version} (build ${info.build})")
+            Field(Tr.s(R.string.integ_package), info.pkg)
+            Field(Tr.s(R.string.integ_version), Tr.s(R.string.integ_version_build, info.version, info.build))
 
-            Text("Signing certificate · SHA-256", color = CmBlue, fontFamily = Nunito,
+            Text(Tr.s(R.string.integ_signing_certificate_sha_256), color = CmBlue, fontFamily = Nunito,
                 fontSize = 12.sp, fontWeight = FontWeight.Bold)
             SelectionContainer {
                 Text(info.sha256, color = CmText, fontFamily = Nunito, fontSize = 13.sp,
@@ -73,7 +72,7 @@ fun IntegrityScreen(onBack: () -> Unit) {
             Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(CmBlue)
                 .clickable { clipboard.setText(AnnotatedString(info.sha256)) }
                 .padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
-                Text("Copy fingerprint", color = CmBackground, fontFamily = Nunito,
+                Text(Tr.s(R.string.integ_copy_fingerprint), color = CmBackground, fontFamily = Nunito,
                     fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             }
             Spacer(Modifier.height(4.dp))

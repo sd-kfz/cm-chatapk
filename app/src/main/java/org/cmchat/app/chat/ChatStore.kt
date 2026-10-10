@@ -162,8 +162,8 @@ object ChatStore {
         it.copy(messages = it.messages + alertLine(text, at), unread = true)
     }
 
-    private fun alertLine(text: String, at: Long) = ChatMessage(newId(), mine = false, text = text,
-        state = MsgState.SENT, createdAt = at, system = true, alert = true)
+    private fun alertLine(text: String, at: Long, note: SystemNote? = null) = ChatMessage(newId(), mine = false,
+        text = text, state = MsgState.SENT, createdAt = at, system = true, alert = true, note = note)
 
     /** Text of the friend-side decoy notice. */
     const val DECOY_NOTICE = "Decoy chat triggered — chat erased."
@@ -179,7 +179,7 @@ object ChatStore {
             // ONE atomic change: the chat is gone and the line never shows without
             // its "erase on leave" flag.
             ChatThread(teamHour = it.teamHour, peerLastSeen = it.peerLastSeen,
-                messages = listOf(alertLine(DECOY_NOTICE, at)), unread = true, decoyErase = true)
+                messages = listOf(alertLine(DECOY_NOTICE, at, SystemNote.DecoyErased)), unread = true, decoyErase = true)
         }
         wipeReceivedFiles(gone)
     }
@@ -199,15 +199,17 @@ object ChatStore {
     /** Seed/set the Team clock without a system message (used when loading it). */
     fun setTeamHourValue(chatId: String, value: String?) = update(chatId) { it.copy(teamHour = value) }
 
-    /** A Team Clock change (from the friend, or mine): set it + a grey system line. */
-    fun setTeamHour(chatId: String, value: String?, byName: String) = update(chatId) {
-        val what = TeamClock.decode(value)?.let { "set the Team Clock to ${TeamClock.time12(System.currentTimeMillis(), it)}" }
-            ?: "turned the Team Clock off"
+    /** A Team Clock change (from the friend, or mine): set it + a grey system line.
+     * [byName] null = me; "" = the friend, name unknown. */
+    fun setTeamHour(chatId: String, value: String?, byName: String?) = update(chatId) {
+        val time = TeamClock.decode(value)?.let { off -> TeamClock.time12(System.currentTimeMillis(), off) }
+        val what = time?.let { t -> "set the Team Clock to $t" } ?: "turned the Team Clock off"
+        val who = byName?.ifEmpty { "Your friend" } ?: "You"
         it.copy(
             teamHour = value,
             messages = it.messages + ChatMessage(
-                newId(), mine = false, text = "$byName $what",
-                state = MsgState.SENT, system = true,
+                newId(), mine = false, text = "$who $what",
+                state = MsgState.SENT, system = true, note = SystemNote.TeamClock(byName, time),
             ),
         )
     }

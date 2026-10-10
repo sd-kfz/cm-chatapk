@@ -24,6 +24,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.cmchat.app.ui.theme.*
+import org.cmchat.app.R
+import org.cmchat.app.i18n.Tr
 
 @Composable
 fun SettingsScreen(
@@ -96,18 +98,18 @@ fun SettingsScreen(
         var v by remember { mutableStateOf(myNickname) }
         AlertDialog(
             onDismissRequest = { renamingMe = false },
-            title = { Text("Your nickname") },
+            title = { Text(Tr.s(R.string.set_nickname_title)) },
             text = {
                 Column {
                     OutlinedTextField(value = v, onValueChange = { v = it.take(24) }, singleLine = true)
-                    Text("Friends see this unless they gave you a name of their own.",
+                    Text(Tr.s(R.string.set_nickname_hint),
                         color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
                 }
             },
             confirmButton = {
-                TextButton(onClick = { v.trim().takeIf { it.isNotEmpty() }?.let(onRenameMe); renamingMe = false }) { Text("Save") }
+                TextButton(onClick = { v.trim().takeIf { it.isNotEmpty() }?.let(onRenameMe); renamingMe = false }) { Text(Tr.s(R.string.save)) }
             },
-            dismissButton = { TextButton(onClick = { renamingMe = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { renamingMe = false }) { Text(Tr.s(R.string.cancel)) } },
         )
     }
 
@@ -116,9 +118,9 @@ fun SettingsScreen(
 
     Column(Modifier.fillMaxSize().background(CmBackground)) {
         Box(Modifier.fillMaxWidth().padding(16.dp)) {
-            Text("‹ Back", color = CmBlue, fontFamily = Nunito, fontSize = 15.sp,
+            Text(Tr.s(R.string.back), color = CmBlue, fontFamily = Nunito, fontSize = 15.sp,
                 modifier = Modifier.align(Alignment.CenterStart).clickable { onBack() })
-            Text("Settings", color = CmText, fontFamily = Nunito, fontSize = 17.sp,
+            Text(Tr.s(R.string.friends_settings), color = CmText, fontFamily = Nunito, fontSize = 17.sp,
                 fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
         }
 
@@ -129,29 +131,29 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
 
             // 1) Language first.
-            item { Setting("Language", languageLabel, onClick = onLanguage, hint = "Choose the app's language.") }
+            item { Setting(Tr.s(R.string.lang_language), languageLabel, onClick = onLanguage, hint = Tr.s(R.string.set_language_hint)) }
 
             // 2) The groups.
-            item { GroupHeader("Identity") }
-            item { Setting("My identity (CMC-ID · QR)", onClick = onOpenMyId,
-                hint = "Your address + QR for friends to add you.") }
-            item { Setting("My nickname", myNickname, onClick = { renamingMe = true },
-                hint = "The name your friends see for you.") }
+            item { GroupHeader(Tr.s(R.string.set_identity)) }
+            item { Setting(Tr.s(R.string.set_my_identity_cmc_id), onClick = onOpenMyId,
+                hint = Tr.s(R.string.set_myid_hint)) }
+            item { Setting(Tr.s(R.string.set_my_nickname), myNickname, onClick = { renamingMe = true },
+                hint = Tr.s(R.string.set_nickname_row_hint)) }
 
-            item { GroupHeader("Chats") }
+            item { GroupHeader(Tr.s(R.string.set_chats)) }
             item { GeneralTimerRow() }
             item { BuzzFrequencyRow() }
 
-            item { GroupHeader("Privacy & Safety 🔒") }
+            item { GroupHeader(Tr.s(R.string.set_privacy_group)) }
             if (!privacyOpen) {
                 item {
-                    Setting("Unlock Privacy & Safety", "🔒 locked", onClick = { askMode = PinMode.UNLOCK },
-                        hint = "Guards the server, stealth, wipe, PIN and diagnostics settings.")
+                    Setting(Tr.s(R.string.set_unlock_privacy), Tr.s(R.string.set_locked), onClick = { askMode = PinMode.UNLOCK },
+                        hint = Tr.s(R.string.set_privacy_guards))
                 }
             } else {
                 if (!privacyPinSet) item {
-                    Setting("Set a Privacy PIN", "set up", onClick = { askMode = PinMode.SET },
-                        hint = "Locks this group (digits only).")
+                    Setting(Tr.s(R.string.set_set_privacy_pin), Tr.s(R.string.set_set_up), onClick = { askMode = PinMode.SET },
+                        hint = Tr.s(R.string.set_privacy_pin_hint))
                 }
                 item { CerberusRow(onCerberusChange) }
                 item { KillTimerRow() }
@@ -162,70 +164,69 @@ fun SettingsScreen(
                     Column {
                         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CmCard)
                             .clickable { onCoverMode(!coverOn) }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text("Open as a calculator (cover)", color = CmText, fontFamily = Nunito, fontSize = 14.sp,
+                            Text(Tr.s(R.string.set_cover), color = CmText, fontFamily = Nunito, fontSize = 14.sp,
                                 modifier = Modifier.weight(1f))
-                            Text(if (coverOn) "Yes" else "No", color = if (coverOn) CmGreen else CmTextDim,
+                            Text(if (coverOn) Tr.s(R.string.yes) else Tr.s(R.string.no), color = if (coverOn) CmGreen else CmTextDim,
                                 fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         }
-                        Text("Opens to a working calculator. Tap the same key 10× in a row to get in; " +
-                            "tap “reset” 20× to choose a different key.", color = CmTextFaint, fontFamily = Nunito,
+                        Text(Tr.s(R.string.set_cover_hint), color = CmTextFaint, fontFamily = Nunito,
                             fontSize = 11.sp, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
                             modifier = Modifier.padding(start = 4.dp, top = 2.dp))
                     }
                 }
                 item { StatusDefaultRow() }
-                item { Setting("My Server", onClick = onOpenMyServer, hint = "Your own address that friends connect to.") }
-                item { Setting("Stealth / Bridges (obfs4 · Snowflake)", onClick = onOpenBridges,
-                    hint = "Hide that you use Tor from your network. Can be slower.") }
-                item { InfoRow("Photo / video data removal", "Yes — always",
-                    "Location and camera data are removed from every photo and video you send.") }
-                item { Setting("Keep engine running in background", onClick = onIgnoreBattery,
-                    hint = "Ask Android not to sleep the engine so messages still arrive.") }
+                item { Setting(Tr.s(R.string.server_my_server), onClick = onOpenMyServer, hint = Tr.s(R.string.set_server_hint)) }
+                item { Setting(Tr.s(R.string.set_bridges), onClick = onOpenBridges,
+                    hint = Tr.s(R.string.set_bridges_hint)) }
+                item { InfoRow(Tr.s(R.string.set_scrub), Tr.s(R.string.set_scrub_value),
+                    Tr.s(R.string.set_scrub_hint)) }
+                item { Setting(Tr.s(R.string.set_keep_engine), onClick = onIgnoreBattery,
+                    hint = Tr.s(R.string.set_keep_engine_hint)) }
                 item { SessionWindowRow(onSessionWindow) }
-                item { Setting("Change app PIN", onClick = { showChangePin = true },
-                    hint = "Change the PIN that unlocks the app.") }
+                item { Setting(Tr.s(R.string.set_change_app_pin), onClick = { showChangePin = true },
+                    hint = Tr.s(R.string.set_change_pin_hint)) }
                 if (privacyPinSet) {
-                    item { Setting("Change Privacy PIN", onClick = { askMode = PinMode.CHANGE },
-                        hint = "Enter the current PIN, then set a new one.") }
-                    item { Setting("Remove Privacy PIN", onClick = { askMode = PinMode.REMOVE },
-                        hint = "This group then opens without a PIN.") }
+                    item { Setting(Tr.s(R.string.set_change_privacy_pin), onClick = { askMode = PinMode.CHANGE },
+                        hint = Tr.s(R.string.set_change_privacy_pin_hint)) }
+                    item { Setting(Tr.s(R.string.set_remove_privacy_pin), onClick = { askMode = PinMode.REMOVE },
+                        hint = Tr.s(R.string.set_remove_privacy_pin_hint)) }
                 }
-                item { GroupHeader("Diagnostics") }
-                item { Setting("Diagnostics & troubleshoot", onClick = onOpenDiagnostics,
-                    hint = "See what's happening if something isn't working.") }
-                item { Setting("Connection test (Link Test)", onClick = onOpenConnection,
-                    hint = "Watch each step of reaching a friend, live.") }
-                item { Setting("RAM diagnostics", onClick = onRamDiag,
-                    hint = "See which features use the most memory.") }
+                item { GroupHeader(Tr.s(R.string.diag_diagnostics)) }
+                item { Setting(Tr.s(R.string.set_diag), onClick = onOpenDiagnostics,
+                    hint = Tr.s(R.string.set_diag_hint)) }
+                item { Setting(Tr.s(R.string.set_conn_test), onClick = onOpenConnection,
+                    hint = Tr.s(R.string.set_conn_test_hint)) }
+                item { Setting(Tr.s(R.string.ramdiag_ram_diagnostics), onClick = onRamDiag,
+                    hint = Tr.s(R.string.set_ramdiag_hint)) }
                 item {
                     Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
                         .background(CmRed.copy(alpha = 0.15f)).clickable { onWipeEverything() }.padding(14.dp),
                         contentAlignment = Alignment.Center) {
-                        Text("Wipe Everything Now", color = CmRed, fontFamily = Nunito,
+                        Text(Tr.s(R.string.set_wipe_now), color = CmRed, fontFamily = Nunito,
                             fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
 
             // 3) Everything else.
-            item { GroupHeader("System") }
+            item { GroupHeader(Tr.s(R.string.set_system)) }
             item { TextSizeRow(textSize, onTextSize) }
-            item { Setting("Verify App Integrity", onClick = onOpenIntegrity, hint = "Check the app's signature + version.") }
-            item { Setting("How to use", onClick = onHelp, hint = "Plain-language guide, from setup to panic buttons.") }
-            item { Setting("About / Version", onClick = onAbout, hint = "App version and credits.") }
+            item { Setting(Tr.s(R.string.integ_verify_app_integrity), onClick = onOpenIntegrity, hint = Tr.s(R.string.set_integrity_hint)) }
+            item { Setting(Tr.s(R.string.help_title), onClick = onHelp, hint = Tr.s(R.string.set_help_hint)) }
+            item { Setting(Tr.s(R.string.set_about_version), onClick = onAbout, hint = Tr.s(R.string.set_about_hint)) }
 
             // 4) Tools last.
-            item { GroupHeader("Tools") }
-            item { ToolToggle("Tool: Calculator", org.cmchat.app.tools.ToolsState.calcEnabled) }
-            item { ToolToggle("Tool: Notes", org.cmchat.app.tools.ToolsState.notesEnabled) }
-            item { ToolToggle("Tool: Flashlight", org.cmchat.app.tools.ToolsState.flashlightEnabled) }
+            item { GroupHeader(Tr.s(R.string.set_tools)) }
+            item { ToolToggle(Tr.s(R.string.set_tool_calculator), org.cmchat.app.tools.ToolsState.calcEnabled) }
+            item { ToolToggle(Tr.s(R.string.set_tool_notes), org.cmchat.app.tools.ToolsState.notesEnabled) }
+            item { ToolToggle(Tr.s(R.string.set_tool_flashlight), org.cmchat.app.tools.ToolsState.flashlightEnabled) }
             item { Spacer(Modifier.height(4.dp)) }
         }
 
         Box(Modifier.fillMaxWidth().padding(16.dp)
             .clip(RoundedCornerShape(14.dp)).background(CmCard).clickable { onExit() }.padding(14.dp),
             contentAlignment = Alignment.Center) {
-            Text("Exit (stop server, clear RAM, log out)", color = CmText, fontFamily = Nunito,
+            Text(Tr.s(R.string.set_exit), color = CmText, fontFamily = Nunito,
                 fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
         }
     }
@@ -258,12 +259,12 @@ private fun CerberusRow(onChange: (Boolean, Int) -> Unit) {
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("Cerberus · idle auto-wipe armed", color = CmText, fontFamily = Nunito, fontSize = 14.sp)
-                Text(if (reach) "Off while \"Stay reachable\" is on."
-                     else "Untouched this long → clears RAM, stops the engine, closes the app.",
+                Text(Tr.s(R.string.set_cerberus), color = CmText, fontFamily = Nunito, fontSize = 14.sp)
+                Text(if (reach) Tr.s(R.string.set_off_while_reachable)
+                     else Tr.s(R.string.set_cerberus_hint),
                     color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp)
             }
-            Text(if (armed) "Yes" else "No", color = if (armed) CmGreen else CmTextDim,
+            Text(if (armed) Tr.s(R.string.yes) else Tr.s(R.string.no), color = if (armed) CmGreen else CmTextDim,
                 fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.clip(RoundedCornerShape(8.dp))
                     .clickable(enabled = !reach) { onChange(!armed, minutes) }.padding(6.dp))
@@ -294,11 +295,11 @@ private fun KillTimerRow() {
         // Alarm-style: pick the time it fires (today, or tomorrow if it's passed).
         val c = java.util.Calendar.getInstance().apply { add(java.util.Calendar.HOUR_OF_DAY, 1) }
         org.cmchat.app.ui.components.AlarmTimeDialog(
-            title = "Kill Timer — fires at",
+            title = Tr.s(R.string.set_kill_title),
             initialHour = c.get(java.util.Calendar.HOUR_OF_DAY),
             initialMinute = c.get(java.util.Calendar.MINUTE),
-            note = "At this time it clears RAM, stops the engine and closes the app.",
-            confirmLabel = "Arm",
+            note = Tr.s(R.string.set_kill_note),
+            confirmLabel = Tr.s(R.string.set_arm),
             onConfirm = { h, m ->
                 org.cmchat.app.guard.GuardController.armKillAt(h, m)
                 now = System.currentTimeMillis()
@@ -311,9 +312,9 @@ private fun KillTimerRow() {
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("Kill Timer", color = CmText, fontFamily = Nunito, fontSize = 14.sp)
-                Text(if (reach) "Off while \"Stay reachable\" is on."
-                     else "Like an alarm: at that time it clears RAM, stops the engine, closes the app.",
+                Text(Tr.s(R.string.help_kill_t), color = CmText, fontFamily = Nunito, fontSize = 14.sp)
+                Text(if (reach) Tr.s(R.string.set_off_while_reachable)
+                     else Tr.s(R.string.set_kill_hint),
                     color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp)
             }
             val d = deadline
@@ -322,20 +323,20 @@ private fun KillTimerRow() {
                 Column(horizontalAlignment = Alignment.End) {
                     Text(org.cmchat.app.chat.formatTimestamp(d), color = CmRed, fontFamily = Nunito,
                         fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                    Text("in %d:%02d:%02d".format(secs / 3600, (secs % 3600) / 60, secs % 60),
+                    Text(Tr.s(R.string.set_kill_in, "%d:%02d:%02d".format(secs / 3600, (secs % 3600) / 60, secs % 60)),
                         color = CmTextDim, fontFamily = Nunito, fontSize = 11.sp)
                 }
             } else {
-                Text("not armed", color = CmTextDim, fontFamily = Nunito, fontSize = 13.sp)
+                Text(Tr.s(R.string.set_not_armed), color = CmTextDim, fontFamily = Nunito, fontSize = 13.sp)
             }
         }
         if (deadline != null) {
-            Text("Cancel Kill Timer", color = CmBlue, fontFamily = Nunito, fontSize = 13.sp,
+            Text(Tr.s(R.string.set_kill_cancel), color = CmBlue, fontFamily = Nunito, fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.clip(RoundedCornerShape(8.dp))
                     .clickable { org.cmchat.app.guard.GuardController.cancelKillTimer() }.padding(6.dp))
         } else {
-            Text("Set the time…", color = if (reach) CmTextFaint else CmBlue, fontFamily = Nunito,
+            Text(Tr.s(R.string.set_kill_set), color = if (reach) CmTextFaint else CmBlue, fontFamily = Nunito,
                 fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.clip(RoundedCornerShape(8.dp))
                     .clickable(enabled = !reach) { picking = true }.padding(6.dp))
@@ -349,7 +350,7 @@ private fun TextSizeRow(saved: Int, onSave: (Int) -> Unit) {
     var v by remember(saved) { mutableStateOf(saved.toFloat()) }
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CmCard).padding(14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Text size", color = CmText, fontFamily = Nunito, fontSize = 14.sp,
+            Text(Tr.s(R.string.set_text_size), color = CmText, fontFamily = Nunito, fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             Text("${(org.cmchat.app.settings.AppSettings.textScale(v.toInt()) * 100).toInt()}%",
                 color = CmBlue, fontFamily = Nunito, fontSize = 13.sp)
@@ -386,11 +387,11 @@ private fun SessionWindowRow(onChange: (Boolean) -> Unit) {
         }
         .padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            Text("Stay unlocked for 6h", color = CmText, fontFamily = Nunito, fontSize = 14.sp)
-            Text("Don't re-ask the PIN for 6h after unlocking (this run only).",
+            Text(Tr.s(R.string.set_session_window), color = CmText, fontFamily = Nunito, fontSize = 14.sp)
+            Text(Tr.s(R.string.set_session_window_hint),
                 color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp)
         }
-        Text(if (on) "Yes" else "No", color = if (on) CmGreen else CmTextDim,
+        Text(if (on) Tr.s(R.string.yes) else Tr.s(R.string.no), color = if (on) CmGreen else CmTextDim,
             fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
     }
 }
@@ -451,28 +452,28 @@ private fun PrivacyPinDialog(
                 } else {
                     wrongCount += 1
                     lockedFor = LoginThrottle.delaySeconds(wrongCount)
-                    entry = ""; err = "Wrong PIN"
+                    entry = ""; err = Tr.s(R.string.lock_wrong_pin)
                 }
             }
             "new" -> {
                 if (v.length in VaultManager.MIN_PASSCODE..VaultManager.MAX_PASSCODE && v.all { it.isDigit() }) {
                     newPin = v; entry = ""; err = null; phase = "confirm"
-                } else err = "Use 4 to 56 digits"
+                } else err = Tr.s(R.string.set_privacy_pin_digits)
             }
             "confirm" -> {
                 if (v == newPin) { onSetNew(v); onPass() }
-                else { err = "PINs didn't match — start again"; entry = ""; newPin = ""; phase = "new" }
+                else { err = Tr.s(R.string.lock_pins_didn_t_match); entry = ""; newPin = ""; phase = "new" }
             }
         }
     }
 
     val title = when {
-        phase == "current" && mode == PinMode.UNLOCK -> "Unlock Privacy & Safety"
-        phase == "current" && mode == PinMode.CHANGE -> "Enter current PIN"
-        phase == "current" && mode == PinMode.REMOVE -> "Remove the Privacy PIN"
-        phase == "new" -> "Create a Privacy PIN"
-        phase == "confirm" -> "Confirm the Privacy PIN"
-        else -> "Privacy PIN"
+        phase == "current" && mode == PinMode.UNLOCK -> Tr.s(R.string.set_unlock_privacy)
+        phase == "current" && mode == PinMode.CHANGE -> Tr.s(R.string.set_enter_current_pin)
+        phase == "current" && mode == PinMode.REMOVE -> Tr.s(R.string.set_remove_privacy_pin_title)
+        phase == "new" -> Tr.s(R.string.set_create_privacy_pin)
+        phase == "confirm" -> Tr.s(R.string.set_confirm_privacy_pin)
+        else -> Tr.s(R.string.set_privacy_pin)
     }
 
     AlertDialog(
@@ -492,16 +493,16 @@ private fun PrivacyPinDialog(
                     enabled = lockedFor <= 0,
                 )
                 if (mode == PinMode.REMOVE && phase == "current") {
-                    Text("Without it, Privacy & Safety opens for anyone holding the unlocked phone.",
+                    Text(Tr.s(R.string.set_privacy_pin_why),
                         color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
                 }
                 if (phase == "new") {
-                    Text("Digits · 4 to 56", color = CmTextDim, fontFamily = Nunito,
+                    Text(Tr.s(R.string.set_privacy_pin_format), color = CmTextDim, fontFamily = Nunito,
                         fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
                     PinStrengthHint(entry)
                 }
                 if (lockedFor > 0) {
-                    Text("Too many tries — wait " + LoginThrottle.format(lockedFor),
+                    Text(Tr.s(R.string.set_too_many_tries, LoginThrottle.format(lockedFor)),
                         color = CmRed, fontFamily = Nunito, fontSize = 12.sp)
                 } else err?.let {
                     Text(it, color = CmRed, fontFamily = Nunito, fontSize = 12.sp)
@@ -510,13 +511,13 @@ private fun PrivacyPinDialog(
         },
         confirmButton = {
             val label = when (phase) {
-                "current" -> if (mode == PinMode.REMOVE) "Remove" else "Unlock"
-                "new" -> "Next"
-                else -> if (mode == PinMode.CHANGE) "Change" else "Set"
+                "current" -> if (mode == PinMode.REMOVE) Tr.s(R.string.set_remove) else Tr.s(R.string.set_unlock)
+                "new" -> Tr.s(R.string.next)
+                else -> if (mode == PinMode.CHANGE) Tr.s(R.string.set_change) else Tr.s(R.string.set)
             }
             TextButton(onClick = { submit() }, enabled = lockedFor <= 0) { Text(label) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(Tr.s(R.string.cancel)) } },
     )
 }
 
@@ -561,25 +562,25 @@ private fun ChangePinDialog(
                     else {
                         wrongCount += 1
                         lockedFor = LoginThrottle.delaySeconds(wrongCount)
-                        entry = ""; err = "Wrong PIN"
+                        entry = ""; err = Tr.s(R.string.lock_wrong_pin)
                     }
                 }
             }
             "new" -> when {
                 !org.cmchat.app.vault.VaultManager.isValidNewPin(entry) ->
-                    err = "Use 4 to 56 characters, not the same backwards"
-                entry == current -> err = "Choose a different PIN"
+                    err = Tr.s(R.string.set_pin_rules)
+                entry == current -> err = Tr.s(R.string.set_pin_different)
                 else -> { newPin = entry; entry = ""; err = null; phase = "confirm" }
             }
             "confirm" -> {
                 if (entry != newPin) {
-                    err = "Didn't match — start again"; entry = ""; newPin = ""; phase = "new"
+                    err = Tr.s(R.string.set_pin_mismatch); entry = ""; newPin = ""; phase = "new"
                 } else {
                     working = true; err = null
                     onChange(current, newPin) { ok ->
                         working = false
                         if (ok) onDone()
-                        else { err = "Could not change the PIN"; entry = ""; newPin = ""; phase = "new" }
+                        else { err = Tr.s(R.string.set_pin_change_failed); entry = ""; newPin = ""; phase = "new" }
                     }
                 }
             }
@@ -587,9 +588,9 @@ private fun ChangePinDialog(
     }
 
     val title = when (phase) {
-        "current" -> "Enter your current PIN"
-        "new" -> "Create a new PIN"
-        else -> "Confirm the new PIN"
+        "current" -> Tr.s(R.string.set_enter_your_current_pin)
+        "new" -> Tr.s(R.string.set_create_new_pin)
+        else -> Tr.s(R.string.set_confirm_new_pin)
     }
 
     AlertDialog(
@@ -604,32 +605,31 @@ private fun ChangePinDialog(
                     enabled = !working && lockedFor <= 0,
                 )
                 if (phase == "new" && !working) {
-                    Text("Numbers, letters or symbols · 4 to 56", color = CmTextDim, fontFamily = Nunito,
+                    Text(Tr.s(R.string.set_pin_format), color = CmTextDim, fontFamily = Nunito,
                         fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
                     PinStrengthHint(entry)
                 }
                 when {
-                    working -> Text("Working…", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
-                    lockedFor > 0 -> Text("Too many tries — wait " + LoginThrottle.format(lockedFor),
+                    working -> Text(Tr.s(R.string.set_working), color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
+                    lockedFor > 0 -> Text(Tr.s(R.string.set_too_many_tries, LoginThrottle.format(lockedFor)),
                         color = CmRed, fontFamily = Nunito, fontSize = 12.sp)
                     else -> err?.let { Text(it, color = CmRed, fontFamily = Nunito, fontSize = 12.sp) }
                 }
             }
         },
         confirmButton = {
-            val label = when (phase) { "current" -> "Next"; "new" -> "Next"; else -> "Change" }
+            val label = when (phase) { "current" -> Tr.s(R.string.next); "new" -> Tr.s(R.string.next); else -> Tr.s(R.string.set_change) }
             TextButton(onClick = { submit() }, enabled = !working && lockedFor <= 0) { Text(label) }
         },
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !working) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !working) { Text(Tr.s(R.string.cancel)) } },
     )
 }
 
 @Composable
 private fun ShredderRow() {
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CmCard).padding(14.dp)) {
-        Text("Shredder PIN", color = CmText, fontFamily = Nunito, fontSize = 14.sp)
-        Text("Your PIN typed backwards at the lock screen silently erases everything; the app " +
-            "then only shows an error until it's restarted.",
+        Text(Tr.s(R.string.set_shredder), color = CmText, fontFamily = Nunito, fontSize = 14.sp)
+        Text(Tr.s(R.string.set_shredder_hint),
             color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp)
     }
 }
@@ -637,8 +637,8 @@ private fun ShredderRow() {
 @Composable
 private fun StatusDefaultRow() {
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CmCard).padding(14.dp)) {
-        Text("Status default", color = CmText, fontFamily = Nunito, fontSize = 14.sp)
-        Text("You always start Invisible at login; switch to Online from the Friends screen.",
+        Text(Tr.s(R.string.set_status_default), color = CmText, fontFamily = Nunito, fontSize = 14.sp)
+        Text(Tr.s(R.string.set_status_default_hint),
             color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp)
     }
 }
@@ -652,24 +652,24 @@ private fun DecoyGroup() {
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("Decoy chat", color = CmText, fontFamily = Nunito, fontSize = 14.sp)
-                Text("A fake contact; tapping it silently Exits + wipes RAM.",
+                Text(Tr.s(R.string.set_decoy), color = CmText, fontFamily = Nunito, fontSize = 14.sp)
+                Text(Tr.s(R.string.set_decoy_hint),
                     color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp)
             }
-            Text(if (on) "Yes" else "No", color = if (on) CmGreen else CmTextDim,
+            Text(if (on) Tr.s(R.string.yes) else Tr.s(R.string.no), color = if (on) CmGreen else CmTextDim,
                 fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.clickable { org.cmchat.app.settings.AppSettings.decoyEnabled.value = !on })
         }
         if (on) {
             OutlinedTextField(
-                value = name, onValueChange = { org.cmchat.app.settings.AppSettings.decoyName.value = it.take(24) },
-                singleLine = true, label = { Text("Decoy name", color = CmTextDim) },
+                value = Tr.decoyName(name), onValueChange = { org.cmchat.app.settings.AppSettings.decoyName.value = it.take(24) },
+                singleLine = true, label = { Text(Tr.s(R.string.set_decoy_name), color = CmTextDim) },
                 modifier = Modifier.fillMaxWidth(),
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Position", color = CmTextDim, fontFamily = Nunito, fontSize = 13.sp,
+                Text(Tr.s(R.string.set_position), color = CmTextDim, fontFamily = Nunito, fontSize = 13.sp,
                     modifier = Modifier.weight(1f))
-                Text(if (top) "Top" else "Bottom", color = CmBlue, fontFamily = Nunito, fontSize = 13.sp,
+                Text(if (top) Tr.s(R.string.set_top) else Tr.s(R.string.set_bottom), color = CmBlue, fontFamily = Nunito, fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.clickable { org.cmchat.app.settings.AppSettings.decoyAtTop.value = !top })
             }
@@ -692,11 +692,11 @@ private fun StayReachableRow() {
         }
         .padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            Text("Stay reachable in background", color = CmText, fontFamily = Nunito, fontSize = 14.sp)
-            Text("Keeps the server up after close (forces Cerberus + Kill off)",
+            Text(Tr.s(R.string.set_stay_reachable), color = CmText, fontFamily = Nunito, fontSize = 14.sp)
+            Text(Tr.s(R.string.set_stay_reachable_hint),
                 color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp)
         }
-        Text(if (on) "Yes" else "No", color = if (on) CmGreen else CmTextDim,
+        Text(if (on) Tr.s(R.string.yes) else Tr.s(R.string.no), color = if (on) CmGreen else CmTextDim,
             fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
     }
 }
@@ -714,7 +714,7 @@ private fun GeneralTimerRow() {
             org.cmchat.app.settings.AppSettings.generalTimer.value = all[(i + 1) % all.size]
         }
         .padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text("General timer (all messages)", color = CmText, fontFamily = Nunito, fontSize = 14.sp,
+        Text(Tr.s(R.string.set_general_timer), color = CmText, fontFamily = Nunito, fontSize = 14.sp,
             modifier = Modifier.weight(1f))
         Text(t.displayLabel(),
             color = if (t == org.cmchat.app.chat.SelfTimer.OFF) CmTextDim else CmRed,
@@ -733,9 +733,9 @@ private fun BuzzFrequencyRow() {
                 all[(freq.ordinal + 1) % all.size]
         }
         .padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text("Accept Buzz", color = CmText, fontFamily = Nunito, fontSize = 14.sp,
+        Text(Tr.s(R.string.set_accept_buzz), color = CmText, fontFamily = Nunito, fontSize = 14.sp,
             modifier = Modifier.weight(1f))
-        Text(freq.label, color = CmBlue, fontFamily = Nunito, fontSize = 13.sp,
+        Text(buzzLabel(freq), color = CmBlue, fontFamily = Nunito, fontSize = 13.sp,
             fontWeight = FontWeight.SemiBold)
     }
 }
@@ -755,7 +755,7 @@ private fun ToolToggle(label: String, flow: kotlinx.coroutines.flow.MutableState
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CmCard)
             .clickable { flow.value = !on }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(label, color = CmText, fontFamily = Nunito, fontSize = 14.sp, modifier = Modifier.weight(1f))
-            Text(if (on) "Yes" else "No", color = if (on) CmGreen else CmTextDim,
+            Text(if (on) Tr.s(R.string.yes) else Tr.s(R.string.no), color = if (on) CmGreen else CmTextDim,
                 fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
         if (hint.isNotEmpty()) Hint(hint)
@@ -774,4 +774,12 @@ private fun Setting(label: String, value: String = "", hint: String = "", onClic
         }
         if (hint.isNotEmpty()) Hint(hint)
     }
+}
+
+/** How often a Buzz is accepted, in the user's language (the stored value stays [BuzzFrequency.label]). */
+private fun buzzLabel(f: org.cmchat.app.buzz.BuzzFrequency): String = when (f) {
+    org.cmchat.app.buzz.BuzzFrequency.H1 -> Tr.s(R.string.buzz_every_h, 1)
+    org.cmchat.app.buzz.BuzzFrequency.H12 -> Tr.s(R.string.buzz_every_h, 12)
+    org.cmchat.app.buzz.BuzzFrequency.H24 -> Tr.s(R.string.buzz_every_h, 24)
+    org.cmchat.app.buzz.BuzzFrequency.ONCE -> Tr.s(R.string.buzz_once)
 }

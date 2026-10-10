@@ -13,6 +13,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // Application context for background notifications (buzz listener).
         org.cmchat.app.settings.AppSettings.appContext = applicationContext
+        // The app's text, in the chosen language (the phone's until the vault says).
+        org.cmchat.app.i18n.Tr.attach(this)
         // Where frames that arrive while locked are held (sealed) until unlock.
         org.cmchat.app.transport.MessageService.heldDir = java.io.File(filesDir, "held")
         org.cmchat.app.diag.CrashCatcher.install(this)
@@ -23,8 +25,17 @@ class MainActivity : ComponentActivity() {
             window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
         }
         setContent {
-            CmChatTheme {
-                AppNav()
+            // Every screen gets the chosen language's resources; picking another
+            // language swaps them and the whole UI redraws in place (no restart).
+            val res = org.cmchat.app.i18n.Tr.resources
+            val base = androidx.compose.ui.platform.LocalContext.current
+            val ctx = androidx.compose.runtime.remember(res, base) { org.cmchat.app.i18n.Tr.wrap(base, res) }
+            androidx.compose.runtime.CompositionLocalProvider(
+                androidx.compose.ui.platform.LocalContext provides ctx,
+            ) {
+                CmChatTheme {
+                    AppNav()
+                }
             }
         }
     }

@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">CM-Chat</string>
+    <string name="app_name" translatable="false">CM-Chat</string>
     <!-- Launcher label uses a Cyrillic capital Es (U+0421), which looks like
          "C" but sorts to the bottom of the app drawer. app_name stays Latin. -->
-    <string name="launcher_label">СM-Chat</string>
+    <string name="launcher_label" translatable="false">СM-Chat</string>
 
     <!-- Common UI -->
     <string name="back">‹ Back</string>
@@ -28,4 +28,446 @@
 
     <!-- Plain empty states -->
     <string name="empty_friends">No friends yet. Tap + → Add friend to add someone with a QR code.</string>
+
+    <!-- LanguageScreen.kt -->
+    <string name="lang_language">Language</string>
+
+    <!-- LockScreen.kt -->
+    <string name="lock_min_chars">Use at least %1$s characters</string>
+    <string name="lock_not_palindrome">Can\'t read the same backwards (that\'s the Shredder code)</string>
+    <string name="lock_pins_didn_t_match">PINs didn\'t match — start again</string>
+    <string name="lock_wrong_pin">Wrong PIN</string>
+    <string name="lock_welcome_back">Welcome back</string>
+    <string name="lock_create_pin_numbers_letters">Create a PIN — numbers, letters or symbols (4–56)</string>
+    <string name="lock_confirm_pin">Confirm your PIN</string>
+    <string name="lock_pick_nickname">Pick a nickname</string>
+    <string name="lock_error_please_restart_app">Error. Please restart the app.</string>
+    <string name="lock_name_friends_see_when">This is the name friends see when you add them. It\'s stored only in your vault.</string>
+    <string name="lock_creating">Creating…</string>
+    <string name="lock_create">Create</string>
+    <string name="lock_unlocking">Unlocking…</string>
+    <string name="lock_enter">Enter</string>
+    <string name="lock_ghost_mode_ready">Ghost mode ready</string>
+    <string name="lock_try_again_in">Try again in %1$s</string>
+    <string name="lock_strength">Strength: %1$s</string>
+    <string name="lock_strength_weak">Weak</string>
+    <string name="lock_strength_fair">Fair</string>
+    <string name="lock_strength_good">Good</string>
+    <string name="lock_strength_strong">Strong</string>
+    <string name="lock_8_recommended">8+ characters recommended</string>
+
+    <!-- KnockScreen.kt -->
+    <string name="add_not_cm_qr">That QR isn\'t a CM-Chat ID</string>
+    <string name="add_point_friend_s_cm">Point at your friend\'s CM-Chat QR</string>
+    <string name="add_not_cmc_id">That doesn\'t look like a CMC-ID</string>
+    <string name="add_own_id">That\'s your own ID 🙂</string>
+    <string name="add_add_friend">Add friend</string>
+    <string name="add_their_id_label">Their CMC-ID (cmc1:…)</string>
+    <string name="add_scan_their_qr">Scan their QR</string>
+    <string name="add_show_my_qr">Show my QR</string>
+    <string name="add_nickname_optional">Nickname for them (optional)</string>
+    <string name="add_scanned_hint">✓ Scanned. Add a nickname if you like, then tap Add friend.</string>
+    <string name="add_request_explainer">They get a friend request (even if they\'re Invisible or their app is closed). Until they accept they show as \"New Friend\" (or your nickname for them); then the name they chose — unless you gave them one. Tap a waiting friend to cancel.</string>
+
+    <!-- MyIdScreen.kt -->
+    <string name="myid_my_cmc_id">My CMC-ID</string>
+    <string name="myid_appears_when_online">Your ID appears once Tor is Online and your server is published.</string>
+    <string name="myid_cmc_id_qr">CMC-ID QR</string>
+    <string name="myid_copy">Copy</string>
+    <string name="myid_copied">CMC-ID copied</string>
+    <string name="myid_share">Share</string>
+
+    <!-- AboutScreen.kt -->
+    <string name="about_about">About</string>
+    <string name="about_test_warning">⚠ v0.1 is test software. It has not had an independent security audit and is for trying things out with friends — not for real-life safety or high-risk use.</string>
+    <string name="about_welcome">Please read this before you rely on CM-Chat.\n\n1. CM-Chat is peer-to-peer over Tor. There is no server, no account, and no one who can recover your data or your PIN for you. If you forget your PIN, your data is gone — by design.\n\n2. Both phones must be connected at the same time for a message to move. There is no server mailbox: your phone keeps re-sending until your friend\'s phone confirms it has the message.\n\n3. Messages live only in memory and are erased when you wipe or Exit. One exception: a message that arrives while CM-Chat is locked or closed is kept on the phone sealed (encrypted to your identity key) until your next unlock, then shown and shredded. Apart from that, only the encrypted vault (your identity, friends and settings) is written to disk.\n\n4. Your safety depends on your device. If your phone is unlocked, compromised, or taken while open, CM-Chat cannot protect you. Use the screen lock, Cerberus idle-wipe, the Kill Timer, and the reverse-PIN shredder.\n\n5. Metadata still matters. Tor hides the network path, but who you talk to, when, and how often can still be inferred by someone watching you in person or holding your device. Invisible mode, buzz throttling and coarse last-seen reduce — not eliminate — this.\n\n6. This is test software. Do not use it where being discovered would put you or anyone else at risk. Treat every build as experimental until an independent security audit says otherwise.\n\nStay careful. Trust your own judgement over any app.</string>
+
+    <!-- RamDiagnosticsScreen.kt -->
+    <string name="ramdiag_ram_diagnostics">RAM diagnostics</string>
+    <string name="ramdiag_explainer">Used memory over time, labelled by active features. Separate from the Tor log.</string>
+    <string name="ramdiag_peak">Peak so far: %1$s MB</string>
+    <string name="ramdiag_enable_all_features">Enable all features</string>
+    <string name="ramdiag_clear">Clear</string>
+    <string name="ramdiag_sampling">Sampling…</string>
+    <string name="ramdiag_mb">%1$s MB</string>
+
+    <!-- IntegrityScreen.kt -->
+    <string name="integ_verify_app_integrity">Verify App Integrity</string>
+    <string name="integ_explainer">This is your app\'s signing fingerprint. Compare it with a friend (read it aloud or scan): if they match, you\'re both running the genuine, unmodified CM-Chat. A different fingerprint means a repackaged or tampered build.</string>
+    <string name="integ_package">Package</string>
+    <string name="integ_version">Version</string>
+    <string name="integ_version_build">%1$s (build %2$s)</string>
+    <string name="integ_signing_certificate_sha_256">Signing certificate · SHA-256</string>
+    <string name="integ_copy_fingerprint">Copy fingerprint</string>
+
+    <!-- BridgesScreen.kt -->
+    <string name="bridges_stealth_bridges">Stealth (Bridges)</string>
+    <string name="bridges_explainer">Makes your Tor traffic look like normal web traffic, so your network can\'t tell you use Tor. Can be slower. It does NOT add message secrecy — your messages are already end-to-end encrypted either way.</string>
+    <string name="bridges_failed">Engine: Failed (bridges) — couldn\'t connect.</string>
+    <string name="bridges_retry">Retry</string>
+    <string name="off">Off</string>
+    <string name="bridges_off_hint">Normal Tor (default).</string>
+    <string name="bridges_obfs4_hint">Disguise Tor as random traffic. Most reliable bridge type.</string>
+    <string name="bridges_snowflake_hint">Route via volunteer browser proxies. Experimental here.</string>
+    <string name="bridges_own_lines">Your own bridge lines (one per line)</string>
+    <string name="bridges_custom_hint">Custom bridges are more reliable long-term than the built-in ones. Get them from Tor (bridges.torproject.org) or a friend. Leave blank to use the built-in fallback set.</string>
+    <string name="bridges_no_fallback">If bridges are on and can\'t connect, the app will NOT fall back to normal Tor — it shows \"Failed (bridges)\" instead, so your cloak is never bypassed.</string>
+    <string name="bridges_cover_traffic">Cover traffic</string>
+    <string name="bridges_cover_hint">Sends decoy traffic to hide when you\'re really messaging. Uses more battery and data.</string>
+    <string name="yes">Yes</string>
+    <string name="no">No</string>
+    <string name="bridges_save_restart">Save &amp; restart engine</string>
+
+    <!-- ConnectionScreen.kt -->
+    <string name="conn_connection">Connection</string>
+    <string name="status_online">Online</string>
+    <string name="status_connecting">Connecting %1$s%%</string>
+    <string name="status_starting">Starting</string>
+    <string name="status_offline">Offline</string>
+    <string name="status_failed_bridges">Failed (bridges)</string>
+    <string name="status_failed">Failed</string>
+    <string name="engine">Engine</string>
+    <string name="conn_my_onion">My onion</string>
+    <string name="conn_not_published">not published</string>
+    <string name="conn_published">published</string>
+    <string name="conn_last_self_test">Last self-test</string>
+    <string name="conn_bridges">Bridges</string>
+    <string name="conn_engine_service">Engine service</string>
+    <string name="conn_started_up">started %1$s× · up %2$sm</string>
+    <string name="conn_run_link_test">Run Link Test</string>
+    <string name="conn_copy_log">Copy log</string>
+    <string name="clear">Clear</string>
+    <string name="conn_pick_contact_test">Pick a contact to test:</string>
+    <string name="conn_no_contacts">No contacts yet — add one first.</string>
+    <string name="cancel">Cancel</string>
+    <string name="conn_no_activity">No connection activity yet. Run a Link Test, or send/receive a message.</string>
+
+    <!-- DiagnosticsScreen.kt -->
+    <string name="diag_diagnostics">Diagnostics</string>
+    <string name="diag_copy_all">Copy all</string>
+    <string name="diag_engine_log">Engine log</string>
+    <string name="diag_no_entries">No entries.</string>
+    <string name="diag_self_test">Self-Test</string>
+    <string name="diag_running">Running…</string>
+    <string name="diag_again_in">Again in %1$ss</string>
+    <string name="diag_run_self_test">Run self-test</string>
+    <string name="diag_selftest_hint">Adversarial attacks on this app\'s own parser, flood limits, lifecycle and PIN lockout.</string>
+
+    <!-- MyServerScreen.kt -->
+    <string name="server_my_server">My Server</string>
+    <string name="server_tor_starting">Tor starting</string>
+    <string name="server_tor_connected">Tor connected</string>
+    <string name="server_creating_my_server">Creating my server</string>
+    <string name="server_published_reachable">Published &amp; reachable</string>
+    <string name="server_onion_address">Onion address</string>
+    <string name="server_nickname">Nickname: %1$s</string>
+    <string name="server_uptime_x">Uptime: %1$s</string>
+    <string name="server_error">Error: %1$s</string>
+    <string name="server_stopped_hint">Stopped by you — it stays off (nothing can reach you) until you tap Start.</string>
+    <string name="starting_dots">Starting…</string>
+    <string name="server_start">Start</string>
+    <string name="server_stop">Stop</string>
+    <string name="server_restart_wait">Restart %1$ss</string>
+    <string name="server_restart">Restart</string>
+    <string name="server_testing">Testing…</string>
+    <string name="server_selftest_again">Self-test (again in %1$ss)</string>
+    <string name="server_selftest">Self-test (reach my own server)</string>
+    <string name="server_already_ran">Already ran just now — try again in a moment</string>
+    <string name="server_reachable_ms">Reachable — %1$sms</string>
+    <string name="server_new_address_again">Request new address (again in %1$ss)</string>
+    <string name="server_new_address">Request new address</string>
+    <string name="server_rotate_hint">Rotates to a fresh onion and tells your contacts; the old address stays alive ~24h so no one drops.</string>
+
+    <!-- HelpScreen.kt -->
+    <string name="help_s1">1 · Setting up</string>
+    <string name="help_pin_t">Your PIN (very important)</string>
+    <string name="help_pin_b">It\'s the only key — there is NO reset and NO recovery. Use 4 to 56 characters: numbers, letters or symbols; 8 or more is much stronger. It can\'t read the same backwards, because your PIN typed backwards is the Shredder.</string>
+    <string name="help_engine_t">The Engine</string>
+    <string name="help_engine_b">Connects you over the Tor network. The first start can take 1–3 minutes. If your Wi-Fi or mobile data drops for a moment, it reconnects by itself and keeps your address.</string>
+    <string name="help_nick_t">Your nickname and ID</string>
+    <string name="help_nick_b">Your nickname is what friends see when you add them (change it in Settings → My nickname). Your address (CMC-ID) and QR code are in Settings → My identity: show, copy or share them there.</string>
+    <string name="help_s2">2 · Adding friends</string>
+    <string name="help_add_t">Add a friend</string>
+    <string name="help_add_b">Tap the cyan + and choose Add friend. Scan their QR (or paste their CMC-ID), add a nickname for them if you like, and tap Add friend. Until they accept they show as \"New Friend\" (or your nickname for them) with \"Pending\" — tap the row to cancel the request or remove them. Only ONE of you needs to add the other. It keeps trying quietly until their phone confirms.</string>
+    <string name="help_requests_t">+Add (friend requests)</string>
+    <string name="help_requests_b">A friend request arrives as a card on the Friends screen — Accept or Decline. It gets through even while you\'re Invisible or the app is closed. A declined person can\'t send another for an hour. Once accepted, you see the nickname they chose (your own label for them, if you set one, wins).</string>
+    <string name="help_qr_t">QR codes</string>
+    <string name="help_qr_b">Everything happens on the phone. The camera is only used while you\'re scanning.</string>
+    <string name="help_s3">3 · Messaging</string>
+    <string name="help_send_t">Sending</string>
+    <string name="help_send_b">Every message gets brand-new one-time keys, so even someone who later steals the phone and its keys can\'t read messages they recorded earlier (forward secrecy). Nothing on screen shows delivered or read. If your friend is offline, the message waits quietly and is re-sent until their phone confirms it has it (while your app is running). Each message shows the time it was sent or received (like 4:05 PM).</string>
+    <string name="help_files_t">Files</string>
+    <string name="help_files_b">Tap the paperclip left of the message box. Up to 100 MB. Photos and videos have their location and camera data removed before they leave; if that can\'t be done, the file is not sent. Other files go exactly as they are (documents can hold their own hidden data). Received files stay in memory only, are never opened by the app, and disappear with the chat — tap Save to keep one.</string>
+    <string name="help_disappear_t">Disappearing messages</string>
+    <string name="help_disappear_b">Tap a choice in the 🔥 bar above the message box: Off, Single Message (view once — gone the moment it\'s read), or a time (30s up to 24h) after it\'s seen. The 🔥 pill at the top shows what your next message gets. A timer for ALL messages is in Settings → Chats.</string>
+    <string name="help_teamclock_t">Team Clock</string>
+    <string name="help_teamclock_b">A shared clock for one chat — handy for agreeing on a time. Tap \"Set Team Clock\" in the chat and set the time like a phone alarm; both of you see it. It survives both phones restarting, and the newest change wins.</string>
+    <string name="help_buzz_t">Buzz</string>
+    <string name="help_buzz_b">A nudge with no text: long-press a friend, or ⚡ Buzz in the chat. Their phone shows a notification, and a BLUE dot stays on your name until they open your chat. It reaches them even when their app is closed. Settings → Chats → Accept Buzz limits how often anyone can Buzz you.</string>
+    <string name="help_x_t">The red X in a chat</string>
+    <string name="help_x_b">Wipe conversation: erases it on BOTH phones (theirs as soon as it reaches them). Delete friend: removes them from your list on this phone. Each one asks you to confirm.</string>
+    <string name="help_s4">4 · Presence</string>
+    <string name="help_presence_t">Online and Invisible</string>
+    <string name="help_presence_b">Every time the app starts (and after Exit) you\'re Invisible. Tap your status (● Online / ● Invisible) on the Friends screen to switch — only your tap changes it; minimising keeps your choice. Invisible = you still receive, but look offline: no notifications for messages (a Buzz, a friend request or a friend\'s decoy alert still notifies), and they wait as \"Missed Message\". Go Online and they\'re delivered as new messages. Senders can\'t tell.</string>
+    <string name="help_closed_t">When the app is closed</string>
+    <string name="help_closed_b">Swiping the app away keeps the Engine listening. A Buzz notifies you. Messages that arrive are kept on the phone sealed (encrypted to your identity key), never readable without your PIN, and show as \"Missed Message\" after you unlock — then they\'re shredded from storage. Exit ends all of this.</string>
+    <string name="help_dot_t">New messages</string>
+    <string name="help_dot_b">A blue dot on a friend means a new message is waiting. It goes away when you open that chat while Online. There is no \"online\" dot — nobody\'s status is shown.</string>
+    <string name="help_lastseen_t">Last seen</string>
+    <string name="help_lastseen_b">Friends only ever see \"last seen recently\" — for a day after you last sent them something, even if you then go Invisible or close the app.</string>
+    <string name="help_exit_t">Minimise or Exit</string>
+    <string name="help_exit_b">The white line minimises: the Engine keeps running. The red power symbol exits: it stops everything, clears memory (your keys too) and logs you out.</string>
+    <string name="help_s5">5 · Privacy and panic buttons</string>
+    <string name="help_privacy_t">Privacy &amp; Safety</string>
+    <string name="help_privacy_b">Sensitive settings (server, stealth, guardians, PIN, wipe, diagnostics) can sit behind a separate Privacy PIN (digits only). You can change it or remove it.</string>
+    <string name="help_cerberus_t">Cerberus</string>
+    <string name="help_cerberus_b">Idle auto-wipe: if the app goes untouched for the time you choose (15 min–3 h), it clears memory, stops the Engine and closes. Your vault stays.</string>
+    <string name="help_kill_t">Kill Timer</string>
+    <string name="help_kill_b">Set it like an alarm (the time it goes off); then it does the same as Cerberus.</string>
+    <string name="help_decoy_t">Decoy chat</string>
+    <string name="help_decoy_b">A fake friend. Tapping it instantly wipes your chats from memory, moves you to a new address and locks the app. It also sends a burn signal: each confirmed friend who is online gets your chat wiped on their phone too and sees \"Decoy chat triggered — chat erased.\"</string>
+    <string name="help_cover_t">Calculator cover</string>
+    <string name="help_cover_b">Settings → Privacy &amp; Safety → Open as a calculator: the app opens to a working calculator. Tap the same key 10 times in a row to get in (the first time, that key becomes yours). Tap \"reset\" 20 times to choose a different key. Your PIN still guards everything.</string>
+    <string name="help_shredder_t">Shredder</string>
+    <string name="help_shredder_b">Type your PIN BACKWARDS at the lock screen: everything is silently erased and a small red \"Error. Please restart the app.\" appears under \"Welcome back\". Close and reopen the app and it starts fresh (no reinstall needed).</string>
+    <string name="help_wipe_t">Wipe Everything</string>
+    <string name="help_wipe_b">Settings → Privacy &amp; Safety. Erases all app data, then opens Android\'s uninstall prompt so the app itself can be removed too.</string>
+    <string name="help_bridges_t">Bridges and cover traffic</string>
+    <string name="help_bridges_b">Bridges hide from your network that you use Tor (slower). Cover traffic sends decoy traffic so nobody can tell when you really message (more battery).</string>
+    <string name="help_s6">6 · Diagnostics</string>
+    <string name="help_conn_t">Connection test</string>
+    <string name="help_conn_b">Settings → Connection test runs a Link Test to one friend and shows every step live, on both phones — the best way to see where a connection fails.</string>
+    <string name="help_update_t">\"Update both apps\"</string>
+    <string name="help_update_b">If you see this, you and a friend run different app versions. Install the same version on both phones.</string>
+    <string name="help_diag_t">Diagnostics, self-test, integrity</string>
+    <string name="help_diag_b">Diagnostics shows what the app is doing; the self-test checks its own defences; Verify App Integrity shows the app\'s signing fingerprint to compare with a friend.</string>
+
+    <!-- FriendsScreen.kt -->
+    <string name="friends_engine_label">Engine:</string>
+
+    <!-- FriendsScreen.kt -->
+    <string name="friends_waiting_for">Waiting for %1$s</string>
+    <string name="friends_pending_explainer">Your friend request hasn\'t been accepted yet.\n\nCancel request: takes it back from their phone and removes %1$s here.\nRemove: removes %2$s from your list only.</string>
+    <string name="friends_remove">Remove</string>
+    <string name="friends_cancel_request">Cancel request</string>
+    <string name="friends_keep_waiting">Keep waiting</string>
+    <string name="friends_version_mismatch">A friend is on a different version — update both apps to the same version.</string>
+    <string name="friends_connecting_bridges">Connecting through bridges… can take longer than normal.</string>
+    <string name="friends_connecting_tor">Connecting to Tor — the first launch can take 1–3 minutes.</string>
+    <string name="friends_request_from">Friend request from %1$s</string>
+    <string name="friends_accept">Accept</string>
+    <string name="friends_decline">Decline</string>
+    <string name="friends_calculator">Calculator</string>
+    <string name="friends_notes">Notes</string>
+    <string name="friends_torch_on">Torch on</string>
+    <string name="friends_flashlight">Flashlight</string>
+    <string name="friends_settings">Settings</string>
+    <string name="friends_online_server_off">Online · server off</string>
+    <string name="status_invisible">Invisible</string>
+    <string name="friends_pending_line">Waiting for them to accept · tap for options</string>
+    <string name="missed_message">Missed Message</string>
+    <string name="friends_buzzed_you">Buzzed you</string>
+    <string name="last_seen_recently">last seen recently</string>
+    <string name="friends_pending">Pending</string>
+
+    <!-- files (ChatScreen.kt, MediaPolicy) -->
+    <string name="size_mb">%1$s MB</string>
+    <string name="size_kb">%1$s KB</string>
+    <string name="size_b">%1$s B</string>
+    <string name="file_too_big">That file is over 100 MB. Files can be at most 100 MB.</string>
+    <string name="file_empty">That file is empty.</string>
+    <string name="file_cant_clean">This file can\'t be cleaned of its location / camera data, so it isn\'t sent.</string>
+    <string name="file_video_track">This video carries data (for example a location track) that can\'t be removed, so it isn\'t sent.</string>
+    <string name="file_raw">RAW / TIFF photos can\'t be cleaned of their location / camera data, so they aren\'t sent.</string>
+    <string name="file_video_type">This video type can\'t be cleaned of its location / camera data, so it isn\'t sent.</string>
+    <string name="file_unreadable">That file couldn\'t be read.</string>
+    <string name="file_no_memory">Not enough free memory for that file right now.</string>
+    <string name="file_photo_cleaned">Photo: location and camera data removed.</string>
+    <string name="file_video_cleaned">Video: location and camera data removed.</string>
+    <string name="file_photo_converted">Photo: converted to JPEG without location or camera data.</string>
+    <string name="file_as_is">Not a photo or video: sent exactly as it is. Documents can carry their own hidden data (author, embedded photos).</string>
+    <string name="chat_wipe_conversation">Wipe conversation</string>
+    <string name="chat_wipe">Wipe</string>
+    <string name="chat_delete_friend">Delete friend</string>
+    <string name="chat_delete">Delete</string>
+    <string name="chat_team">Team</string>
+    <string name="timer_off_short">off</string>
+    <string name="chat_view_once_short">view once</string>
+    <string name="chat_decoy_notice">Decoy chat triggered — chat erased.</string>
+    <string name="chat_tc_me_set">You set the Team Clock to %1$s</string>
+    <string name="chat_tc_me_off">You turned the Team Clock off</string>
+    <string name="chat_tc_they_set">%1$s set the Team Clock to %2$s</string>
+    <string name="chat_tc_they_off">%1$s turned the Team Clock off</string>
+    <string name="chat_your_friend">Your friend</string>
+
+    <!-- ChatScreen.kt -->
+    <string name="chat_saved">Saved.</string>
+    <string name="chat_save_failed">Couldn\'t save the file.</string>
+    <string name="chat_send_file_q">Send this file?</string>
+    <string name="chat_file_confirm">%1$s · %2$s\n\n%3$s\n\nLike messages, files are kept in memory only.</string>
+    <string name="chat_not_ready">Not ready yet — wait until the Engine is Online.</string>
+    <string name="chat_send">Send</string>
+    <string name="chat_wipe_q">Erase this whole conversation on BOTH phones? It can\'t be brought back.</string>
+    <string name="chat_delete_q">Remove %1$s from your friends? The chat is erased and they\'re gone from your list. (Their phone isn\'t told; to talk again, one of you adds the other.)</string>
+    <string name="chat_team_clock">Team Clock</string>
+    <string name="chat_tc_dialog_note">Set what time your shared clock shows right now. You both see it tick.</string>
+    <string name="set">Set</string>
+    <string name="chat_tc_turn_off">Turn the Team Clock off</string>
+    <string name="save">Save</string>
+    <string name="chat_no_messages">No messages yet.</string>
+    <string name="chat_go_online_hint">Change status to Online to receive messages</string>
+    <string name="chat_view_once_hint">burns the moment it\'s read — this message only</string>
+    <string name="chat_timer_hint">applies to this message only</string>
+    <string name="chat_preparing_file">Preparing the file (removing location and camera data)…</string>
+    <string name="chat_message_hint">Message…</string>
+    <string name="chat_risky_file">This kind of file can run code — only open it if you trust it.</string>
+    <string name="chat_view_once_mark">👁 view once</string>
+    <string name="chat_set_team_clock">Set Team Clock</string>
+    <string name="chat_buzz">⚡ Buzz</string>
+
+    <!-- durations, timers, Buzz -->
+    <string name="timer_off">Off</string>
+    <string name="timer_view_once">Single Message (view once)</string>
+    <string name="dur_seconds">%1$ds</string>
+    <string name="dur_minutes">%1$dm</string>
+    <string name="dur_hours">%1$dh</string>
+    <string name="buzz_every_h">Every %1$dh</string>
+    <string name="buzz_once">Once only</string>
+
+    <!-- SettingsScreen.kt -->
+    <string name="set_nickname_title">Your nickname</string>
+    <string name="set_nickname_hint">Friends see this unless they gave you a name of their own.</string>
+    <string name="set_language_hint">Choose the app\'s language.</string>
+    <string name="set_identity">Identity</string>
+    <string name="set_my_identity_cmc_id">My identity (CMC-ID · QR)</string>
+    <string name="set_myid_hint">Your address + QR for friends to add you.</string>
+    <string name="set_my_nickname">My nickname</string>
+    <string name="set_nickname_row_hint">The name your friends see for you.</string>
+    <string name="set_chats">Chats</string>
+    <string name="set_privacy_group">Privacy &amp; Safety 🔒</string>
+    <string name="set_unlock_privacy">Unlock Privacy &amp; Safety</string>
+    <string name="set_locked">🔒 locked</string>
+    <string name="set_privacy_guards">Guards the server, stealth, wipe, PIN and diagnostics settings.</string>
+    <string name="set_set_privacy_pin">Set a Privacy PIN</string>
+    <string name="set_set_up">set up</string>
+    <string name="set_privacy_pin_hint">Locks this group (digits only).</string>
+    <string name="set_cover">Open as a calculator (cover)</string>
+    <string name="set_cover_hint">Opens to a working calculator. Tap the same key 10× in a row to get in; tap “reset” 20× to choose a different key.</string>
+    <string name="set_server_hint">Your own address that friends connect to.</string>
+    <string name="set_bridges">Stealth / Bridges (obfs4 · Snowflake)</string>
+    <string name="set_bridges_hint">Hide that you use Tor from your network. Can be slower.</string>
+    <string name="set_scrub">Photo / video data removal</string>
+    <string name="set_scrub_value">Yes — always</string>
+    <string name="set_scrub_hint">Location and camera data are removed from every photo and video you send.</string>
+    <string name="set_keep_engine">Keep engine running in background</string>
+    <string name="set_keep_engine_hint">Ask Android not to sleep the engine so messages still arrive.</string>
+    <string name="set_change_app_pin">Change app PIN</string>
+    <string name="set_change_pin_hint">Change the PIN that unlocks the app.</string>
+    <string name="set_change_privacy_pin">Change Privacy PIN</string>
+    <string name="set_change_privacy_pin_hint">Enter the current PIN, then set a new one.</string>
+    <string name="set_remove_privacy_pin">Remove Privacy PIN</string>
+    <string name="set_remove_privacy_pin_hint">This group then opens without a PIN.</string>
+    <string name="set_diag">Diagnostics &amp; troubleshoot</string>
+    <string name="set_diag_hint">See what\'s happening if something isn\'t working.</string>
+    <string name="set_conn_test">Connection test (Link Test)</string>
+    <string name="set_conn_test_hint">Watch each step of reaching a friend, live.</string>
+    <string name="set_ramdiag_hint">See which features use the most memory.</string>
+    <string name="set_wipe_now">Wipe Everything Now</string>
+    <string name="set_system">System</string>
+    <string name="set_integrity_hint">Check the app\'s signature + version.</string>
+    <string name="set_help_hint">Plain-language guide, from setup to panic buttons.</string>
+    <string name="set_about_version">About / Version</string>
+    <string name="set_about_hint">App version and credits.</string>
+    <string name="set_tools">Tools</string>
+    <string name="set_tool_calculator">Tool: Calculator</string>
+    <string name="set_tool_notes">Tool: Notes</string>
+    <string name="set_tool_flashlight">Tool: Flashlight</string>
+    <string name="set_exit">Exit (stop server, clear RAM, log out)</string>
+    <string name="set_cerberus">Cerberus · idle auto-wipe armed</string>
+    <string name="set_off_while_reachable">Off while \"Stay reachable\" is on.</string>
+    <string name="set_cerberus_hint">Untouched this long → clears RAM, stops the engine, closes the app.</string>
+    <string name="set_kill_title">Kill Timer — fires at</string>
+    <string name="set_kill_note">At this time it clears RAM, stops the engine and closes the app.</string>
+    <string name="set_arm">Arm</string>
+    <string name="set_kill_hint">Like an alarm: at that time it clears RAM, stops the engine, closes the app.</string>
+    <string name="set_not_armed">not armed</string>
+    <string name="set_kill_cancel">Cancel Kill Timer</string>
+    <string name="set_kill_set">Set the time…</string>
+    <string name="set_text_size">Text size</string>
+    <string name="set_session_window">Stay unlocked for 6h</string>
+    <string name="set_session_window_hint">Don\'t re-ask the PIN for 6h after unlocking (this run only).</string>
+    <string name="set_privacy_pin_digits">Use 4 to 56 digits</string>
+    <string name="set_enter_current_pin">Enter current PIN</string>
+    <string name="set_remove_privacy_pin_title">Remove the Privacy PIN</string>
+    <string name="set_create_privacy_pin">Create a Privacy PIN</string>
+    <string name="set_confirm_privacy_pin">Confirm the Privacy PIN</string>
+    <string name="set_privacy_pin">Privacy PIN</string>
+    <string name="set_privacy_pin_why">Without it, Privacy &amp; Safety opens for anyone holding the unlocked phone.</string>
+    <string name="set_privacy_pin_format">Digits · 4 to 56</string>
+    <string name="set_remove">Remove</string>
+    <string name="set_unlock">Unlock</string>
+    <string name="set_change">Change</string>
+    <string name="set_pin_rules">Use 4 to 56 characters, not the same backwards</string>
+    <string name="set_pin_different">Choose a different PIN</string>
+    <string name="set_pin_mismatch">Didn\'t match — start again</string>
+    <string name="set_pin_change_failed">Could not change the PIN</string>
+    <string name="set_enter_your_current_pin">Enter your current PIN</string>
+    <string name="set_create_new_pin">Create a new PIN</string>
+    <string name="set_confirm_new_pin">Confirm the new PIN</string>
+    <string name="set_pin_format">Numbers, letters or symbols · 4 to 56</string>
+    <string name="set_working">Working…</string>
+    <string name="set_shredder">Shredder PIN</string>
+    <string name="set_shredder_hint">Your PIN typed backwards at the lock screen silently erases everything; the app then only shows an error until it\'s restarted.</string>
+    <string name="set_status_default">Status default</string>
+    <string name="set_status_default_hint">You always start Invisible at login; switch to Online from the Friends screen.</string>
+    <string name="set_decoy">Decoy chat</string>
+    <string name="set_decoy_hint">A fake contact. Tapping it wipes your chats (and, by a burn signal, your friends\' copies), moves you to a new address and locks the app.</string>
+    <string name="set_decoy_name">Decoy name</string>
+    <string name="set_position">Position</string>
+    <string name="set_top">Top</string>
+    <string name="set_bottom">Bottom</string>
+    <string name="set_stay_reachable">Stay reachable in background</string>
+    <string name="set_stay_reachable_hint">Keeps the server up after close (forces Cerberus + Kill off)</string>
+    <string name="set_general_timer">General timer (all messages)</string>
+    <string name="set_accept_buzz">Accept Buzz</string>
+    <string name="set_kill_in">in %1$s</string>
+    <string name="set_too_many_tries">Too many tries — wait %1$s</string>
+
+    <!-- AppNav.kt -->
+    <string name="new_friend">New Friend</string>
+    <string name="nav_welcome">Welcome</string>
+    <string name="nav_review_settings">Please take your time to review the Settings page before you start.</string>
+    <string name="nav_take_me_settings">Ok, take me to Settings.</string>
+    <string name="nav_later">I\'ll do it later.</string>
+    <string name="nav_exit_notes_q">Exit and erase your Notes?</string>
+    <string name="nav_exit_notes_text">Exit clears everything from memory — your Notes scratchpad and checklist will be gone.</string>
+    <string name="nav_exit">Exit</string>
+    <string name="nav_wipe_q">Wipe everything?</string>
+    <string name="nav_wipe_text">Shreds ALL app data on this phone (vault, keys, friends, settings, Tor cache) and then opens Android\'s uninstall prompt to remove the app itself.</string>
+    <string name="nav_not_ready">Not ready yet — wait until the Engine is Online once, then try again.</string>
+    <string name="nav_already_sent">Already sent — it keeps trying in the background.</string>
+
+    <!-- ToolsScreen.kt -->
+    <string name="tools_torch_on">Torch ON — tap to turn off</string>
+    <string name="tools_torch_off">Tap to turn the torch on</string>
+    <string name="tools_calculator">Calculator</string>
+    <string name="tools_tap_10">tap 10 times</string>
+    <string name="tools_clear_notes_q">Clear your notes?</string>
+    <string name="tools_clear_notes_text">This erases the scratchpad and the checklist. It can\'t be undone.</string>
+    <string name="tools_keep">Keep</string>
+    <string name="tools_ram_only">RAM only — kept while the app runs, gone when it closes.</string>
+    <string name="tools_clear_dots">Clear…</string>
+    <string name="tools_scratchpad">Scratchpad…</string>
+    <string name="tools_chars">%1$s / %2$s characters</string>
+    <string name="tools_max_checks">Max %1$s checks</string>
+    <string name="tools_add_check">+ Add check</string>
+    <string name="tools_todo">To-do…</string>
+    <string name="tools_reset">reset</string>
+
+    <!-- notifications (generic on purpose: no names, no content) -->
+    <string name="notif_activity">Activity</string>
+    <string name="notif_message">Notification</string>
+    <string name="notif_buzz_channel">Buzz</string>
+    <string name="notif_engine_channel">Engine</string>
+    <string name="decoy_default_name">Notes to self</string>
 </resources>

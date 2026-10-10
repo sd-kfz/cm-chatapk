@@ -30,6 +30,8 @@ import org.cmchat.app.vault.LoginThrottle
 import org.cmchat.app.vault.UnlockResult
 import org.cmchat.app.vault.VaultData
 import org.cmchat.app.vault.VaultManager
+import org.cmchat.app.R
+import org.cmchat.app.i18n.Tr
 
 private enum class Phase { UNLOCK, NEW_PIN, CONFIRM_PIN, NICKNAME }
 
@@ -82,15 +84,15 @@ fun LockScreen(manager: VaultManager, onUnlocked: (VaultData) -> Unit) {
             Phase.NEW_PIN -> {
                 if (!VaultManager.isValidNewPin(entered)) {
                     status = if (entered.length < VaultManager.MIN_PASSCODE)
-                        "Use at least ${VaultManager.MIN_PASSCODE} characters"
-                    else "Can't read the same backwards (that's the Shredder code)"
+                        Tr.s(R.string.lock_min_chars, VaultManager.MIN_PASSCODE)
+                    else Tr.s(R.string.lock_not_palindrome)
                 } else {
                     firstPin = entered; status = ""; phase = Phase.CONFIRM_PIN
                 }
             }
             Phase.CONFIRM_PIN -> {
                 if (entered != firstPin) {
-                    status = "PINs didn't match — start again"; firstPin = ""; phase = Phase.NEW_PIN
+                    status = Tr.s(R.string.lock_pins_didn_t_match); firstPin = ""; phase = Phase.NEW_PIN
                 } else {
                     status = ""; phase = Phase.NICKNAME
                 }
@@ -117,7 +119,7 @@ fun LockScreen(manager: VaultManager, onUnlocked: (VaultData) -> Unit) {
                         }
                         UnlockResult.WrongPin -> {
                             wrongCount += 1
-                            status = "Wrong PIN"
+                            status = Tr.s(R.string.lock_wrong_pin)
                             lockedFor = LoginThrottle.delaySeconds(wrongCount)
                         }
                     }
@@ -142,16 +144,16 @@ fun LockScreen(manager: VaultManager, onUnlocked: (VaultData) -> Unit) {
         Spacer(Modifier.height(6.dp))
         Text(
             when {
-                shredded -> "Welcome back"
-                phase == Phase.NEW_PIN -> "Create a PIN — numbers, letters or symbols (4–56)"
-                phase == Phase.CONFIRM_PIN -> "Confirm your PIN"
-                phase == Phase.NICKNAME -> "Pick a nickname"
-                else -> "Welcome back"
+                shredded -> Tr.s(R.string.lock_welcome_back)
+                phase == Phase.NEW_PIN -> Tr.s(R.string.lock_create_pin_numbers_letters)
+                phase == Phase.CONFIRM_PIN -> Tr.s(R.string.lock_confirm_pin)
+                phase == Phase.NICKNAME -> Tr.s(R.string.lock_pick_nickname)
+                else -> Tr.s(R.string.lock_welcome_back)
             },
             color = CmTextDim, fontFamily = Nunito, fontSize = 14.sp, textAlign = TextAlign.Center,
         )
         if (shredded) {
-            Text("Error. Please restart the app.", color = CmRed, fontFamily = Nunito, fontSize = 12.sp,
+            Text(Tr.s(R.string.lock_error_please_restart_app), color = CmRed, fontFamily = Nunito, fontSize = 12.sp,
                 fontStyle = FontStyle.Italic, textAlign = TextAlign.Center,
                 modifier = Modifier.padding(top = 4.dp))
         }
@@ -159,7 +161,7 @@ fun LockScreen(manager: VaultManager, onUnlocked: (VaultData) -> Unit) {
 
         if (phase == Phase.NICKNAME) {
             Text(
-                "This is the name friends see when you add them. It's stored only in your vault.",
+                Tr.s(R.string.lock_name_friends_see_when),
                 color = CmTextFaint, fontFamily = Nunito, fontSize = 12.sp, textAlign = TextAlign.Center,
                 modifier = Modifier.padding(bottom = 18.dp),
             )
@@ -188,7 +190,7 @@ fun LockScreen(manager: VaultManager, onUnlocked: (VaultData) -> Unit) {
                     }
                     .padding(horizontal = 28.dp, vertical = 12.dp),
             ) {
-                Text(if (busy) "Creating…" else "Create", color = CmBackground, fontFamily = Nunito,
+                Text(if (busy) Tr.s(R.string.lock_creating) else Tr.s(R.string.lock_create), color = CmBackground, fontFamily = Nunito,
                     fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
             Spacer(Modifier.weight(1f))
@@ -217,8 +219,8 @@ fun LockScreen(manager: VaultManager, onUnlocked: (VaultData) -> Unit) {
         Text(
             when {
                 shredded -> ""
-                busy -> "Unlocking…"
-                lockedFor > 0 -> "Try again in " + LoginThrottle.format(lockedFor)
+                busy -> Tr.s(R.string.lock_unlocking)
+                lockedFor > 0 -> Tr.s(R.string.lock_try_again_in, LoginThrottle.format(lockedFor))
                 else -> status
             },
             color = when {
@@ -252,7 +254,7 @@ fun LockScreen(manager: VaultManager, onUnlocked: (VaultData) -> Unit) {
                             .clip(RoundedCornerShape(14.dp)).background(if (canSubmit) CmBlue else CmCard)
                             .then(if (canSubmit) Modifier.clickable { submit() } else Modifier),
                             contentAlignment = Alignment.Center) {
-                            Text("Enter", color = if (canSubmit) CmBackground else CmTextFaint, fontFamily = Nunito,
+                            Text(Tr.s(R.string.lock_enter), color = if (canSubmit) CmBackground else CmTextFaint, fontFamily = Nunito,
                                 fontSize = 17.sp, fontWeight = FontWeight.Bold)
                         }
                     }
@@ -293,7 +295,7 @@ fun LockScreen(manager: VaultManager, onUnlocked: (VaultData) -> Unit) {
         }
         if (!bigKeys && !compact) {
             Spacer(Modifier.height(12.dp))
-            Text("Ghost mode ready", color = CmGreen, fontFamily = Nunito, fontSize = 15.sp)
+            Text(Tr.s(R.string.lock_ghost_mode_ready), color = CmGreen, fontFamily = Nunito, fontSize = 15.sp)
         }
     }
 }
@@ -303,7 +305,14 @@ fun LockScreen(manager: VaultManager, onUnlocked: (VaultData) -> Unit) {
 internal fun PinStrengthHint(pin: String, modifier: Modifier = Modifier) {
     if (pin.isEmpty()) return
     val st = VaultManager.strength(pin)
-    Text("Strength: ${st.label}" + if (pin.length < 8) "  ·  8+ characters recommended" else "",
+    val label = Tr.s(when (st) {
+        VaultManager.Companion.Strength.WEAK -> R.string.lock_strength_weak
+        VaultManager.Companion.Strength.FAIR -> R.string.lock_strength_fair
+        VaultManager.Companion.Strength.GOOD -> R.string.lock_strength_good
+        VaultManager.Companion.Strength.STRONG -> R.string.lock_strength_strong
+    })
+    Text(Tr.s(R.string.lock_strength, label) +
+        if (pin.length < 8) "  ·  " + Tr.s(R.string.lock_8_recommended) else "",
         color = when (st) {
             VaultManager.Companion.Strength.WEAK -> CmOrange
             VaultManager.Companion.Strength.FAIR -> CmTextDim
@@ -382,7 +391,7 @@ private fun RowScope.Key(
 /** The big Enter key at the bottom-right of the letter / symbol pages. */
 @Composable
 private fun RowScope.EnterKey(keyH: Dp, canSubmit: Boolean, onEnter: () -> Unit) {
-    Key("Enter", keyH, enabled = canSubmit, weight = 5f, bg = if (canSubmit) CmBlue else CmCard,
+    Key(Tr.s(R.string.lock_enter), keyH, enabled = canSubmit, weight = 5f, bg = if (canSubmit) CmBlue else CmCard,
         fg = CmBackground, size = 17.sp, onClick = onEnter)
 }
 

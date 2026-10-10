@@ -21,6 +21,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.cmchat.app.ui.theme.CmTextDim
 import org.cmchat.app.ui.theme.Nunito
+import org.cmchat.app.R
+import org.cmchat.app.i18n.Tr
 
 /**
  * An alarm-style time picker (the same one Android's clock app uses): pick the
@@ -34,7 +36,7 @@ fun AlarmTimeDialog(
     initialHour: Int,
     initialMinute: Int,
     note: String? = null,
-    confirmLabel: String = "Set",
+    confirmLabel: String = Tr.s(R.string.set),
     /** Optional extra action under the picker (e.g. "Turn off"). */
     extra: (@Composable () -> Unit)? = null,
     onConfirm: (hour: Int, minute: Int) -> Unit,
@@ -57,6 +59,6 @@ fun AlarmTimeDialog(
             }
         },
         confirmButton = { TextButton(onClick = { onConfirm(state.hour, state.minute) }) { Text(confirmLabel) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(Tr.s(R.string.cancel)) } },
     )
 }

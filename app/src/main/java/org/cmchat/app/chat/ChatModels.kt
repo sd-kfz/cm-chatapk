@@ -1,5 +1,8 @@
 package org.cmchat.app.chat
 
+import org.cmchat.app.R
+import org.cmchat.app.i18n.Tr
+
 /**
  * Local-only send state, NEVER shown on screen. There are no delivery/read
  * receipts, and no "offline / retry" either (that would reveal whether a friend
@@ -45,9 +48,11 @@ enum class SelfTimer(val label: String, val millis: Long?) {
  * changes.
  */
 fun SelfTimer.displayLabel(): String = when (this) {
-    SelfTimer.OFF -> "Off"
-    SelfTimer.VIEW_ONCE -> "Single Message (view once)"
-    else -> label
+    SelfTimer.OFF -> Tr.s(R.string.timer_off)
+    SelfTimer.VIEW_ONCE -> Tr.s(R.string.timer_view_once)
+    SelfTimer.S30 -> Tr.s(R.string.dur_seconds, 30)
+    SelfTimer.H6, SelfTimer.H12, SelfTimer.H24 -> Tr.s(R.string.dur_hours, millis!! / 3_600_000L)
+    else -> Tr.s(R.string.dur_minutes, millis!! / 60_000L)
 }
 
 /** True if this message self-destructs on first view (no timer). */
@@ -83,7 +88,17 @@ data class ChatMessage(
     val alert: Boolean = false,
     /** A file instead of text ([text] is then its name). */
     val file: ChatFile? = null,
+    /** What a system line means, so it's shown in the CURRENT language ([text] keeps the English). */
+    val note: SystemNote? = null,
 )
+
+/** The meaning of a system line in a chat (the screen words it in the chosen language). */
+sealed interface SystemNote {
+    /** A friend's decoy fired: the chat was burned. */
+    data object DecoyErased : SystemNote
+    /** The Team Clock changed. [by] null = me, "" = the friend (no name known); [time] null = turned off. */
+    data class TeamClock(val by: String?, val time: String?) : SystemNote
+}
 
 /**
  * Per-chat presence — the ONLY presence shown, deliberately coarse, never an

@@ -50,11 +50,13 @@ import org.cmchat.app.transport.MessageService
 import org.cmchat.app.ui.components.AlarmTimeDialog
 import org.cmchat.app.ui.components.CerberusMark
 import org.cmchat.app.ui.theme.*
+import org.cmchat.app.R
+import org.cmchat.app.i18n.Tr
 
 /** The two actions behind the red X — each with its own confirmation. */
-private enum class ChatAction(val title: String, val confirm: String) {
-    WIPE("Wipe conversation", "Wipe"),
-    DELETE("Delete friend", "Delete"),
+private enum class ChatAction(val title: Int, val confirm: Int) {
+    WIPE(R.string.chat_wipe_conversation, R.string.chat_wipe),
+    DELETE(R.string.chat_delete_friend, R.string.chat_delete),
 }
 
 /**
@@ -113,7 +115,7 @@ fun ChatScreen(
             preparing = false
             when (d) {
                 is org.cmchat.app.media.MediaPolicy.Decision.Ready -> readyFile = d
-                is org.cmchat.app.media.MediaPolicy.Decision.Refused -> fileNote = d.reason
+                is org.cmchat.app.media.MediaPolicy.Decision.Refused -> fileNote = noteText(d.reason)
             }
         }
     }
@@ -129,28 +131,27 @@ fun ChatScreen(
                 runCatching { context.contentResolver.openOutputStream(uri)?.use { f.writeTo(it) } != null }
                     .getOrDefault(false)
             }
-            fileNote = if (ok) "Saved." else "Couldn't save the file."
+            fileNote = if (ok) Tr.s(R.string.chat_saved) else Tr.s(R.string.chat_save_failed)
         }
     }
     readyFile?.let { f ->
         AlertDialog(
             onDismissRequest = { f.file.wipe(); readyFile = null },
-            title = { Text("Send this file?") },
-            text = { Text("${f.name} · ${humanSize(f.file.size)}\n\n${f.note}\n\n" +
-                "Like messages, files are kept in memory only.") },
+            title = { Text(Tr.s(R.string.chat_send_file_q)) },
+            text = { Text(Tr.s(R.string.chat_file_confirm, f.name, humanSize(f.file.size), noteText(f.note))) },
             confirmButton = {
                 TextButton(onClick = {
                     readyFile = null
                     when (if (chatCmId != null) MessageService.sendFile(chatCmId, f.name, f.mime, f.file, selfTimer)
                           else MessageService.FileResult.NOT_READY) {
                         MessageService.FileResult.QUEUED -> selfTimer = SelfTimer.OFF
-                        MessageService.FileResult.TOO_BIG -> fileNote = org.cmchat.app.media.MediaPolicy.TOO_BIG
-                        MessageService.FileResult.EMPTY -> fileNote = "That file is empty."
-                        MessageService.FileResult.NOT_READY -> fileNote = "Not ready yet — wait until the Engine is Online."
+                        MessageService.FileResult.TOO_BIG -> fileNote = noteText(org.cmchat.app.media.MediaPolicy.Note.TOO_BIG)
+                        MessageService.FileResult.EMPTY -> fileNote = noteText(org.cmchat.app.media.MediaPolicy.Note.EMPTY)
+                        MessageService.FileResult.NOT_READY -> fileNote = Tr.s(R.string.chat_not_ready)
                     }
-                }) { Text("Send") }
+                }) { Text(Tr.s(R.string.chat_send)) }
             },
-            dismissButton = { TextButton(onClick = { f.file.wipe(); readyFile = null }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { f.file.wipe(); readyFile = null }) { Text(Tr.s(R.string.cancel)) } },
         )
     }
 
@@ -207,13 +208,12 @@ fun ChatScreen(
     // ---- the X menu: each action has its own confirmation -------------------
     action?.let { a ->
         val question = when (a) {
-            ChatAction.WIPE -> "Erase this whole conversation on BOTH phones? It can't be brought back."
-            ChatAction.DELETE -> "Remove $contactName from your friends? The chat is erased and they're " +
-                "gone from your list. (Their phone isn't told; to talk again, one of you adds the other.)"
+            ChatAction.WIPE -> Tr.s(R.string.chat_wipe_q)
+            ChatAction.DELETE -> Tr.s(R.string.chat_delete_q, contactName)
         }
         AlertDialog(
             onDismissRequest = { action = null },
-            title = { Text(a.title) },
+            title = { Text(Tr.s(a.title)) },
             text = { Text(question) },
             confirmButton = {
                 TextButton(onClick = {
@@ -223,9 +223,9 @@ fun ChatScreen(
                             if (chatCmId != null) MessageService.sendErase(chatCmId) else ChatStore.erase(chatId)
                         ChatAction.DELETE -> onDeleteFriend()
                     }
-                }) { Text(a.confirm, color = CmRed) }
+                }) { Text(Tr.s(a.confirm), color = CmRed) }
             },
-            dismissButton = { TextButton(onClick = { action = null }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { action = null }) { Text(Tr.s(R.string.cancel)) } },
         )
     }
 
@@ -236,24 +236,24 @@ fun ChatScreen(
                 it.get(java.util.Calendar.HOUR_OF_DAY) to it.get(java.util.Calendar.MINUTE)
             }
         AlarmTimeDialog(
-            title = "Team Clock",
+            title = Tr.s(R.string.chat_team_clock),
             initialHour = h, initialMinute = m,
-            note = "Set what time your shared clock shows right now. You both see it tick.",
-            confirmLabel = "Set",
+            note = Tr.s(R.string.chat_tc_dialog_note),
+            confirmLabel = Tr.s(R.string.set),
             extra = if (teamOffset != null) { {
                 TextButton(onClick = {
                     val at = System.currentTimeMillis()
                     onSetTeamHour("", at)
-                    ChatStore.setTeamHour(chatId, null, "You")
+                    ChatStore.setTeamHour(chatId, null, null)
                     MessageService.sendTeamClock(chatCmId, "", at)
                     editingTeam = false
-                }) { Text("Turn the Team Clock off", color = CmRed) }
+                }) { Text(Tr.s(R.string.chat_tc_turn_off), color = CmRed) }
             } } else null,
             onConfirm = { hh, mm ->
                 val at = System.currentTimeMillis()
                 val v = TeamClock.encode(TeamClock.offsetFor(hh, mm, at))
                 onSetTeamHour(v, at)
-                ChatStore.setTeamHour(chatId, v, "You")
+                ChatStore.setTeamHour(chatId, v, null)
                 MessageService.sendTeamClock(chatCmId, v, at)
                 editingTeam = false
             },
@@ -285,7 +285,7 @@ fun ChatScreen(
                                 modifier = Modifier.weight(1f, fill = false).widthIn(min = 60.dp, max = 180.dp),
                             )
                             // Empty = no label of mine: their own nickname shows again.
-                            Text("Save", color = CmGreen, fontFamily = Nunito, fontSize = 13.sp,
+                            Text(Tr.s(R.string.save), color = CmGreen, fontFamily = Nunito, fontSize = 13.sp,
                                 modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable {
                                     onRename(newName.trim()); renaming = false
                                 }.padding(8.dp))
@@ -304,9 +304,9 @@ fun ChatScreen(
                     Box(Modifier.size(48.dp).clip(CircleShape).clickable { menuOpen = true },
                         contentAlignment = Alignment.Center) { RedX() }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                        DropdownMenuItem(text = { Text("Wipe conversation", fontFamily = Nunito) },
+                        DropdownMenuItem(text = { Text(Tr.s(R.string.chat_wipe_conversation), fontFamily = Nunito) },
                             onClick = { menuOpen = false; action = ChatAction.WIPE })
-                        DropdownMenuItem(text = { Text("Delete friend", color = CmRed, fontFamily = Nunito) },
+                        DropdownMenuItem(text = { Text(Tr.s(R.string.chat_delete_friend), color = CmRed, fontFamily = Nunito) },
                             onClick = { menuOpen = false; action = ChatAction.DELETE })
                     }
                 }
@@ -345,17 +345,17 @@ fun ChatScreen(
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (shown.isEmpty()) item {
-                    Text("No messages yet.", color = CmTextFaint, fontFamily = Nunito, fontSize = 13.sp)
+                    Text(Tr.s(R.string.chat_no_messages), color = CmTextFaint, fontFamily = Nunito, fontSize = 13.sp)
                 }
                 // No item keys: a friend's message id can equal one of mine, and
                 // duplicate keys would crash the list.
                 items(shown) { m ->
                     when {
                         // Small italic-bold alert line where the next message would be.
-                        m.alert -> Text(m.text, color = CmRedGlow, fontFamily = Nunito,
+                        m.alert -> Text(shownText(m), color = CmRedGlow, fontFamily = Nunito,
                             fontSize = 12.sp, fontWeight = FontWeight.Bold, fontStyle = FontStyle.Italic,
                             modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
-                        m.system -> Text(m.text, color = CmTextFaint, fontFamily = Nunito, fontSize = 12.sp,
+                        m.system -> Text(shownText(m), color = CmTextFaint, fontFamily = Nunito, fontSize = 12.sp,
                             modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
                         m.file != null -> FileBubble(m, m.file, bubbleMax, onSave = { f ->
                             saving = f
@@ -368,7 +368,7 @@ fun ChatScreen(
             }
             // Invisible + something waiting: the bottom prompt (sender learns nothing).
             if (invisible && thread.messages.any { it.missed }) {
-                Text("Change status to Online to receive messages",
+                Text(Tr.s(R.string.chat_go_online_hint),
                     color = CmOrange, fontFamily = Nunito, fontSize = 12.sp, textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp))
             }
@@ -396,8 +396,8 @@ fun ChatScreen(
                 BuzzButton(chatCmId)
             }
             if (selfTimer != SelfTimer.OFF) {
-                Text(if (selfTimer == SelfTimer.VIEW_ONCE) "burns the moment it's read — this message only"
-                    else "applies to this message only",
+                Text(if (selfTimer == SelfTimer.VIEW_ONCE) Tr.s(R.string.chat_view_once_hint)
+                    else Tr.s(R.string.chat_timer_hint),
                     color = CmTextFaint, fontFamily = Nunito, fontSize = 10.sp,
                     modifier = Modifier.padding(start = 14.dp, top = 2.dp))
             }
@@ -410,7 +410,7 @@ fun ChatScreen(
             }
             // Files: being prepared / refused (with the reason) / saved.
             if (preparing || fileNote != null) {
-                Text(if (preparing) "Preparing the file (removing location and camera data)…" else fileNote ?: "",
+                Text(if (preparing) Tr.s(R.string.chat_preparing_file) else fileNote ?: "",
                     color = if (preparing) CmTextDim else CmOrange, fontFamily = Nunito,
                     fontSize = 11.sp, modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 2.dp))
             }
@@ -433,7 +433,7 @@ fun ChatScreen(
                 Spacer(Modifier.width(8.dp))
                 Box(Modifier.weight(1f).heightIn(min = 46.dp).clip(RoundedCornerShape(22.dp)).background(CmCard)
                     .padding(horizontal = 16.dp, vertical = 12.dp)) {
-                    if (input.isEmpty()) Text("Message…", color = CmTextDim, fontFamily = Nunito, fontSize = 15.sp)
+                    if (input.isEmpty()) Text(Tr.s(R.string.chat_message_hint), color = CmTextDim, fontFamily = Nunito, fontSize = 15.sp)
                     BasicTextField(
                         // Enter = newline; send only via the button. Body max 10,000.
                         value = input, onValueChange = { if (it.length <= MAX_BODY_CHARS) { input = it; logRefused = false } },
@@ -468,10 +468,38 @@ fun ChatScreen(
 
 /** "1.2 MB" / "340 KB" (the units the phone itself shows). */
 private fun humanSize(bytes: Long): String = when {
-    bytes >= 1_000_000 -> "%.1f MB".format(bytes / 1_000_000.0)
-    bytes >= 1_000 -> "${bytes / 1_000} KB"
-    else -> "$bytes B"
+    bytes >= 1_000_000 -> Tr.s(R.string.size_mb, "%.1f".format(bytes / 1_000_000.0))
+    bytes >= 1_000 -> Tr.s(R.string.size_kb, bytes / 1_000)
+    else -> Tr.s(R.string.size_b, bytes)
 }
+
+/** A system line in the chosen language (its English [ChatMessage.text] otherwise). */
+private fun shownText(m: org.cmchat.app.chat.ChatMessage): String = when (val n = m.note) {
+    null -> m.text
+    org.cmchat.app.chat.SystemNote.DecoyErased -> Tr.s(R.string.chat_decoy_notice)
+    is org.cmchat.app.chat.SystemNote.TeamClock -> when {
+        n.by == null && n.time != null -> Tr.s(R.string.chat_tc_me_set, n.time)
+        n.by == null -> Tr.s(R.string.chat_tc_me_off)
+        n.time != null -> Tr.s(R.string.chat_tc_they_set, n.by.ifEmpty { Tr.s(R.string.chat_your_friend) }, n.time)
+        else -> Tr.s(R.string.chat_tc_they_off, n.by.ifEmpty { Tr.s(R.string.chat_your_friend) })
+    }
+}
+
+/** What happened to a file (or why it wasn't sent), in the user's language. */
+private fun noteText(n: org.cmchat.app.media.MediaPolicy.Note): String = Tr.s(when (n) {
+    org.cmchat.app.media.MediaPolicy.Note.TOO_BIG -> R.string.file_too_big
+    org.cmchat.app.media.MediaPolicy.Note.EMPTY -> R.string.file_empty
+    org.cmchat.app.media.MediaPolicy.Note.CANT_CLEAN -> R.string.file_cant_clean
+    org.cmchat.app.media.MediaPolicy.Note.VIDEO_TRACK -> R.string.file_video_track
+    org.cmchat.app.media.MediaPolicy.Note.RAW -> R.string.file_raw
+    org.cmchat.app.media.MediaPolicy.Note.VIDEO_TYPE -> R.string.file_video_type
+    org.cmchat.app.media.MediaPolicy.Note.UNREADABLE -> R.string.file_unreadable
+    org.cmchat.app.media.MediaPolicy.Note.NO_MEMORY -> R.string.file_no_memory
+    org.cmchat.app.media.MediaPolicy.Note.PHOTO_CLEANED -> R.string.file_photo_cleaned
+    org.cmchat.app.media.MediaPolicy.Note.VIDEO_CLEANED -> R.string.file_video_cleaned
+    org.cmchat.app.media.MediaPolicy.Note.PHOTO_CONVERTED -> R.string.file_photo_converted
+    org.cmchat.app.media.MediaPolicy.Note.AS_IS -> R.string.file_as_is
+})
 
 /** Kinds of file that can run or open something — a received one gets a warning. */
 private val RISKY = setOf("apk", "exe", "bat", "cmd", "com", "msi", "scr", "js", "vbs", "jar", "sh",
@@ -488,7 +516,7 @@ private fun FileBubble(m: ChatMessage, f: org.cmchat.app.chat.ChatFile, maxBubbl
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (m.mine) Arrangement.End else Arrangement.Start) {
         Column(horizontalAlignment = if (m.mine) Alignment.End else Alignment.Start) {
             if (m.missed || m.closedMiss) {
-                Text("Missed Message", color = CmRed, fontFamily = Nunito, fontSize = 11.sp,
+                Text(Tr.s(R.string.missed_message), color = CmRed, fontFamily = Nunito, fontSize = 11.sp,
                     fontStyle = FontStyle.Italic, modifier = Modifier.padding(bottom = 2.dp))
             }
             Column(Modifier.widthIn(max = maxBubble).clip(RoundedCornerShape(16.dp))
@@ -504,10 +532,10 @@ private fun FileBubble(m: ChatMessage, f: org.cmchat.app.chat.ChatFile, maxBubbl
                 Text(humanSize(f.size), color = fg.copy(alpha = 0.75f), fontFamily = Nunito, fontSize = 12.sp)
                 if (!m.mine) {
                     if (f.name.substringAfterLast('.', "").lowercase() in RISKY) {
-                        Text("This kind of file can run code — only open it if you trust it.",
+                        Text(Tr.s(R.string.chat_risky_file),
                             color = CmRedGlow, fontFamily = Nunito, fontSize = 11.sp)
                     }
-                    Text("Save", color = CmBlue, fontFamily = Nunito, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                    Text(Tr.s(R.string.save), color = CmBlue, fontFamily = Nunito, fontSize = 14.sp, fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(top = 6.dp).clip(RoundedCornerShape(8.dp))
                             .background(CmBackground).clickable { onSave(f) }
                             .padding(horizontal = 14.dp, vertical = 6.dp))
@@ -516,7 +544,7 @@ private fun FileBubble(m: ChatMessage, f: org.cmchat.app.chat.ChatFile, maxBubbl
             Row(Modifier.padding(top = 2.dp, start = 4.dp, end = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(formatTimestamp(m.createdAt), color = CmTextFaint, fontFamily = Nunito, fontSize = 10.sp)
                 if (m.selfTimer != SelfTimer.OFF) {
-                    Text(if (m.selfTimer == SelfTimer.VIEW_ONCE) "👁 view once" else m.selfTimer.label,
+                    Text(if (m.selfTimer == SelfTimer.VIEW_ONCE) Tr.s(R.string.chat_view_once_mark) else m.selfTimer.displayLabel(),
                         color = CmRed, fontFamily = Nunito, fontSize = 10.sp)
                 }
             }
@@ -590,9 +618,9 @@ private fun tick(periodMs: Long, active: Boolean = true): Long {
 private fun TimerPill(t: SelfTimer) {
     val on = t != SelfTimer.OFF
     val label = when (t) {
-        SelfTimer.OFF -> "off"
-        SelfTimer.VIEW_ONCE -> "view once"
-        else -> t.label
+        SelfTimer.OFF -> Tr.s(R.string.timer_off_short)
+        SelfTimer.VIEW_ONCE -> Tr.s(R.string.chat_view_once_short)
+        else -> t.displayLabel()
     }
     Pill(outline = if (on) CmRed else CmTextFaint) {
         Text("🔥", fontSize = 12.sp)
@@ -623,11 +651,11 @@ private fun TeamClockPill(teamOffset: Int?, onClick: (() -> Unit)?) {
     val now = tick(60_000, active = teamOffset != null)
     Pill(outline = CmBlue, onClick = onClick) {
         if (teamOffset != null) {
-            Text("Team ", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
+            Text(Tr.s(R.string.chat_team) + " ", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
             Text(TeamClock.time12(now, teamOffset), color = CmBlue, fontFamily = Nunito,
                 fontSize = 13.sp, fontWeight = FontWeight.Bold)
         } else {
-            Text("Set Team Clock", color = CmBlue, fontFamily = Nunito, fontSize = 12.sp)
+            Text(Tr.s(R.string.chat_set_team_clock), color = CmBlue, fontFamily = Nunito, fontSize = 12.sp)
         }
     }
 }
@@ -662,7 +690,7 @@ private fun BuzzButton(chatCmId: String?) {
             if (chatCmId != null && MessageService.sendBuzz(chatCmId)) ready = false
         }
         .padding(horizontal = 12.dp, vertical = 5.dp)) {
-        Text("⚡ Buzz", color = if (ready) CmBackground else CmTextFaint,
+        Text(Tr.s(R.string.chat_buzz), color = if (ready) CmBackground else CmTextFaint,
             fontFamily = Nunito, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
     }
 }
@@ -690,7 +718,7 @@ private fun Bubble(m: ChatMessage, maxBubble: androidx.compose.ui.unit.Dp) {
         horizontalArrangement = if (m.mine) Arrangement.End else Arrangement.Start) {
         Column(horizontalAlignment = if (m.mine) Alignment.End else Alignment.Start) {
             if (m.missed || m.closedMiss) {
-                Text("Missed Message", color = CmRed, fontFamily = Nunito, fontSize = 11.sp,
+                Text(Tr.s(R.string.missed_message), color = CmRed, fontFamily = Nunito, fontSize = 11.sp,
                     fontStyle = FontStyle.Italic, modifier = Modifier.padding(bottom = 2.dp))
             }
             Box(Modifier.widthIn(max = maxBubble).clip(RoundedCornerShape(16.dp))
@@ -705,7 +733,7 @@ private fun Bubble(m: ChatMessage, maxBubble: androidx.compose.ui.unit.Dp) {
                 horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(formatTimestamp(m.createdAt), color = CmTextFaint, fontFamily = Nunito, fontSize = 10.sp)
                 if (m.selfTimer != SelfTimer.OFF) {
-                    Text(if (m.selfTimer == SelfTimer.VIEW_ONCE) "👁 view once" else m.selfTimer.label,
+                    Text(if (m.selfTimer == SelfTimer.VIEW_ONCE) Tr.s(R.string.chat_view_once_mark) else m.selfTimer.displayLabel(),
                         color = CmRed, fontFamily = Nunito, fontSize = 10.sp)
                 }
             }

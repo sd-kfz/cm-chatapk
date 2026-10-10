@@ -23,6 +23,8 @@ import org.cmchat.app.tor.ServerStatus
 import org.cmchat.app.tor.TorService
 import org.cmchat.app.tor.TorStatus
 import org.cmchat.app.ui.theme.*
+import org.cmchat.app.R
+import org.cmchat.app.i18n.Tr
 
 /**
  * Connection diagnostic / "Link Test" — its own section, separate from the Tor
@@ -45,52 +47,52 @@ fun ConnectionScreen(
 
     Column(Modifier.fillMaxSize().background(CmBackground)) {
         Box(Modifier.fillMaxWidth().padding(16.dp)) {
-            Text("‹ Back", color = CmBlue, fontFamily = Nunito, fontSize = 15.sp,
+            Text(Tr.s(R.string.back), color = CmBlue, fontFamily = Nunito, fontSize = 15.sp,
                 modifier = Modifier.align(Alignment.CenterStart).clickable { onBack() })
-            Text("Connection", color = CmText, fontFamily = Nunito, fontSize = 17.sp,
+            Text(Tr.s(R.string.conn_connection), color = CmText, fontFamily = Nunito, fontSize = 17.sp,
                 fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
         }
 
         // State summary.
         val engineLabel = when (val e = engine) {
-            is TorStatus.Online -> "Online"
-            is TorStatus.Connecting -> "Connecting ${e.percent}%"
-            is TorStatus.Starting -> "Starting"
-            is TorStatus.Offline -> "Offline"
-            is TorStatus.Failed -> if (e.reason == "bridges") "Failed (bridges)" else "Failed"
+            is TorStatus.Online -> Tr.s(R.string.status_online)
+            is TorStatus.Connecting -> Tr.s(R.string.status_connecting, e.percent)
+            is TorStatus.Starting -> Tr.s(R.string.status_starting)
+            is TorStatus.Offline -> Tr.s(R.string.status_offline)
+            is TorStatus.Failed -> if (e.reason == "bridges") Tr.s(R.string.status_failed_bridges) else Tr.s(R.string.status_failed)
         }
         val published = server is ServerStatus.Online
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)
             .clip(RoundedCornerShape(14.dp)).background(CmCard).padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            StateRow("Engine", engineLabel, if (engine is TorStatus.Online) CmGreen else CmOrange)
-            StateRow("My onion", if (published) "published" else "not published",
+            StateRow(Tr.s(R.string.engine), engineLabel, if (engine is TorStatus.Online) CmGreen else CmOrange)
+            StateRow(Tr.s(R.string.conn_my_onion), if (published) Tr.s(R.string.conn_published) else Tr.s(R.string.conn_not_published),
                 if (published) CmGreen else CmTextDim)
-            StateRow("Last self-test", lastSelf ?: "—", CmTextDim)
-            StateRow("Bridges", bridgeMode.wire, if (bridgeMode == Bridges.Mode.OFF) CmTextDim else CmBlue)
+            StateRow(Tr.s(R.string.conn_last_self_test), lastSelf ?: "—", CmTextDim)
+            StateRow(Tr.s(R.string.conn_bridges), bridgeMode.wire, if (bridgeMode == Bridges.Mode.OFF) CmTextDim else CmBlue)
             val starts = TorService.serviceStarts
             val upMin = if (TorService.serviceStartedAtMs > 0)
                 (System.currentTimeMillis() - TorService.serviceStartedAtMs) / 60000 else 0
-            StateRow("Engine service", "started ${starts}× · up ${upMin}m", CmTextDim)
+            StateRow(Tr.s(R.string.conn_engine_service), Tr.s(R.string.conn_started_up, starts, upMin), CmTextDim)
         }
 
         Spacer(Modifier.height(8.dp))
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Pill("Run Link Test", CmBlue, Modifier.weight(1f)) { pickerOpen = true }
-            Pill("Copy log", CmCard, Modifier.weight(1f), CmText) {
+            Pill(Tr.s(R.string.conn_run_link_test), CmBlue, Modifier.weight(1f)) { pickerOpen = true }
+            Pill(Tr.s(R.string.conn_copy_log), CmCard, Modifier.weight(1f), CmText) {
                 clipboard.setText(AnnotatedString(ConnDiag.dump()))
             }
-            Pill("Clear", CmCard, Modifier.weight(1f), CmRed) { ConnDiag.clear() }
+            Pill(Tr.s(R.string.clear), CmCard, Modifier.weight(1f), CmRed) { ConnDiag.clear() }
         }
 
         if (pickerOpen) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
                 .clip(RoundedCornerShape(12.dp)).background(CmCard).padding(10.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Pick a contact to test:", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
+                Text(Tr.s(R.string.conn_pick_contact_test), color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
                 if (contacts.isEmpty()) {
-                    Text("No contacts yet — add one first.", color = CmTextFaint,
+                    Text(Tr.s(R.string.conn_no_contacts), color = CmTextFaint,
                         fontFamily = Nunito, fontSize = 12.sp)
                 }
                 contacts.forEach { (name, cmId) ->
@@ -99,14 +101,14 @@ fun ConnectionScreen(
                             pickerOpen = false; onLinkTest(cmId)
                         }.padding(vertical = 6.dp))
                 }
-                Text("Cancel", color = CmTextDim, fontFamily = Nunito, fontSize = 13.sp,
+                Text(Tr.s(R.string.cancel), color = CmTextDim, fontFamily = Nunito, fontSize = 13.sp,
                     modifier = Modifier.clickable { pickerOpen = false }.padding(top = 2.dp))
             }
         }
 
         Spacer(Modifier.height(6.dp))
         if (lines.isEmpty()) {
-            Text("No connection activity yet. Run a Link Test, or send/receive a message.",
+            Text(Tr.s(R.string.conn_no_activity),
                 color = CmTextFaint, fontFamily = Nunito, fontSize = 12.sp,
                 modifier = Modifier.padding(16.dp))
         }

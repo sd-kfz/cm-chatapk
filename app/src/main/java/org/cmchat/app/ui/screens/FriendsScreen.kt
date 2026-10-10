@@ -34,6 +34,7 @@ import org.cmchat.app.tor.TorService
 import org.cmchat.app.tor.TorStatus
 import org.cmchat.app.transport.MessageService
 import org.cmchat.app.ui.theme.*
+import org.cmchat.app.i18n.Tr
 
 /** One friend row on the Friends screen. */
 data class Contact(
@@ -90,22 +91,20 @@ fun FriendsScreen(
     pendingFor?.let { c ->
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { pendingFor = null },
-            title = { Text("Waiting for ${c.name}") },
-            text = { Text("Your friend request hasn't been accepted yet.\n\n" +
-                "Cancel request: takes it back from their phone and removes ${c.name} here.\n" +
-                "Remove: removes ${c.name} from your list only.") },
+            title = { Text(Tr.s(R.string.friends_waiting_for, c.name)) },
+            text = { Text(Tr.s(R.string.friends_pending_explainer, c.name, c.name)) },
             confirmButton = {
                 Row {
                     androidx.compose.material3.TextButton(onClick = { pendingFor = null; onRemovePending(c) }) {
-                        Text("Remove", color = CmRed)
+                        Text(Tr.s(R.string.friends_remove), color = CmRed)
                     }
                     androidx.compose.material3.TextButton(onClick = { pendingFor = null; onCancelPending(c) }) {
-                        Text("Cancel request", color = CmRed)
+                        Text(Tr.s(R.string.friends_cancel_request), color = CmRed)
                     }
                 }
             },
             dismissButton = {
-                androidx.compose.material3.TextButton(onClick = { pendingFor = null }) { Text("Keep waiting") }
+                androidx.compose.material3.TextButton(onClick = { pendingFor = null }) { Text(Tr.s(R.string.friends_keep_waiting)) }
             },
         )
     }
@@ -136,7 +135,7 @@ fun FriendsScreen(
             Spacer(Modifier.height(8.dp))
 
             if (versionMismatch) {
-                Text("A friend is on a different version — update both apps to the same version.",
+                Text(Tr.s(R.string.friends_version_mismatch),
                     color = WordRed, fontFamily = Nunito, fontSize = 12.sp,
                     modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
                         .background(WordRed.copy(alpha = 0.12f)).padding(10.dp),
@@ -147,8 +146,8 @@ fun FriendsScreen(
             if (torStatus is TorStatus.Starting || torStatus is TorStatus.Connecting) {
                 val bridged = org.cmchat.app.tor.Bridges.isEnabled()
                 Text(
-                    if (bridged) "Connecting through bridges… can take longer than normal."
-                    else "Connecting to Tor — the first launch can take 1–3 minutes.",
+                    if (bridged) Tr.s(R.string.friends_connecting_bridges)
+                    else Tr.s(R.string.friends_connecting_tor),
                     color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp,
                     modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp), textAlign = TextAlign.Center,
                 )
@@ -161,20 +160,20 @@ fun FriendsScreen(
                         .clip(RoundedCornerShape(10.dp)).background(CmCard).padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("Friend request from ${k.displayName}", color = CmText, fontFamily = Nunito,
+                    Text(Tr.s(R.string.friends_request_from, k.displayName), color = CmText, fontFamily = Nunito,
                         fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Box(Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).background(CmTeal)
                             .clickable { MessageService.acceptKnock(k) }.padding(vertical = 9.dp),
                             contentAlignment = Alignment.Center) {
-                            Text("Accept", color = CmBackground, fontFamily = Nunito, fontSize = 14.sp,
+                            Text(Tr.s(R.string.friends_accept), color = CmBackground, fontFamily = Nunito, fontSize = 14.sp,
                                 fontWeight = FontWeight.SemiBold)
                         }
                         Box(Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).background(CmBackground)
                             .border(1.dp, Frame, RoundedCornerShape(10.dp))
                             .clickable { MessageService.declineKnock(k) }.padding(vertical = 9.dp),
                             contentAlignment = Alignment.Center) {
-                            Text("Decline", color = CmTextDim, fontFamily = Nunito, fontSize = 14.sp)
+                            Text(Tr.s(R.string.friends_decline), color = CmTextDim, fontFamily = Nunito, fontSize = 14.sp)
                         }
                     }
                 }
@@ -200,9 +199,9 @@ fun FriendsScreen(
                 val torchOn by org.cmchat.app.tools.Flashlight.on.collectAsState()
                 Row(Modifier.fillMaxWidth().padding(vertical = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(28.dp, Alignment.CenterHorizontally)) {
-                    if (calcOn) DockTool("Calculator", org.cmchat.app.ui.components.ToolIcon.CALCULATOR) { onOpenTool("calculator") }
-                    if (notesOn) DockTool("Notes", org.cmchat.app.ui.components.ToolIcon.NOTES) { onOpenTool("notes") }
-                    if (flashOn) DockTool(if (torchOn) "Torch on" else "Flashlight", org.cmchat.app.ui.components.ToolIcon.FLASHLIGHT,
+                    if (calcOn) DockTool(Tr.s(R.string.friends_calculator), org.cmchat.app.ui.components.ToolIcon.CALCULATOR) { onOpenTool("calculator") }
+                    if (notesOn) DockTool(Tr.s(R.string.friends_notes), org.cmchat.app.ui.components.ToolIcon.NOTES) { onOpenTool("notes") }
+                    if (flashOn) DockTool(if (torchOn) Tr.s(R.string.friends_torch_on) else Tr.s(R.string.friends_flashlight), org.cmchat.app.ui.components.ToolIcon.FLASHLIGHT,
                         active = torchOn) { org.cmchat.app.tools.Flashlight.toggle(ctx) }
                 }
             }
@@ -222,11 +221,11 @@ fun FriendsScreen(
                 onDismissRequest = { menuOpen = false },
             ) {
                 androidx.compose.material3.DropdownMenuItem(
-                    text = { Text("Add friend", fontFamily = Nunito) },
+                    text = { Text(Tr.s(R.string.add_add_friend), fontFamily = Nunito) },
                     onClick = { menuOpen = false; onAddFriend() },
                 )
                 androidx.compose.material3.DropdownMenuItem(
-                    text = { Text("Settings", fontFamily = Nunito) },
+                    text = { Text(Tr.s(R.string.friends_settings), fontFamily = Nunito) },
                     onClick = { menuOpen = false; onOpenSettings() },
                 )
             }
@@ -295,15 +294,15 @@ private fun StatusLine(online: Boolean, status: TorStatus, invisible: Boolean, s
                        onToggleMe: () -> Unit) {
     val engineLabel = when (status) {
         // You stopped My Server: nothing can reach you until you tap Start there.
-        is TorStatus.Online -> if (serverOff) "Online · server off" else "Online"
-        is TorStatus.Connecting -> "Connecting ${status.percent}%"
-        is TorStatus.Starting -> "Starting"
-        is TorStatus.Offline -> "Offline"
-        is TorStatus.Failed -> if (status.reason == "bridges") "Failed (bridges)" else "Failed"
+        is TorStatus.Online -> if (serverOff) Tr.s(R.string.friends_online_server_off) else Tr.s(R.string.status_online)
+        is TorStatus.Connecting -> Tr.s(R.string.status_connecting, status.percent)
+        is TorStatus.Starting -> Tr.s(R.string.status_starting)
+        is TorStatus.Offline -> Tr.s(R.string.status_offline)
+        is TorStatus.Failed -> if (status.reason == "bridges") Tr.s(R.string.status_failed_bridges) else Tr.s(R.string.status_failed)
     }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Engine: ", color = CmTextDim, fontFamily = Nunito, fontSize = 13.sp)
+            Text(Tr.s(R.string.friends_engine_label) + " ", color = CmTextDim, fontFamily = Nunito, fontSize = 13.sp)
             Text(engineLabel, color = if (online) CmTeal else Grey.copy(alpha = 0.7f),
                 fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
@@ -315,7 +314,7 @@ private fun StatusLine(online: Boolean, status: TorStatus, invisible: Boolean, s
             val c = if (!online) Grey else if (invisible) CmBlue else CmTeal
             Dot(c)
             Spacer(Modifier.width(6.dp))
-            Text(if (invisible) "Invisible" else "Online", color = c,
+            Text(if (invisible) Tr.s(R.string.status_invisible) else Tr.s(R.string.status_online), color = c,
                 fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
     }
@@ -350,17 +349,17 @@ private fun FriendRow(c: Contact, onOpenChat: (Contact) -> Unit) {
             Text(c.name, color = CmText, fontFamily = Nunito, fontSize = 15.sp,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
             when {
-                c.pending -> Text("Waiting for them to accept · tap for options", color = CmTextDim,
+                c.pending -> Text(Tr.s(R.string.friends_pending_line), color = CmTextDim,
                     fontFamily = Nunito, fontSize = 11.sp, fontStyle = FontStyle.Italic)
-                c.missed -> Text("Missed Message", color = WordRed, fontFamily = Nunito, fontSize = 11.sp,
+                c.missed -> Text(Tr.s(R.string.missed_message), color = WordRed, fontFamily = Nunito, fontSize = 11.sp,
                     fontStyle = FontStyle.Italic)
-                c.buzzed -> Text("Buzzed you", color = CmBuzzBlue, fontFamily = Nunito, fontSize = 11.sp)
-                recent -> Text("last seen recently", color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp)
+                c.buzzed -> Text(Tr.s(R.string.friends_buzzed_you), color = CmBuzzBlue, fontFamily = Nunito, fontSize = 11.sp)
+                recent -> Text(Tr.s(R.string.last_seen_recently), color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp)
             }
         }
         if (c.pending) {
             // Visible on every row that's waiting: tap → Cancel request / Remove.
-            Text("Pending", color = CmRed, fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+            Text(Tr.s(R.string.friends_pending), color = CmRed, fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
         }
         // The only dot: BLUE = a new message is waiting (incl. one held while

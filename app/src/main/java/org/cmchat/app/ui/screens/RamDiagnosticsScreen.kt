@@ -19,6 +19,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.cmchat.app.diag.RamDiag
 import org.cmchat.app.ui.theme.*
+import org.cmchat.app.R
+import org.cmchat.app.i18n.Tr
 
 /** RAM diagnostics view — its own separate list, not mixed with the Tor log. */
 @Composable
@@ -34,32 +36,32 @@ fun RamDiagnosticsScreen(onBack: () -> Unit) {
 
     Column(Modifier.fillMaxSize().background(CmBackground)) {
         Box(Modifier.fillMaxWidth().padding(16.dp)) {
-            Text("‹ Back", color = CmBlue, fontFamily = Nunito, fontSize = 15.sp,
+            Text(Tr.s(R.string.back), color = CmBlue, fontFamily = Nunito, fontSize = 15.sp,
                 modifier = Modifier.align(Alignment.CenterStart).clickable { onBack() })
-            Text("RAM diagnostics", color = CmText, fontFamily = Nunito, fontSize = 17.sp,
+            Text(Tr.s(R.string.ramdiag_ram_diagnostics), color = CmText, fontFamily = Nunito, fontSize = 17.sp,
                 fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
         }
-        Text("Used memory over time, labelled by active features. Separate from the Tor log.",
+        Text(Tr.s(R.string.ramdiag_explainer),
             color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp,
             modifier = Modifier.padding(horizontal = 18.dp))
-        Text("Peak so far: $peak MB", color = CmOrange, fontFamily = Nunito, fontSize = 13.sp,
+        Text(Tr.s(R.string.ramdiag_peak, peak), color = CmOrange, fontFamily = Nunito, fontSize = 13.sp,
             fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp))
 
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Pill("Enable all features", CmBlue, Modifier.weight(1f)) { RamDiag.enableAllFeatures() }
-            Pill("Clear", CmCard, Modifier.weight(1f), CmText) { RamDiag.clear() }
+            Pill(Tr.s(R.string.ramdiag_enable_all_features), CmBlue, Modifier.weight(1f)) { RamDiag.enableAllFeatures() }
+            Pill(Tr.s(R.string.ramdiag_clear), CmCard, Modifier.weight(1f), CmText) { RamDiag.clear() }
         }
 
         LazyColumn(Modifier.weight(1f).padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             if (samples.isEmpty()) {
-                item { Text("Sampling…", color = CmTextFaint, fontFamily = Nunito, fontSize = 13.sp) }
+                item { Text(Tr.s(R.string.ramdiag_sampling), color = CmTextFaint, fontFamily = Nunito, fontSize = 13.sp) }
             }
             items(samples.reversed()) { s ->
                 Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(CmCard)
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically) {
-                    Text("${s.usedMb} MB", color = CmText, fontFamily = Nunito, fontSize = 13.sp,
+                    Text(Tr.s(R.string.ramdiag_mb, s.usedMb), color = CmText, fontFamily = Nunito, fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.width(10.dp))
                     Text(s.features, color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp,

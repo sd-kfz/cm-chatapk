@@ -215,6 +215,7 @@ class TorService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        org.cmchat.app.i18n.Tr.attach(this)   // notification text in the chosen language
         // Single-instance guard: if a previous (possibly half-dead) instance is
         // still around, tear its Tor binding down before we take over so the new
         // start never races a dying old one.
@@ -442,7 +443,7 @@ class TorService : Service() {
             val nm = getSystemService(NotificationManager::class.java)
             OLD_CHANNELS.forEach { runCatching { nm.deleteNotificationChannel(it) } }
             val channel = NotificationChannel(
-                CHANNEL_ID, "Engine", NotificationManager.IMPORTANCE_MIN
+                CHANNEL_ID, org.cmchat.app.i18n.Tr.s(org.cmchat.app.R.string.notif_engine_channel), NotificationManager.IMPORTANCE_MIN
             ).apply { setShowBadge(false) }
             nm.createNotificationChannel(channel)
         }

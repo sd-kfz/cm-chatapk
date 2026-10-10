@@ -21,6 +21,8 @@ import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import org.cmchat.app.crypto.CmId
 import org.cmchat.app.ui.theme.*
+import org.cmchat.app.R
+import org.cmchat.app.i18n.Tr
 
 @Composable
 fun KnockScreen(
@@ -42,7 +44,7 @@ fun KnockScreen(
             cmId = raw; scanned = true; error = null
             org.cmchat.app.diag.ConnDiag.sys("Add friend: QR scanned (valid CMC-ID)")
         } else {
-            error = "That QR isn't a CM-Chat ID"
+            error = Tr.s(R.string.add_not_cm_qr)
             org.cmchat.app.diag.ConnDiag.sys("Add friend: scanned QR was not a CMC-ID")
         }
     }
@@ -56,15 +58,15 @@ fun KnockScreen(
                 .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
                 .setOrientationLocked(true)
                 .setBeepEnabled(false)
-                .setPrompt("Point at your friend's CM-Chat QR")
+                .setPrompt(Tr.s(R.string.add_point_friend_s_cm))
         )
     }
 
     fun submit() {
         val id = cmId.trim()
         when {
-            CmId.decode(id) == null -> error = "That doesn't look like a CMC-ID"
-            myCmId != null && id == myCmId -> error = "That's your own ID 🙂"
+            CmId.decode(id) == null -> error = Tr.s(R.string.add_not_cmc_id)
+            myCmId != null && id == myCmId -> error = Tr.s(R.string.add_own_id)
             else -> onSend(id, nickname.trim())?.let { error = it }
         }
     }
@@ -73,9 +75,9 @@ fun KnockScreen(
     // keyboard too), so it can never fall below the fold on a small phone.
     Column(Modifier.fillMaxSize().background(CmBackground)) {
         Box(Modifier.fillMaxWidth().padding(16.dp)) {
-            Text("‹ Back", color = CmBlue, fontFamily = Nunito, fontSize = 15.sp,
+            Text(Tr.s(R.string.back), color = CmBlue, fontFamily = Nunito, fontSize = 15.sp,
                 modifier = Modifier.align(Alignment.CenterStart).clickable { onBack() })
-            Text("Add friend", color = CmText, fontFamily = Nunito, fontSize = 17.sp,
+            Text(Tr.s(R.string.add_add_friend), color = CmText, fontFamily = Nunito, fontSize = 17.sp,
                 fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
         }
 
@@ -87,7 +89,7 @@ fun KnockScreen(
             )
             OutlinedTextField(
                 value = cmId, onValueChange = { cmId = it; error = null; scanned = false },
-                label = { Text("Their CMC-ID (cmc1:…)", color = CmTextDim) },
+                label = { Text(Tr.s(R.string.add_their_id_label), color = CmTextDim) },
                 singleLine = false, maxLines = 4, colors = colors, modifier = Modifier.fillMaxWidth(),
             )
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -95,30 +97,28 @@ fun KnockScreen(
                     .clickable { openScanner() }
                     .padding(horizontal = 12.dp, vertical = 12.dp),
                     contentAlignment = Alignment.Center) {
-                    Text("Scan their QR", color = CmBlue, fontFamily = Nunito, fontSize = 14.sp,
+                    Text(Tr.s(R.string.add_scan_their_qr), color = CmBlue, fontFamily = Nunito, fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold)
                 }
                 Box(Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).background(CmCard)
                     .clickable { onShowMyQr() }
                     .padding(horizontal = 12.dp, vertical = 12.dp),
                     contentAlignment = Alignment.Center) {
-                    Text("Show my QR", color = CmBlue, fontFamily = Nunito, fontSize = 14.sp,
+                    Text(Tr.s(R.string.add_show_my_qr), color = CmBlue, fontFamily = Nunito, fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold)
                 }
             }
             OutlinedTextField(
                 value = nickname, onValueChange = { nickname = it.take(24) },
-                label = { Text("Nickname for them (optional)", color = CmTextDim) },
+                label = { Text(Tr.s(R.string.add_nickname_optional), color = CmTextDim) },
                 singleLine = true, colors = colors, modifier = Modifier.fillMaxWidth(),
             )
             if (scanned && error == null) {
-                Text("✓ Scanned. Add a nickname if you like, then tap Add friend.", color = CmGreen,
+                Text(Tr.s(R.string.add_scanned_hint), color = CmGreen,
                     fontFamily = Nunito, fontSize = 13.sp)
             }
             error?.let { Text(it, color = CmRed, fontFamily = Nunito, fontSize = 13.sp) }
-            Text("They get a friend request (even if they're Invisible or their app is closed). " +
-                "Until they accept they show as \"New Friend\" (or your nickname for them); then " +
-                "the name they chose — unless you gave them one. Tap a waiting friend to cancel.",
+            Text(Tr.s(R.string.add_request_explainer),
                 color = CmTextFaint, fontFamily = Nunito, fontSize = 12.sp)
             Spacer(Modifier.height(8.dp))
         }
@@ -129,7 +129,7 @@ fun KnockScreen(
                 .padding(vertical = 14.dp),
             contentAlignment = Alignment.Center,
         ) {
-            Text("Add friend", color = CmBackground,
+            Text(Tr.s(R.string.add_add_friend), color = CmBackground,
                 fontFamily = Nunito, fontSize = 16.sp, fontWeight = FontWeight.Bold)
         }
     }

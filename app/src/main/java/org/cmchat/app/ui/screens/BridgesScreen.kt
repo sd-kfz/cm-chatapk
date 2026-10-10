@@ -20,6 +20,8 @@ import org.cmchat.app.tor.Bridges
 import org.cmchat.app.tor.TorService
 import org.cmchat.app.tor.TorStatus
 import org.cmchat.app.ui.theme.*
+import org.cmchat.app.R
+import org.cmchat.app.i18n.Tr
 
 /**
  * "Stealth" — pluggable-transport bridges. Honest wording throughout: bridges
@@ -41,9 +43,9 @@ fun BridgesScreen(
 
     Column(Modifier.fillMaxSize().background(CmBackground)) {
         Box(Modifier.fillMaxWidth().padding(16.dp)) {
-            Text("‹ Back", color = CmBlue, fontFamily = Nunito, fontSize = 15.sp,
+            Text(Tr.s(R.string.back), color = CmBlue, fontFamily = Nunito, fontSize = 15.sp,
                 modifier = Modifier.align(Alignment.CenterStart).clickable { onBack() })
-            Text("Stealth (Bridges)", color = CmText, fontFamily = Nunito, fontSize = 17.sp,
+            Text(Tr.s(R.string.bridges_stealth_bridges), color = CmText, fontFamily = Nunito, fontSize = 17.sp,
                 fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
         }
 
@@ -51,9 +53,7 @@ fun BridgesScreen(
             .padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
 
             Text(
-                "Makes your Tor traffic look like normal web traffic, so your network " +
-                    "can't tell you use Tor. Can be slower. It does NOT add message secrecy — " +
-                    "your messages are already end-to-end encrypted either way.",
+                Tr.s(R.string.bridges_explainer),
                 color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp,
             )
 
@@ -63,30 +63,28 @@ fun BridgesScreen(
                 Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
                     .background(CmRed.copy(alpha = 0.15f)).padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically) {
-                    Text("Engine: Failed (bridges) — couldn't connect.",
+                    Text(Tr.s(R.string.bridges_failed),
                         color = CmRed, fontFamily = Nunito, fontSize = 12.sp, modifier = Modifier.weight(1f))
                     Box(Modifier.clip(RoundedCornerShape(10.dp)).background(CmCard)
                         .clickable { TorService.retry(ctx) }
                         .padding(horizontal = 10.dp, vertical = 5.dp)) {
-                        Text("Retry", color = CmBlue, fontFamily = Nunito, fontSize = 12.sp,
+                        Text(Tr.s(R.string.bridges_retry), color = CmBlue, fontFamily = Nunito, fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
 
-            ModeRow("Off", "Normal Tor (default).", mode == Bridges.Mode.OFF) { mode = Bridges.Mode.OFF }
-            ModeRow("obfs4", "Disguise Tor as random traffic. Most reliable bridge type.",
+            ModeRow(Tr.s(R.string.off), Tr.s(R.string.bridges_off_hint), mode == Bridges.Mode.OFF) { mode = Bridges.Mode.OFF }
+            ModeRow("obfs4", Tr.s(R.string.bridges_obfs4_hint),
                 mode == Bridges.Mode.OBFS4) { mode = Bridges.Mode.OBFS4 }
-            ModeRow("Snowflake", "Route via volunteer browser proxies. Experimental here.",
+            ModeRow("Snowflake", Tr.s(R.string.bridges_snowflake_hint),
                 mode == Bridges.Mode.SNOWFLAKE) { mode = Bridges.Mode.SNOWFLAKE }
 
             if (mode != Bridges.Mode.OFF) {
-                Text("Your own bridge lines (one per line)", color = CmText, fontFamily = Nunito,
+                Text(Tr.s(R.string.bridges_own_lines), color = CmText, fontFamily = Nunito,
                     fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(top = 4.dp))
-                Text("Custom bridges are more reliable long-term than the built-in ones. " +
-                    "Get them from Tor (bridges.torproject.org) or a friend. Leave blank to " +
-                    "use the built-in fallback set.",
+                Text(Tr.s(R.string.bridges_custom_hint),
                     color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp)
                 OutlinedTextField(
                     value = lines, onValueChange = { lines = it },
@@ -100,8 +98,7 @@ fun BridgesScreen(
                 )
             }
 
-            Text("If bridges are on and can't connect, the app will NOT fall back to normal " +
-                "Tor — it shows \"Failed (bridges)\" instead, so your cloak is never bypassed.",
+            Text(Tr.s(R.string.bridges_no_fallback),
                 color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp)
 
             // Cover traffic (decoy frames), off by default.
@@ -109,12 +106,11 @@ fun BridgesScreen(
                 .clickable { onToggleCover(!coverOn) }.padding(14.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("Cover traffic", color = CmText, fontFamily = Nunito, fontSize = 14.sp)
-                    Text("Sends decoy traffic to hide when you're really messaging. " +
-                        "Uses more battery and data.",
+                    Text(Tr.s(R.string.bridges_cover_traffic), color = CmText, fontFamily = Nunito, fontSize = 14.sp)
+                    Text(Tr.s(R.string.bridges_cover_hint),
                         color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp)
                 }
-                Text(if (coverOn) "On" else "Off", color = if (coverOn) CmGreen else CmTextDim,
+                Text(if (coverOn) Tr.s(R.string.yes) else Tr.s(R.string.no), color = if (coverOn) CmGreen else CmTextDim,
                     fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             }
 
@@ -122,7 +118,7 @@ fun BridgesScreen(
             Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(CmBlue)
                 .clickable { onSave(mode.wire, lines) }.padding(vertical = 13.dp),
                 contentAlignment = Alignment.Center) {
-                Text("Save & restart engine", color = CmBackground, fontFamily = Nunito,
+                Text(Tr.s(R.string.bridges_save_restart), color = CmBackground, fontFamily = Nunito,
                     fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
             }
             Spacer(Modifier.height(8.dp))

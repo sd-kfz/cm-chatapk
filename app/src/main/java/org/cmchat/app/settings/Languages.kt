@@ -3,13 +3,12 @@ package org.cmchat.app.settings
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
- * The app's language list and current selection. English ships complete; the
- * other locales are scaffolded for later translation (strings are still English
- * until each locale's resources are filled in). The user's choice is persisted
- * in the vault. Finnish (fi) and Norwegian (no) are included.
+ * The app's languages and the current choice. Every language has its own
+ * res/values-xx/strings.xml; picking one switches the whole app at once
+ * ([org.cmchat.app.i18n.Tr]). The choice is kept in the vault.
  */
 object Languages {
-    /** (BCP-47 tag, native display name). */
+    /** (tag, native name). Norwegian (Bokmål) is "no" here, "nb" in res/. */
     val list: List<Pair<String, String>> = listOf(
         "en" to "English",
         "ro" to "Română",
@@ -23,13 +22,26 @@ object Languages {
         "pl" to "Polski",
         "ru" to "Русский",
         "uk" to "Українська",
-        "fi" to "Suomi",        // Finnish (Finland)
-        "no" to "Norsk",        // Norwegian (Norway)
+        "fi" to "Suomi",
+        "no" to "Norsk",
     )
 
-    /** Currently selected language tag (RAM; mirrored from the vault). */
-    val selected = MutableStateFlow("en")
+    /** The chosen tag; "" = follow the phone's language. */
+    val selected = MutableStateFlow("")
+
+    /** Pick a language: every screen switches now. */
+    fun select(tag: String) {
+        selected.value = tag
+        org.cmchat.app.i18n.Tr.use(tag)
+    }
+
+    /** The tag actually shown: the choice, or the phone's language when it is one of ours. */
+    fun effective(tag: String = selected.value): String {
+        if (tag.isNotEmpty()) return tag
+        val phone = java.util.Locale.getDefault().language.let { if (it == "nb" || it == "nn") "no" else it }
+        return list.firstOrNull { it.first == phone }?.first ?: "en"
+    }
 
     fun displayName(tag: String): String =
-        list.firstOrNull { it.first == tag }?.second ?: "English"
+        list.firstOrNull { it.first == effective(tag) }?.second ?: "English"
 }

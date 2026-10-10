@@ -28,6 +28,8 @@ import org.cmchat.app.diag.Diag
 import org.cmchat.app.selftest.SelfTest
 import org.cmchat.app.selftest.SelfTestLog
 import org.cmchat.app.ui.theme.*
+import org.cmchat.app.R
+import org.cmchat.app.i18n.Tr
 
 @Composable
 fun DiagnosticsScreen(onBack: () -> Unit) {
@@ -36,9 +38,9 @@ fun DiagnosticsScreen(onBack: () -> Unit) {
 
     Column(Modifier.fillMaxSize().background(CmBackground)) {
         Box(Modifier.fillMaxWidth().padding(16.dp)) {
-            Text("‹ Back", color = CmBlue, fontFamily = Nunito, fontSize = 15.sp,
+            Text(Tr.s(R.string.back), color = CmBlue, fontFamily = Nunito, fontSize = 15.sp,
                 modifier = Modifier.align(Alignment.CenterStart).clickable { onBack() })
-            Text("Diagnostics", color = CmText, fontFamily = Nunito, fontSize = 17.sp,
+            Text(Tr.s(R.string.diag_diagnostics), color = CmText, fontFamily = Nunito, fontSize = 17.sp,
                 fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
         }
 
@@ -46,12 +48,12 @@ fun DiagnosticsScreen(onBack: () -> Unit) {
             Box(Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).background(CmCard)
                 .clickable { clipboard.setText(AnnotatedString(Diag.dump())) }.padding(vertical = 10.dp),
                 contentAlignment = Alignment.Center) {
-                Text("Copy all", color = CmBlue, fontFamily = Nunito, fontSize = 13.sp)
+                Text(Tr.s(R.string.diag_copy_all), color = CmBlue, fontFamily = Nunito, fontSize = 13.sp)
             }
             Box(Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).background(CmCard)
                 .clickable { Diag.clear() }.padding(vertical = 10.dp),
                 contentAlignment = Alignment.Center) {
-                Text("Clear", color = CmRed, fontFamily = Nunito, fontSize = 13.sp)
+                Text(Tr.s(R.string.clear), color = CmRed, fontFamily = Nunito, fontSize = 13.sp)
             }
         }
 
@@ -62,10 +64,10 @@ fun DiagnosticsScreen(onBack: () -> Unit) {
         }
 
         Spacer(Modifier.height(8.dp))
-        Text("Engine log", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp,
+        Text(Tr.s(R.string.diag_engine_log), color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 16.dp))
         if (entries.isEmpty()) {
-            Text("No entries.", color = CmTextFaint, fontFamily = Nunito, fontSize = 13.sp,
+            Text(Tr.s(R.string.diag_no_entries), color = CmTextFaint, fontFamily = Nunito, fontSize = 13.sp,
                 modifier = Modifier.padding(16.dp))
         }
         LazyColumn(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 16.dp)) {
@@ -96,12 +98,12 @@ private fun SelfTestSection() {
     Spacer(Modifier.height(10.dp))
     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically) {
-        Text("Self-Test", color = CmOrange, fontFamily = Nunito, fontSize = 13.sp,
+        Text(Tr.s(R.string.diag_self_test), color = CmOrange, fontFamily = Nunito, fontSize = 13.sp,
             fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
         Box(Modifier.clip(RoundedCornerShape(10.dp)).background(if (canRun) CmBlue else CmCard)
             .clickable(enabled = canRun) { SelfTest.run(ctx); now = System.currentTimeMillis() }
             .padding(horizontal = 12.dp, vertical = 6.dp)) {
-            Text(when { running -> "Running…"; waitS > 0 -> "Again in ${waitS}s"; else -> "Run self-test" },
+            Text(when { running -> Tr.s(R.string.diag_running); waitS > 0 -> Tr.s(R.string.diag_again_in, waitS); else -> Tr.s(R.string.diag_run_self_test) },
                 color = if (canRun) CmBackground else CmTextDim,
                 fontFamily = Nunito, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
         }
@@ -109,11 +111,11 @@ private fun SelfTestSection() {
             Spacer(Modifier.width(8.dp))
             Box(Modifier.clip(RoundedCornerShape(10.dp)).background(CmCard)
                 .clickable { SelfTestLog.clear() }.padding(horizontal = 10.dp, vertical = 6.dp)) {
-                Text("Clear", color = CmRed, fontFamily = Nunito, fontSize = 12.sp)
+                Text(Tr.s(R.string.clear), color = CmRed, fontFamily = Nunito, fontSize = 12.sp)
             }
         }
     }
-    Text("Adversarial attacks on this app's own parser, flood limits, lifecycle and PIN lockout.",
+    Text(Tr.s(R.string.diag_selftest_hint),
         color = CmTextFaint, fontFamily = Nunito, fontSize = 10.sp,
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp))
 

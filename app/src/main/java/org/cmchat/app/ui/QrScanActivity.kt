@@ -14,7 +14,7 @@ class QrScanActivity : CaptureActivity() {
     override fun initializeContent(): DecoratedBarcodeView {
         val view = super.initializeContent()
         view.viewFinder.setLaserVisibility(false)
-        view.setStatusText("Point at your friend's CM-Chat QR")
+        view.setStatusText(org.cmchat.app.i18n.Tr.s(org.cmchat.app.R.string.add_point_friend_s_cm))
         return view
     }
 

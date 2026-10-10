@@ -24,6 +24,8 @@ import androidx.compose.ui.unit.sp
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import org.cmchat.app.ui.theme.*
+import org.cmchat.app.R
+import org.cmchat.app.i18n.Tr
 
 @Composable
 fun MyIdScreen(cmId: String?, onBack: () -> Unit) {
@@ -32,16 +34,16 @@ fun MyIdScreen(cmId: String?, onBack: () -> Unit) {
 
     Column(Modifier.fillMaxSize().background(CmBackground)) {
         Box(Modifier.fillMaxWidth().padding(16.dp)) {
-            Text("‹ Back", color = CmBlue, fontFamily = Nunito, fontSize = 15.sp,
+            Text(Tr.s(R.string.back), color = CmBlue, fontFamily = Nunito, fontSize = 15.sp,
                 modifier = Modifier.align(Alignment.CenterStart).clickable { onBack() })
-            Text("My CMC-ID", color = CmText, fontFamily = Nunito, fontSize = 17.sp,
+            Text(Tr.s(R.string.myid_my_cmc_id), color = CmText, fontFamily = Nunito, fontSize = 17.sp,
                 fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
         }
 
         if (cmId == null) {
             Spacer(Modifier.weight(1f))
             Text(
-                "Your ID appears once Tor is Online and your server is published.",
+                Tr.s(R.string.myid_appears_when_online),
                 color = CmTextDim, fontFamily = Nunito, fontSize = 14.sp,
                 modifier = Modifier.align(Alignment.CenterHorizontally).padding(24.dp),
             )
@@ -55,7 +57,7 @@ fun MyIdScreen(cmId: String?, onBack: () -> Unit) {
         if (qr != null) {
             Image(
                 bitmap = qr.asImageBitmap(),
-                contentDescription = "CMC-ID QR",
+                contentDescription = Tr.s(R.string.myid_cmc_id_qr),
                 // One pixel per QR module, scaled up without smoothing: sharp edges.
                 filterQuality = androidx.compose.ui.graphics.FilterQuality.None,
                 modifier = Modifier.align(Alignment.CenterHorizontally)
@@ -73,15 +75,15 @@ fun MyIdScreen(cmId: String?, onBack: () -> Unit) {
 
         Spacer(Modifier.height(16.dp))
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Action("Copy", CmBlue, Modifier.weight(1f)) {
+            Action(Tr.s(R.string.myid_copy), CmBlue, Modifier.weight(1f)) {
                 clipboard.setText(AnnotatedString(cmId))
                 // Android 13+ shows its own "Copied" confirmation.
                 if (android.os.Build.VERSION.SDK_INT < 33) {
-                    android.widget.Toast.makeText(context, "CMC-ID copied", android.widget.Toast.LENGTH_SHORT).show()
+                    android.widget.Toast.makeText(context, Tr.s(R.string.myid_copied), android.widget.Toast.LENGTH_SHORT).show()
                 }
                 org.cmchat.app.diag.ConnDiag.sys("My ID: CMC-ID copied to clipboard")
             }
-            Action("Share", CmCard, Modifier.weight(1f), textColor = CmText) {
+            Action(Tr.s(R.string.myid_share), CmCard, Modifier.weight(1f), textColor = CmText) {
                 val send = Intent(Intent.ACTION_SEND).apply {
                     type = "text/plain"
                     putExtra(Intent.EXTRA_TEXT, cmId)

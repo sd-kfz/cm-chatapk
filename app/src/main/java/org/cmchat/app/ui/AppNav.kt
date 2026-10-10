@@ -28,6 +28,8 @@ import org.cmchat.app.ui.screens.SettingsScreen
 import org.cmchat.app.ui.theme.CmGreen
 import org.cmchat.app.vault.SecurityFactory
 import org.cmchat.app.vault.VaultData
+import org.cmchat.app.R
+import org.cmchat.app.i18n.Tr
 
 /** Sentinel id for the decoy chat row (never a real contact). */
 private const val DECOY_CM_ID = "__decoy__"
@@ -94,7 +96,7 @@ private fun requestUninstall(context: android.content.Context) {
  * otherwise "New Friend" until they've accepted, then THEIR own nickname.
  */
 private fun shownName(c: org.cmchat.app.vault.ContactRec): String =
-    c.name.ifBlank { if (c.pending) "New Friend" else c.theirName?.takeIf { it.isNotBlank() } ?: "New Friend" }
+    c.name.ifBlank { if (c.pending) Tr.s(R.string.new_friend) else c.theirName?.takeIf { it.isNotBlank() } ?: Tr.s(R.string.new_friend) }
 
 private fun myCmId(data: VaultData?): String? {
     val face = data?.faces?.firstOrNull() ?: return null
@@ -263,15 +265,15 @@ private fun AppNavContent() {
     if (showReviewSettings) {
         AlertDialog(
             onDismissRequest = { showReviewSettings = false },
-            title = { Text("Welcome") },
-            text = { Text("Please take your time to review the Settings page before you start.") },
+            title = { Text(Tr.s(R.string.nav_welcome)) },
+            text = { Text(Tr.s(R.string.nav_review_settings)) },
             confirmButton = {
                 TextButton(onClick = { showReviewSettings = false; nav = Nav.Settings }) {
-                    Text("Ok, take me to Settings.")
+                    Text(Tr.s(R.string.nav_take_me_settings))
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showReviewSettings = false }) { Text("I'll do it later.") }
+                TextButton(onClick = { showReviewSettings = false }) { Text(Tr.s(R.string.nav_later)) }
             },
         )
     }
@@ -279,19 +281,18 @@ private fun AppNavContent() {
     confirmExit?.let { doExit ->
         AlertDialog(
             onDismissRequest = { confirmExit = null },
-            title = { Text("Exit and erase your Notes?") },
-            text = { Text("Exit clears everything from memory — your Notes scratchpad and checklist will be gone.") },
-            confirmButton = { TextButton(onClick = { confirmExit = null; doExit() }) { Text("Exit") } },
-            dismissButton = { TextButton(onClick = { confirmExit = null }) { Text("Cancel") } },
+            title = { Text(Tr.s(R.string.nav_exit_notes_q)) },
+            text = { Text(Tr.s(R.string.nav_exit_notes_text)) },
+            confirmButton = { TextButton(onClick = { confirmExit = null; doExit() }) { Text(Tr.s(R.string.nav_exit)) } },
+            dismissButton = { TextButton(onClick = { confirmExit = null }) { Text(Tr.s(R.string.cancel)) } },
         )
     }
 
     if (showWipeConfirm) {
         AlertDialog(
             onDismissRequest = { showWipeConfirm = false },
-            title = { Text("Wipe everything?") },
-            text = { Text("Shreds ALL app data on this phone (vault, keys, friends, settings, Tor " +
-                "cache) and then opens Android's uninstall prompt to remove the app itself.") },
+            title = { Text(Tr.s(R.string.nav_wipe_q)) },
+            text = { Text(Tr.s(R.string.nav_wipe_text)) },
             confirmButton = {
                 TextButton(onClick = {
                     showWipeConfirm = false
@@ -324,9 +325,9 @@ private fun AppNavContent() {
                             requestUninstall(context)
                         }
                     }
-                }) { Text("Wipe") }
+                }) { Text(Tr.s(R.string.chat_wipe)) }
             },
-            dismissButton = { TextButton(onClick = { showWipeConfirm = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { showWipeConfirm = false }) { Text(Tr.s(R.string.cancel)) } },
         )
     }
 
@@ -445,7 +446,7 @@ private fun AppNavContent() {
             // keeps Online if you were Online.
             // Session window (item 7): load the saved choice and stamp this unlock.
             org.cmchat.app.settings.AppSettings.sessionWindowEnabled.value = unlocked.settings.sessionWindow
-            org.cmchat.app.settings.Languages.selected.value = unlocked.settings.language
+            org.cmchat.app.settings.Languages.select(unlocked.settings.language)
             org.cmchat.app.settings.AppSettings.lastUnlockMs = System.currentTimeMillis()
             // Load bridge config BEFORE starting Tor so it's in the torrc at launch.
             org.cmchat.app.tor.Bridges.configure(unlocked.settings.bridgeMode, unlocked.settings.bridgeLines)
@@ -480,7 +481,7 @@ private fun AppNavContent() {
             val decoyTop by org.cmchat.app.settings.AppSettings.decoyAtTop.collectAsState()
             val contacts = if (decoyOn) {
                 // Looks like every other friend (same colour, same row) — no tell.
-                val decoy = Contact(decoyName, Color(0xFF6FB8D9), unread = false, cmId = DECOY_CM_ID)
+                val decoy = Contact(org.cmchat.app.i18n.Tr.decoyName(decoyName), Color(0xFF6FB8D9), unread = false, cmId = DECOY_CM_ID)
                 if (decoyTop) listOf(decoy) + real else real + decoy
             } else real
             FriendsScreen(
@@ -589,7 +590,7 @@ private fun AppNavContent() {
             onAbout = { nav = Nav.About },
             onHelp = { nav = Nav.Help },
             onLanguage = { nav = Nav.Language },
-            languageLabel = org.cmchat.app.settings.Languages.displayName(data?.settings?.language ?: "en"),
+            languageLabel = org.cmchat.app.settings.Languages.displayName(data?.settings?.language ?: ""),
             onRamDiag = { nav = Nav.RamDiag },
             privacyPinSet = data?.settings?.privacyPin != null,
             // An all-digit Privacy PIN is typed on the number pad (any older
@@ -663,7 +664,7 @@ private fun AppNavContent() {
         Nav.Language -> org.cmchat.app.ui.screens.LanguageScreen(
             onBack = { nav = Nav.Settings },
             onPick = { tag ->
-                org.cmchat.app.settings.Languages.selected.value = tag
+                org.cmchat.app.settings.Languages.select(tag)
                 saveVault { cur -> cur.copy(settings = cur.settings.copy(language = tag)) }
             },
         )
@@ -703,10 +704,10 @@ private fun AppNavContent() {
                         null
                     }
                     MessageService.KnockResult.NOT_READY ->
-                        "Not ready yet — wait until the Engine is Online once, then try again."
-                    MessageService.KnockResult.INVALID -> "That doesn't look like a CMC-ID"
-                    MessageService.KnockResult.SELF -> "That's your own ID 🙂"
-                    MessageService.KnockResult.TOO_SOON -> "Already sent — it keeps trying in the background."
+                        Tr.s(R.string.nav_not_ready)
+                    MessageService.KnockResult.INVALID -> Tr.s(R.string.add_not_cmc_id)
+                    MessageService.KnockResult.SELF -> Tr.s(R.string.add_own_id)
+                    MessageService.KnockResult.TOO_SOON -> Tr.s(R.string.nav_already_sent)
                 }
             },
             onBack = { nav = Nav.Friends },

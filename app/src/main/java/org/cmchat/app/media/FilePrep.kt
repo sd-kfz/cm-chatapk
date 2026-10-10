@@ -27,21 +27,21 @@ object FilePrep {
                 }
             }
         }
-        if (size > FileTransfer.MAX_BYTES) return MediaPolicy.Decision.Refused(MediaPolicy.TOO_BIG)
+        if (size > FileTransfer.MAX_BYTES) return MediaPolicy.Decision.Refused(MediaPolicy.Note.TOO_BIG)
         val mime = runCatching { cr.getType(uri) }.getOrNull() ?: "application/octet-stream"
         val file = try {
-            val stream = cr.openInputStream(uri) ?: return MediaPolicy.Decision.Refused("That file couldn't be read.")
+            val stream = cr.openInputStream(uri) ?: return MediaPolicy.Decision.Refused(MediaPolicy.Note.UNREADABLE)
             stream.use { Chunked.read(it, FileTransfer.MAX_BYTES) }
-                ?: return MediaPolicy.Decision.Refused(MediaPolicy.TOO_BIG)
+                ?: return MediaPolicy.Decision.Refused(MediaPolicy.Note.TOO_BIG)
         } catch (_: OutOfMemoryError) {
-            return MediaPolicy.Decision.Refused("Not enough free memory for that file right now.")
+            return MediaPolicy.Decision.Refused(MediaPolicy.Note.NO_MEMORY)
         } catch (_: Exception) {
-            return MediaPolicy.Decision.Refused("That file couldn't be read.")
+            return MediaPolicy.Decision.Refused(MediaPolicy.Note.UNREADABLE)
         }
         return try {
             MediaPolicy.decide(file, mime, name) { reencodeJpeg(it) }
         } catch (_: OutOfMemoryError) {
-            MediaPolicy.Decision.Refused("Not enough free memory for that file right now.")
+            MediaPolicy.Decision.Refused(MediaPolicy.Note.NO_MEMORY)
         }
     }
 

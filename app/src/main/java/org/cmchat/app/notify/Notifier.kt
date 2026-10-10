@@ -1,5 +1,8 @@
 package org.cmchat.app.notify
 
+import org.cmchat.app.R
+import org.cmchat.app.i18n.Tr
+
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -29,7 +32,7 @@ object Notifier {
     private fun ensureChannel(ctx: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val ch = NotificationChannel(
-                CHANNEL_ID, "Activity", NotificationManager.IMPORTANCE_DEFAULT
+                CHANNEL_ID, Tr.s(R.string.notif_activity), NotificationManager.IMPORTANCE_DEFAULT
             ).apply {
                 setShowBadge(false)
                 lockscreenVisibility = Notification.VISIBILITY_PRIVATE
@@ -38,13 +41,14 @@ object Notifier {
         }
     }
 
-    private fun post(ctx: Context, id: Int, title: String) {
+    private fun post(ctx: Context, id: Int, title: Int) {
+        Tr.attach(ctx)
         ensureChannel(ctx)
         // Title only — never a sender name and never any message content.
         val builder = NotificationCompat.Builder(ctx, CHANNEL_ID)
             .setSmallIcon(org.cmchat.app.R.drawable.ic_stat_flower)
             .setColor(BRAND_COLOR)
-            .setContentTitle(title)
+            .setContentTitle(Tr.s(title))
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setAutoCancel(true)
             .setShowWhen(false)
@@ -52,13 +56,14 @@ object Notifier {
     }
 
     /** Something happened (e.g. a friend request). Generic "Activity". */
-    fun activity(ctx: Context) = post(ctx, ID_ACTIVITY, "Activity")
+    fun activity(ctx: Context) = post(ctx, ID_ACTIVITY, R.string.notif_activity)
 
     /** A BUZZ arrived: a heads-up "Activity" notification that vibrates. No
      * sender, no content. (Needs notifications allowed for CM-Chat.) */
     fun buzz(ctx: Context) {
+        Tr.attach(ctx)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val ch = NotificationChannel(BUZZ_CHANNEL_ID, "Buzz", NotificationManager.IMPORTANCE_HIGH).apply {
+            val ch = NotificationChannel(BUZZ_CHANNEL_ID, Tr.s(R.string.notif_buzz_channel), NotificationManager.IMPORTANCE_HIGH).apply {
                 setShowBadge(false)
                 enableVibration(true)
                 lockscreenVisibility = Notification.VISIBILITY_PRIVATE
@@ -68,7 +73,7 @@ object Notifier {
         val builder = NotificationCompat.Builder(ctx, BUZZ_CHANNEL_ID)
             .setSmallIcon(org.cmchat.app.R.drawable.ic_stat_flower)
             .setColor(BRAND_COLOR)
-            .setContentTitle("Activity")
+            .setContentTitle(Tr.s(R.string.notif_activity))
             .setPriority(NotificationCompat.PRIORITY_HIGH)   // heads-up on Android 7
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
@@ -79,7 +84,7 @@ object Notifier {
     }
 
     /** A new message arrived. Generic "Notification" — no sender, no content. */
-    fun message(ctx: Context) = post(ctx, ID_MESSAGE, "Notification")
+    fun message(ctx: Context) = post(ctx, ID_MESSAGE, R.string.notif_message)
 
     fun clearAll(ctx: Context) {
         runCatching { NotificationManagerCompat.from(ctx).cancelAll() }

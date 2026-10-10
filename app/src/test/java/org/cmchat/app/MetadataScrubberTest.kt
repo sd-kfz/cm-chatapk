@@ -197,6 +197,7 @@ class MetadataScrubberTest {
         d as MediaPolicy.Decision.Ready
         assertFalse(d.file.join().has(gps))
         assertEquals("image/jpeg", d.mime)
+        assertEquals(MediaPolicy.Note.PHOTO_CLEANED, d.note)
     }
 
     @Test
@@ -218,7 +219,7 @@ class MetadataScrubberTest {
             is MediaPolicy.Decision.Refused)
         val tooBig = Chunked(emptyList(), FileTransfer.MAX_BYTES + 1)     // the size alone decides — nothing read
         val r = MediaPolicy.decide(tooBig, "application/zip", "big.zip", noReencode)
-        assertEquals(MediaPolicy.TOO_BIG, (r as MediaPolicy.Decision.Refused).reason)
+        assertEquals(MediaPolicy.Note.TOO_BIG, (r as MediaPolicy.Decision.Refused).reason)
     }
 
     @Test
@@ -226,7 +227,7 @@ class MetadataScrubberTest {
         val pdf = "%PDF-1.7 hello".toByteArray()
         val d = MediaPolicy.decide(Chunked.of(pdf), "application/pdf", "doc.pdf", noReencode) as MediaPolicy.Decision.Ready
         assertArrayEquals(pdf, d.file.join())
-        assertTrue(d.note.contains("exactly as it is"))
+        assertEquals(MediaPolicy.Note.AS_IS, d.note)
     }
 
     // ---- reading a file never buffers past the cap --------------------------------

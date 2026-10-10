@@ -28,12 +28,14 @@ import androidx.compose.ui.unit.sp
 import org.cmchat.app.tools.CalcEngine
 import org.cmchat.app.tools.ToolsState
 import org.cmchat.app.ui.theme.*
+import org.cmchat.app.R
+import org.cmchat.app.i18n.Tr
 
 @Composable
 fun ToolsScreen(which: String, onBack: () -> Unit) {
     Column(Modifier.fillMaxSize().background(CmBackground)) {
         Box(Modifier.fillMaxWidth().padding(16.dp)) {
-            Text("‹ Back", color = CmBlue, fontFamily = Nunito, fontSize = 15.sp,
+            Text(Tr.s(R.string.back), color = CmBlue, fontFamily = Nunito, fontSize = 15.sp,
                 modifier = Modifier.align(Alignment.CenterStart).clickable { onBack() })
             Text(which.replaceFirstChar { it.uppercase() }, color = CmText, fontFamily = Nunito,
                 fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
@@ -62,7 +64,7 @@ private fun FlashlightUi() {
             Text("☀", color = if (on) Color.White else CmTextDim, fontSize = 64.sp)
         }
         Spacer(Modifier.height(16.dp))
-        Text(if (on) "Torch ON — tap to turn off" else "Tap to turn the torch on",
+        Text(if (on) Tr.s(R.string.tools_torch_on) else Tr.s(R.string.tools_torch_off),
             color = CmTextDim, fontFamily = Nunito, fontSize = 14.sp)
     }
 }
@@ -147,14 +149,14 @@ fun CalculatorCover(onOpen: () -> Unit) {
         }
     }
     Column(Modifier.fillMaxSize().background(CmBackground)) {
-        Text("Calculator", color = CmText, fontFamily = Nunito, fontSize = 17.sp, fontWeight = FontWeight.Bold,
+        Text(Tr.s(R.string.tools_calculator), color = CmText, fontFamily = Nunito, fontSize = 17.sp, fontWeight = FontWeight.Bold,
             modifier = Modifier.fillMaxWidth().padding(16.dp), textAlign = TextAlign.Center)
         Box(Modifier.weight(1f)) {
             CalculatorPad(onKey = { feed(it) }) { clear ->
                 Row(Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("tap 10 times", color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp,
+                    Text(Tr.s(R.string.tools_tap_10), color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp,
                         fontStyle = androidx.compose.ui.text.font.FontStyle.Italic, modifier = Modifier.weight(1f))
-                    Text("reset", color = CmTextDim, fontFamily = Nunito, fontSize = 13.sp,
+                    Text(Tr.s(R.string.tools_reset), color = CmTextDim, fontFamily = Nunito, fontSize = 13.sp,
                         modifier = Modifier.clip(RoundedCornerShape(8.dp))
                             .clickable { clear(); feed(org.cmchat.app.tools.CoverSecret.RESET) }
                             .padding(horizontal = 10.dp, vertical = 6.dp))
@@ -239,20 +241,20 @@ private fun NotesUi() {
     if (confirmClear) {
         AlertDialog(
             onDismissRequest = { confirmClear = false },
-            title = { Text("Clear your notes?") },
-            text = { Text("This erases the scratchpad and the checklist. It can't be undone.") },
+            title = { Text(Tr.s(R.string.tools_clear_notes_q)) },
+            text = { Text(Tr.s(R.string.tools_clear_notes_text)) },
             confirmButton = {
-                TextButton(onClick = { ToolsState.clear(); confirmClear = false }) { Text("Clear", color = CmRed) }
+                TextButton(onClick = { ToolsState.clear(); confirmClear = false }) { Text(Tr.s(R.string.clear), color = CmRed) }
             },
-            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Keep") } },
+            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text(Tr.s(R.string.tools_keep)) } },
         )
     }
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("RAM only — kept while the app runs, gone when it closes.", color = CmTextDim,
+            Text(Tr.s(R.string.tools_ram_only), color = CmTextDim,
                 fontFamily = Nunito, fontSize = 12.sp, modifier = Modifier.weight(1f))
             if (notes.isNotEmpty() || checks.isNotEmpty()) {
-                Text("Clear…", color = CmRed, fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                Text(Tr.s(R.string.tools_clear_dots), color = CmRed, fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { confirmClear = true }
                         .padding(horizontal = 8.dp, vertical = 4.dp))
             }
@@ -262,7 +264,7 @@ private fun NotesUi() {
         // long note never grows off the screen and no line is ever lost.
         Box(Modifier.fillMaxWidth().weight(1f)
             .clip(RoundedCornerShape(12.dp)).background(CmCard).padding(12.dp)) {
-            if (notes.isEmpty()) Text("Scratchpad…", color = CmTextDim, fontFamily = Nunito, fontSize = 15.sp)
+            if (notes.isEmpty()) Text(Tr.s(R.string.tools_scratchpad), color = CmTextDim, fontFamily = Nunito, fontSize = 15.sp)
             BasicTextField(
                 value = notes,
                 onValueChange = { if (it.length <= ToolsState.MAX_NOTES_CHARS) ToolsState.notes.value = it },
@@ -271,7 +273,7 @@ private fun NotesUi() {
             )
         }
         if (notes.length > ToolsState.MAX_NOTES_CHARS * 9 / 10) {
-            Text("${notes.length} / ${ToolsState.MAX_NOTES_CHARS} characters", color = CmOrange,
+            Text(Tr.s(R.string.tools_chars, notes.length, ToolsState.MAX_NOTES_CHARS), color = CmOrange,
                 fontFamily = Nunito, fontSize = 11.sp)
         }
 
@@ -280,7 +282,7 @@ private fun NotesUi() {
             .background(if (atMax) CmCard else CmBlue)
             .clickable(enabled = !atMax) { ToolsState.addCheck() }
             .padding(horizontal = 16.dp, vertical = 10.dp)) {
-            Text(if (atMax) "Max ${ToolsState.MAX_CHECKS} checks" else "+ Add check",
+            Text(if (atMax) Tr.s(R.string.tools_max_checks, ToolsState.MAX_CHECKS) else Tr.s(R.string.tools_add_check),
                 color = if (atMax) CmTextDim else CmBackground, fontFamily = Nunito,
                 fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
         }
@@ -310,7 +312,7 @@ private fun NotesUi() {
                         cursorBrush = SolidColor(CmBlue),
                         decorationBox = { inner ->
                             if (item.text.isEmpty())
-                                Text("To-do…", color = CmTextDim, fontFamily = Nunito, fontSize = 15.sp)
+                                Text(Tr.s(R.string.tools_todo), color = CmTextDim, fontFamily = Nunito, fontSize = 15.sp)
                             inner()
                         },
                         modifier = Modifier.fillMaxWidth(),

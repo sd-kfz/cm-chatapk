@@ -1266,7 +1266,7 @@ object MessageService {
                 teamClockAt[id] = at
                 val value = v.ifEmpty { null }
                 val chatCmId = inChat(fromCmId) { cid ->
-                    ChatStore.setTeamHour(cid, value, names[cid]?.ifBlank { null } ?: "Your friend"); cid
+                    ChatStore.setTeamHour(cid, value, names[cid]?.ifBlank { null } ?: ""); cid
                 }
                 onTeamClockChanged?.invoke(chatCmId, value, at)
             }

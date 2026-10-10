@@ -34,88 +34,58 @@ fun HelpScreen(onBack: () -> Unit) {
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
 
-            Section("1 · Setting up")
-            Entry("Your PIN (very important)", "It's the only key — there is NO reset and NO recovery. " +
-                "Use 4 to 56 characters: numbers, letters or symbols; 8 or more is much stronger. " +
-                "It can't read the same backwards, because your PIN typed backwards is the Shredder.")
-            Entry("The Engine", "Connects you over the Tor network. The first start can take 1–3 minutes. " +
-                "If your Wi-Fi or mobile data changes, it reconnects by itself.")
-            Entry("Your nickname and ID", "Your nickname is what friends see when you add them. Your address " +
-                "(CMC-ID) and QR code are in Settings → My identity.")
-
-            Section("2 · Adding friends")
-            Entry("Add a friend", "Tap the cyan + and choose Add friend. Scan their QR (or paste their " +
-                "CMC-ID), pick a nickname and tap Add friend. They show as \"Waiting for them to accept\" until " +
-                "they do — tap Cancel there to take the request back. Only ONE of you needs to add the other. " +
-                "It keeps trying quietly in the background (and again each time your Engine comes online), " +
-                "so it lands once both Engines are online.")
-            Entry("+Add (friend requests)", "A friend request arrives as a card on the Friends screen — " +
-                "Accept or Decline. It gets through even while you're Invisible or the app is closed. A " +
-                "declined person can't send another for an hour.")
-            Entry("QR codes", "Everything happens on the phone. The camera is only used while you're scanning.")
-
-            Section("3 · Messaging")
-            Entry("Sending", "Every message gets brand-new one-time keys, so even someone who later steals " +
-                "the phone and its keys can't read messages they recorded earlier (forward secrecy). There are " +
-                "never delivery or read receipts. If your friend is offline, the message waits quietly and goes " +
-                "out when they're back (while your app is running) — nothing on screen shows whether they're online. " +
-                "Each message shows the time it was sent or received (like 4:05 PM).")
-            Entry("Disappear", "Under \"Disappear\" pick: Off, Single Message (view once — gone the moment " +
-                "it's read), or 30s / 5m / 30m / 1h after it's seen. The small timer pill next to the Cerberus " +
-                "eye shows the timer your next message gets. A timer for ALL messages is in Settings → Chats.")
-            Entry("Team Clock", "A shared clock for one chat — handy for agreeing on a time. Tap \"Set Team " +
-                "Clock\" in the chat and set the time like a phone alarm; both of you see it tick, live.")
-            Entry("Buzz", "A nudge with no text: long-press a friend, or ⚡ Buzz in the chat. Their screen " +
-                "shakes, a notification pops up, and a BLUE dot stays on your name until they open your chat. " +
-                "It can reach them even when their app is closed (if they allow it).")
-            Entry("The red X in a chat", "Wipe conversation: erases it on BOTH phones (theirs as soon as it " +
-                "reaches them). Delete friend: removes them from your phone only. Terminate: removes them AND " +
-                "removes you from their list when it reaches their phone (kept and retried until it does). " +
-                "Each one asks you twice.")
-
-            Section("4 · Presence")
-            Entry("Online and Invisible", "Every time the app starts (and after Exit) you're Invisible. Tap " +
-                "\"Me:\" on the Friends screen to switch — only your tap changes it; minimising keeps your choice. " +
-                "Invisible = you still receive, but look offline: no notifications for messages (a Buzz or a " +
-                "friend request still notifies), and they wait as \"Missed Message\". Go Online and they're " +
-                "delivered as new messages. Senders can't tell.")
-            Entry("New messages", "A blue dot on a friend means a new message is waiting. It goes away when " +
-                "you open that chat while Online. There is no \"online\" dot — nobody's status is shown.")
-            Entry("Last seen", "Friends only ever see \"last seen recently\" — for a day after you last sent " +
-                "them something, even if you then go Invisible or close the app.")
-            Entry("Minimise or Exit", "The white line minimises: the Engine keeps running. The red power " +
-                "symbol exits: it stops everything, clears memory (your keys too) and logs you out.")
-
-            Section("5 · Privacy and panic buttons")
-            Entry("Privacy & Safety", "Sensitive settings (server, stealth, guardians, PIN, wipe) sit " +
-                "behind a separate Privacy PIN (digits, on the number pad). It's mandatory: you can change it, " +
-                "but never turn it off.")
-            Entry("Cerberus", "Idle auto-wipe: if the app goes untouched for the time you choose (15 min–3 h), " +
-                "it clears memory, stops the Engine and closes. Your vault stays.")
-            Entry("Kill Timer", "Set it like an alarm (the time it goes off); then it does the same as Cerberus.")
-            Entry("Decoy chat", "A fake friend. Tapping it instantly wipes your chats from memory, moves you " +
-                "to a new address and locks the app. Each friend sees \"Decoy chat triggered — chat erased.\" " +
-                "in your chat; their copy is erased once they leave it.")
-            Entry("Shredder", "Type your PIN BACKWARDS at the lock screen: everything is silently erased " +
-                "and a small red \"Error. Please restart the app.\" appears under \"Welcome back\". Close and " +
-                "reopen the app and it starts fresh (no reinstall needed).")
-            Entry("Wipe Everything", "Settings → Privacy & Safety. Erases all app data, then opens Android's " +
-                "uninstall prompt so the app itself can be removed too.")
-            Entry("Bridges and cover traffic", "Bridges hide from your network that you use Tor (slower). " +
-                "Cover traffic sends decoy traffic so nobody can tell when you really message (more battery).")
-
-            Section("6 · Diagnostics")
-            Entry("Connection test", "Settings → Connection test runs a Link Test to one friend and shows " +
-                "every step live, on both phones — the best way to see where a connection fails.")
-            Entry("\"Update both apps\"", "If you see this, you and a friend run different app versions. " +
-                "Install the same version on both phones.")
-            Entry("Diagnostics, self-test, integrity", "Diagnostics shows what the app is doing; the self-test " +
-                "checks its own defences; Verify App Integrity shows the app's signing fingerprint to compare " +
-                "with a friend.")
+            for ((section, entries) in HELP) {
+                Section(stringResource(section))
+                for ((title, text) in entries) Entry(stringResource(title), stringResource(text))
+            }
             Spacer(Modifier.height(12.dp))
         }
     }
 }
+
+/** (section, [(title, text)]) — every line is a string resource, so it's translated. */
+private val HELP: List<Pair<Int, List<Pair<Int, Int>>>> = listOf(
+    R.string.help_s1 to listOf(
+        R.string.help_pin_t to R.string.help_pin_b,
+        R.string.help_engine_t to R.string.help_engine_b,
+        R.string.help_nick_t to R.string.help_nick_b,
+    ),
+    R.string.help_s2 to listOf(
+        R.string.help_add_t to R.string.help_add_b,
+        R.string.help_requests_t to R.string.help_requests_b,
+        R.string.help_qr_t to R.string.help_qr_b,
+    ),
+    R.string.help_s3 to listOf(
+        R.string.help_send_t to R.string.help_send_b,
+        R.string.help_files_t to R.string.help_files_b,
+        R.string.help_disappear_t to R.string.help_disappear_b,
+        R.string.help_teamclock_t to R.string.help_teamclock_b,
+        R.string.help_buzz_t to R.string.help_buzz_b,
+        R.string.help_x_t to R.string.help_x_b,
+    ),
+    R.string.help_s4 to listOf(
+        R.string.help_presence_t to R.string.help_presence_b,
+        R.string.help_closed_t to R.string.help_closed_b,
+        R.string.help_dot_t to R.string.help_dot_b,
+        R.string.help_lastseen_t to R.string.help_lastseen_b,
+        R.string.help_exit_t to R.string.help_exit_b,
+    ),
+    R.string.help_s5 to listOf(
+        R.string.help_privacy_t to R.string.help_privacy_b,
+        R.string.help_cerberus_t to R.string.help_cerberus_b,
+        R.string.help_kill_t to R.string.help_kill_b,
+        R.string.help_decoy_t to R.string.help_decoy_b,
+        R.string.help_cover_t to R.string.help_cover_b,
+        R.string.help_shredder_t to R.string.help_shredder_b,
+        R.string.help_wipe_t to R.string.help_wipe_b,
+        R.string.help_bridges_t to R.string.help_bridges_b,
+    ),
+    R.string.help_s6 to listOf(
+        R.string.help_conn_t to R.string.help_conn_b,
+        R.string.help_update_t to R.string.help_update_b,
+        R.string.help_diag_t to R.string.help_diag_b,
+    ),
+)
 
 @Composable
 private fun Section(title: String) {

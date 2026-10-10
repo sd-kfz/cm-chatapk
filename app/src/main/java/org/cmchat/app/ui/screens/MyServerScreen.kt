@@ -21,6 +21,8 @@ import org.cmchat.app.tor.ServerStatus
 import org.cmchat.app.tor.TorService
 import org.cmchat.app.tor.TorStatus
 import org.cmchat.app.ui.theme.*
+import org.cmchat.app.R
+import org.cmchat.app.i18n.Tr
 
 @Composable
 fun MyServerScreen(
@@ -51,18 +53,18 @@ fun MyServerScreen(
 
     Column(Modifier.fillMaxSize().background(CmBackground)) {
         Box(Modifier.fillMaxWidth().padding(16.dp)) {
-            Text("‹ Back", color = CmBlue, fontFamily = Nunito, fontSize = 15.sp,
+            Text(Tr.s(R.string.back), color = CmBlue, fontFamily = Nunito, fontSize = 15.sp,
                 modifier = Modifier.align(Alignment.CenterStart).clickable { onBack() })
-            Text("My Server", color = CmText, fontFamily = Nunito, fontSize = 17.sp,
+            Text(Tr.s(R.string.server_my_server), color = CmText, fontFamily = Nunito, fontSize = 17.sp,
                 fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
         }
 
         val torPct = (tor as? TorStatus.Connecting)?.percent
         Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Step("Tor starting", tor !is TorStatus.Offline)
-            Step("Tor connected" + if (torPct != null) " ($torPct%)" else "", tor is TorStatus.Online)
-            Step("Creating my server", server is ServerStatus.Starting || server is ServerStatus.Online)
-            Step("Published & reachable", server is ServerStatus.Online)
+            Step(Tr.s(R.string.server_tor_starting), tor !is TorStatus.Offline)
+            Step(Tr.s(R.string.server_tor_connected) + if (torPct != null) " ($torPct%)" else "", tor is TorStatus.Online)
+            Step(Tr.s(R.string.server_creating_my_server), server is ServerStatus.Starting || server is ServerStatus.Online)
+            Step(Tr.s(R.string.server_published_reachable), server is ServerStatus.Online)
         }
 
         Spacer(Modifier.height(16.dp))
@@ -72,17 +74,17 @@ fun MyServerScreen(
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             val live = server as? ServerStatus.Online
-            Text("Onion address", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
+            Text(Tr.s(R.string.server_onion_address), color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
             Text(live?.onion ?: "—", color = CmText, fontFamily = Nunito, fontSize = 13.sp)
-            Text("Nickname: ${live?.faceName ?: "—"}", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
+            Text(Tr.s(R.string.server_nickname, live?.faceName ?: "—"), color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
             val uptime = live?.let { formatUptime(now - it.sinceMs) } ?: "—"
-            Text("Uptime: $uptime", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
+            Text(Tr.s(R.string.server_uptime_x, uptime), color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
             (server as? ServerStatus.Failed)?.let {
-                Text("Error: ${it.reason}", color = CmRed, fontFamily = Nunito, fontSize = 12.sp,
+                Text(Tr.s(R.string.server_error, it.reason), color = CmRed, fontFamily = Nunito, fontSize = 12.sp,
                     maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
             if (stoppedByYou) {
-                Text("Stopped by you — it stays off (nothing can reach you) until you tap Start.",
+                Text(Tr.s(R.string.server_stopped_hint),
                     color = CmOrange, fontFamily = Nunito, fontSize = 12.sp)
             }
         }
@@ -91,31 +93,31 @@ fun MyServerScreen(
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             // Start only when nothing is running; Stop only when something is;
             // Restart never while a publish is in flight (and 10 s apart).
-            ServerButton(if (starting) "Starting…" else "Start", CmGreen, Modifier.weight(1f),
+            ServerButton(if (starting) Tr.s(R.string.starting_dots) else Tr.s(R.string.server_start), CmGreen, Modifier.weight(1f),
                 enabled = !starting && !online) { onStart(); now = System.currentTimeMillis() }
-            ServerButton("Stop", CmRed, Modifier.weight(1f),
+            ServerButton(Tr.s(R.string.server_stop), CmRed, Modifier.weight(1f),
                 enabled = server !is ServerStatus.Off) { onStop(); now = System.currentTimeMillis() }
-            ServerButton(if (restartWait > 0) "Restart ${restartWait}s" else "Restart", CmBlue, Modifier.weight(1f),
+            ServerButton(if (restartWait > 0) Tr.s(R.string.server_restart_wait, restartWait) else Tr.s(R.string.server_restart), CmBlue, Modifier.weight(1f),
                 enabled = !starting && !stoppedByYou && restartWait == 0) { onRestart(); now = System.currentTimeMillis() }
         }
         Spacer(Modifier.height(10.dp))
         Box(Modifier.padding(horizontal = 16.dp)) {
             ServerButton(
                 when {
-                    testing -> "Testing…"
-                    testWait > 0 -> "Self-test (again in ${testWait}s)"
-                    else -> "Self-test (reach my own server)"
+                    testing -> Tr.s(R.string.server_testing)
+                    testWait > 0 -> Tr.s(R.string.server_selftest_again, testWait)
+                    else -> Tr.s(R.string.server_selftest)
                 },
                 CmCard, Modifier.fillMaxWidth(), textColor = CmText,
                 enabled = online && !testing && testWait == 0,
             ) {
-                selfTest = "Testing…"
+                selfTest = Tr.s(R.string.server_testing)
                 scope.launch {
                     val r = ServerController.selfTest()
                     selfTest = when {
-                        r == null -> "Already ran just now — try again in a moment"
-                        r.first -> "Reachable — ${r.second}ms"
-                        else -> "Failed"
+                        r == null -> Tr.s(R.string.server_already_ran)
+                        r.first -> Tr.s(R.string.server_reachable_ms, r.second)
+                        else -> Tr.s(R.string.status_failed)
                     }
                 }
             }
@@ -128,7 +130,7 @@ fun MyServerScreen(
         Spacer(Modifier.height(10.dp))
         Box(Modifier.padding(horizontal = 16.dp)) {
             ServerButton(
-                if (rotateWait > 0) "Request new address (again in ${rotateWait}s)" else "Request new address",
+                if (rotateWait > 0) Tr.s(R.string.server_new_address_again, rotateWait) else Tr.s(R.string.server_new_address),
                 CmCard, Modifier.fillMaxWidth(), textColor = CmOrange,
                 enabled = online && rotateWait == 0,
             ) {
@@ -137,8 +139,7 @@ fun MyServerScreen(
             }
         }
         Text(
-            "Rotates to a fresh onion and tells your contacts; the old address " +
-                "stays alive ~24h so no one drops.",
+            Tr.s(R.string.server_rotate_hint),
             color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
         )
