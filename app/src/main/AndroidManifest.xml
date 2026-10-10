@@ -30,6 +30,7 @@
             android:exported="true"
             android:label="@string/launcher_label"
             android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.CMChat">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

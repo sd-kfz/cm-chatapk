@@ -36,8 +36,11 @@ enum class FrameType(val code: Int) {
      * friend as a red timestamped line; it deletes NOTHING on their side. */
     DECOY_ALERT(17),
 
-    /** Team Clock changed: payload = canonical UTC offset ("UTC+02:00") or empty. */
-    TEAM_CLOCK(18);
+    /** Team Clock changed: payload = canonical offset ("UTC+02:07") or empty. */
+    TEAM_CLOCK(18),
+
+    /** "Remove me": the sender deleted me; the receiver removes the sender too. */
+    TERMINATE(19);
 
     companion object {
         fun fromCode(code: Int): FrameType? = entries.firstOrNull { it.code == code }

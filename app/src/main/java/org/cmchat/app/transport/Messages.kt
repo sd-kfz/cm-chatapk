@@ -11,6 +11,8 @@ object Messages {
 data class KnockPayload(
     val displayName: String,
     val cmId: String,
+    /** true = "I cancelled my request": the recipient just removes the card. */
+    val withdraw: Boolean = false,
 )
 
 @kotlinx.serialization.Serializable

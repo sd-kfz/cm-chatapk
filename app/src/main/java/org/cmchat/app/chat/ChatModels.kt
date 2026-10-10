@@ -96,3 +96,15 @@ object SelfTimerRules {
         return nowMs >= at
     }
 }
+
+/** "4:05 PM" from an hour (0-23) and minute — clocks and message times. */
+fun formatHm12(hour: Int, minute: Int): String {
+    val h12 = if (hour % 12 == 0) 12 else hour % 12
+    return "%d:%02d %s".format(h12, minute, if (hour < 12) "AM" else "PM")
+}
+
+/** A message timestamp: hour:minute AM/PM in this phone's local time, nothing more. */
+fun formatTimestamp(atMs: Long): String {
+    val c = java.util.Calendar.getInstance().apply { timeInMillis = atMs }
+    return formatHm12(c.get(java.util.Calendar.HOUR_OF_DAY), c.get(java.util.Calendar.MINUTE))
+}

@@ -1,23 +1,23 @@
 package org.cmchat.app.chat
 
 /**
- * Team Clock: a shared, private clock for ONE conversation. Both friends see
- * the same "team time" — a UTC offset the two of them agree on (e.g. the time
- * where a meeting happens) — ticking live in the chat. Setting it sends the new
- * value to the friend inside the encrypted conversation (TEAM_CLOCK frame), so
- * both sides always show the same clock; it's stored per friend in the vault.
+ * Team Clock: a shared, private clock for ONE conversation. You SET it like a
+ * phone alarm — "make our clock show 4:30 PM now" — and from then on both
+ * friends see the same team time ticking live in the chat. No time zones are
+ * shown or picked anywhere.
  *
- * Wire/vault form: "UTC+05:30", "UTC-03:00", "UTC+00:00" — or empty = no clock.
- * Offsets run from UTC-12:00 to UTC+14:00 in 15-minute steps (covers every real
- * zone, incl. +05:45 and +12:45). Time is computed from epoch milliseconds with
- * plain arithmetic: no time-zone database, so no device setting can skew it.
- * Received values are validated strictly; anything else is ignored.
+ * Under the hood the clock is an offset (minutes) from the phones' own clocks
+ * in UTC, so both sides tick in step. Setting it sends the value to the friend
+ * inside the encrypted conversation (TEAM_CLOCK frame); it's stored per friend
+ * in the vault. Wire/vault form: "UTC+05:30", "UTC-03:07" — or empty = no clock.
+ * Minute precision, -12:00..+14:00. Plain arithmetic on epoch milliseconds: no
+ * time-zone database. Received values are validated strictly.
  */
 object TeamClock {
 
     const val MIN_OFFSET = -12 * 60
     const val MAX_OFFSET = 14 * 60
-    const val STEP = 15
+    const val STEP = 1
 
     private val FORMAT = Regex("^UTC([+-])(\\d{2}):(\\d{2})$")
 
@@ -40,13 +40,39 @@ object TeamClock {
         return if (isValid(v)) v else null
     }
 
-    fun isValid(offsetMin: Int): Boolean =
-        offsetMin in MIN_OFFSET..MAX_OFFSET && offsetMin % STEP == 0
+    fun isValid(offsetMin: Int): Boolean = offsetMin in MIN_OFFSET..MAX_OFFSET
 
-    /** "HH:mm" team time at [nowMs] for [offsetMin]. */
+    private fun minuteOfDay(nowMs: Long, offsetMin: Int): Int =
+        Math.floorMod(Math.floorDiv(nowMs, 60_000L) + offsetMin, 1440L).toInt()
+
+    /** "HH:mm" (24 h) team time at [nowMs] for [offsetMin]. */
     fun timeAt(nowMs: Long, offsetMin: Int): String {
-        val minutesOfDay = Math.floorMod(Math.floorDiv(nowMs, 60_000L) + offsetMin, 1440L)
-        return "%02d:%02d".format(minutesOfDay / 60, minutesOfDay % 60)
+        val m = minuteOfDay(nowMs, offsetMin)
+        return "%02d:%02d".format(m / 60, m % 60)
+    }
+
+    /** "4:05 PM" — the team time the way a phone alarm shows it. */
+    fun time12(nowMs: Long, offsetMin: Int): String {
+        val m = minuteOfDay(nowMs, offsetMin)
+        return formatHm12(m / 60, m % 60)
+    }
+
+    /** The team time at [nowMs] as (hour 0-23, minute) — to preset the picker. */
+    fun hourMinuteAt(nowMs: Long, offsetMin: Int): Pair<Int, Int> {
+        val m = minuteOfDay(nowMs, offsetMin)
+        return m / 60 to m % 60
+    }
+
+    /**
+     * The offset that makes the team clock show [hour]:[minute] right now — what
+     * "setting it like an alarm" means. Picked from the two equivalent offsets
+     * (a day apart) the one closest to zero, so it's always valid.
+     */
+    fun offsetFor(hour: Int, minute: Int, nowMs: Long = System.currentTimeMillis()): Int {
+        val utcMinute = Math.floorMod(Math.floorDiv(nowMs, 60_000L), 1440L).toInt()
+        var d = Math.floorMod(hour * 60 + minute - utcMinute, 1440)
+        if (d >= 720) d -= 1440                          // -720 .. +719
+        return d
     }
 
     /** Short label, e.g. "UTC+5:30", "UTC−3", "UTC". */

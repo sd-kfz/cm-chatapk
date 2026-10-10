@@ -41,6 +41,8 @@ fun SettingsScreen(
     onLanguage: () -> Unit = {},
     onRamDiag: () -> Unit = {},
     privacyPinSet: Boolean = false,
+    /** The stored Privacy PIN is all digits (typed on the number pad). */
+    privacyPinNumeric: Boolean = true,
     verifyPrivacyPin: (String) -> Boolean = { false },
     onCreatePrivacyPin: (String) -> Unit = {},
     onSessionWindow: (Boolean) -> Unit = {},
@@ -67,6 +69,7 @@ fun SettingsScreen(
     askMode?.let { mode ->
         PrivacyPinDialog(
             mode = mode,
+            storedNumeric = privacyPinNumeric,
             verify = verifyPrivacyPin,
             onSetNew = onCreatePrivacyPin,
             onPass = {
@@ -218,20 +221,42 @@ private fun KillTimerRow() {
     LaunchedEffect(deadline) {
         while (deadline != null) { now = System.currentTimeMillis(); kotlinx.coroutines.delay(1000) }
     }
+    var picking by remember { mutableStateOf(false) }
+    if (picking) {
+        // Alarm-style: pick the time it fires (today, or tomorrow if it's passed).
+        val c = java.util.Calendar.getInstance().apply { add(java.util.Calendar.HOUR_OF_DAY, 1) }
+        org.cmchat.app.ui.components.AlarmTimeDialog(
+            title = "Kill Timer — fires at",
+            initialHour = c.get(java.util.Calendar.HOUR_OF_DAY),
+            initialMinute = c.get(java.util.Calendar.MINUTE),
+            note = "At this time it clears RAM, stops the engine and closes the app.",
+            confirmLabel = "Arm",
+            onConfirm = { h, m ->
+                org.cmchat.app.guard.GuardController.armKillAt(h, m)
+                now = System.currentTimeMillis()
+                picking = false
+            },
+            onDismiss = { picking = false },
+        )
+    }
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CmCard).padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Kill Timer", color = CmText, fontFamily = Nunito, fontSize = 14.sp)
                 Text(if (reach) "Off while \"Stay reachable\" is on."
-                     else "A countdown: at zero it clears RAM, stops the engine, closes the app.",
+                     else "Like an alarm: at that time it clears RAM, stops the engine, closes the app.",
                     color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp)
             }
             val d = deadline
             if (d != null) {
                 val secs = ((d - now) / 1000).coerceAtLeast(0)
-                Text("%d:%02d:%02d".format(secs / 3600, (secs % 3600) / 60, secs % 60), color = CmRed,
-                    fontFamily = Nunito, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(org.cmchat.app.chat.formatTimestamp(d), color = CmRed, fontFamily = Nunito,
+                        fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Text("in %d:%02d:%02d".format(secs / 3600, (secs % 3600) / 60, secs % 60),
+                        color = CmTextDim, fontFamily = Nunito, fontSize = 11.sp)
+                }
             } else {
                 Text("not armed", color = CmTextDim, fontFamily = Nunito, fontSize = 13.sp)
             }
@@ -242,14 +267,10 @@ private fun KillTimerRow() {
                 modifier = Modifier.clip(RoundedCornerShape(8.dp))
                     .clickable { org.cmchat.app.guard.GuardController.cancelKillTimer() }.padding(6.dp))
         } else {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.horizontalScroll(rememberScrollState())) {
-                for (m in org.cmchat.app.guard.GuardController.KILL_CHOICES) {
-                    Chip(if (m >= 60) "${m / 60}h" else "${m}m", selected = false, enabled = !reach) {
-                        org.cmchat.app.guard.GuardController.armKillTimer(m * 60_000L)
-                    }
-                }
-            }
+            Text("Set the time…", color = if (reach) CmTextFaint else CmBlue, fontFamily = Nunito,
+                fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.clip(RoundedCornerShape(8.dp))
+                    .clickable(enabled = !reach) { picking = true }.padding(6.dp))
         }
     }
 }
@@ -318,8 +339,8 @@ enum class PinMode { UNLOCK, SET, CHANGE }
 
 /**
  * A real lock for the privacy PIN (not a plain text field):
- *  - masked entry: numbers, letters or symbols, 4–56 (older all-digit PINs
- *    still work), with a strength hint while creating one;
+ *  - masked entry on the NUMBER pad: digits only, 4–56, with a strength hint
+ *    while creating one (an older non-digit PIN can still be typed to verify);
  *  - SET / CHANGE require enter + confirm, with a clear mismatch error;
  *  - verifying the current PIN (UNLOCK / CHANGE) applies the same escalating
  *    lockout as the login screen ([LoginThrottle]);
@@ -328,6 +349,7 @@ enum class PinMode { UNLOCK, SET, CHANGE }
 @Composable
 private fun PrivacyPinDialog(
     mode: PinMode,
+    storedNumeric: Boolean,
     verify: (String) -> Boolean,
     onSetNew: (String) -> Unit,
     onPass: () -> Unit,
@@ -364,9 +386,9 @@ private fun PrivacyPinDialog(
                 }
             }
             "new" -> {
-                if (v.length in VaultManager.MIN_PASSCODE..VaultManager.MAX_PASSCODE) {
+                if (v.length in VaultManager.MIN_PASSCODE..VaultManager.MAX_PASSCODE && v.all { it.isDigit() }) {
                     newPin = v; entry = ""; err = null; phase = "confirm"
-                } else err = "Use 4 to 56 characters"
+                } else err = "Use 4 to 56 digits"
             }
             "confirm" -> {
                 if (v == newPin) { onSetNew(v); onPass() }
@@ -388,17 +410,23 @@ private fun PrivacyPinDialog(
         title = { Text(title) },
         text = {
             Column {
+                // The NUMBER pad — except to verify an older PIN that has letters.
+                val numberPad = phase != "current" || storedNumeric
                 OutlinedTextField(
                     value = entry,
-                    onValueChange = { v -> if (lockedFor <= 0) { entry = v.take(VaultManager.MAX_PASSCODE); err = null } },
+                    onValueChange = { v -> if (lockedFor <= 0) {
+                        entry = (if (numberPad) v.filter { it.isDigit() } else v).take(VaultManager.MAX_PASSCODE)
+                        err = null
+                    } },
                     singleLine = true,
                     enabled = lockedFor <= 0,
                     visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Password),
+                        keyboardType = if (numberPad) androidx.compose.ui.text.input.KeyboardType.NumberPassword
+                            else androidx.compose.ui.text.input.KeyboardType.Password),
                 )
                 if (phase == "new") {
-                    Text("Numbers, letters or symbols · 4 to 56", color = CmTextDim, fontFamily = Nunito,
+                    Text("Digits · 4 to 56", color = CmTextDim, fontFamily = Nunito,
                         fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
                     PinStrengthHint(entry)
                 }

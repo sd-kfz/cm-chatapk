@@ -102,7 +102,7 @@ class SecureChannel(
     companion object {
         /** v4 = v3's forward-secret handshake + decoy alert + Team Clock frames.
          * (v3 = forward secrecy; v2 = static crypto_box + replay counter.) */
-        const val WIRE_VERSION = 4
+        const val WIRE_VERSION = 5
         const val CHALLENGE = 16
         private const val RESP_BODY = Fs.PKID + Fs.KEY + CHALLENGE
 
@@ -110,6 +110,7 @@ class SecureChannel(
         val CONTENT_TYPES: Set<FrameType> = setOf(
             FrameType.MSG, FrameType.ERASE_CHAT, FrameType.BUZZ, FrameType.ADDR_UPDATE,
             FrameType.COVER, FrameType.KNOCK_ACCEPT, FrameType.DECOY_ALERT, FrameType.TEAM_CLOCK,
+            FrameType.TERMINATE,
         )
     }
 

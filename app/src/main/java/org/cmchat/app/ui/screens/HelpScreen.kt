@@ -46,7 +46,8 @@ fun HelpScreen(onBack: () -> Unit) {
             Section("2 · Adding friends")
             Entry("Add a friend", "Tap the cyan + and choose Add friend. Scan their QR (or paste their " +
                 "CMC-ID), pick a nickname and tap Add friend. They show as \"Waiting for them to accept\" until " +
-                "they do. Only ONE of you needs to add the other. It keeps trying quietly in the background, " +
+                "they do — tap Cancel there to take the request back. Only ONE of you needs to add the other. " +
+                "It keeps trying quietly in the background (and again each time your Engine comes online), " +
                 "so it lands once both Engines are online.")
             Entry("Knocks", "A friend request arrives as a \"Knock\" card on the Friends screen — Accept or " +
                 "Decline. A first knock gets through even while you're Invisible. A declined person can't " +
@@ -57,38 +58,43 @@ fun HelpScreen(onBack: () -> Unit) {
             Entry("Sending", "Every message gets brand-new one-time keys, so even someone who later steals " +
                 "the phone and its keys can't read messages they recorded earlier (forward secrecy). There are " +
                 "never delivery or read receipts. If your friend is offline, the message waits quietly and goes " +
-                "out when they're back (while your app is running) — nothing on screen shows whether they're online.")
+                "out when they're back (while your app is running) — nothing on screen shows whether they're online. " +
+                "Each message shows the time it was sent or received (like 4:05 PM).")
             Entry("Disappear", "Under \"Disappear\" pick: Off, Single Message (view once — gone the moment " +
                 "it's read), or 30s / 5m / 30m / 1h after it's seen. The small timer pill next to the Cerberus " +
                 "eye shows the timer your next message gets. A timer for ALL messages is in Settings → Chats.")
-            Entry("Team Clock", "A shared clock for one chat — handy for agreeing on a time. Tap \"Set a Team " +
-                "Clock\" in the chat; both of you see the same time, live.")
+            Entry("Team Clock", "A shared clock for one chat — handy for agreeing on a time. Tap \"Set Team " +
+                "Clock\" in the chat and set the time like a phone alarm; both of you see it tick, live.")
             Entry("Buzz", "A nudge with no text: long-press a friend, or ⚡ Buzz in the chat. Their screen " +
-                "shakes and a BLUE dot stays on your name until they open your chat. It can reach them even " +
-                "when their app is closed (if they allow it).")
-            Entry("Erase a chat", "\"Erase\" clears the conversation on your phone instantly and erases it on " +
-                "your friend's phone as soon as that reaches them (while your app is running).")
+                "shakes, a notification pops up, and a BLUE dot stays on your name until they open your chat. " +
+                "It can reach them even when their app is closed (if they allow it).")
+            Entry("The red X in a chat", "Wipe conversation: erases it on BOTH phones (theirs as soon as it " +
+                "reaches them). Delete friend: removes them from your phone only. Terminate: removes them AND " +
+                "removes you from their list when it reaches their phone (kept and retried until it does). " +
+                "Each one asks you twice.")
 
             Section("4 · Presence")
             Entry("Online and Invisible", "You always start Invisible. Tap \"Me:\" on the Friends screen to switch. " +
                 "Invisible = you still receive, but look offline; held messages show as \"Missed\" " +
-                "(orange dot) once you go Online. Senders can't tell.")
-            Entry("Last seen", "Friends only ever see \"last seen recently\" (within a day). Turn it off in " +
-                "Settings → Chats.")
+                "(orange dot) until you go Online and open that chat. Senders can't tell.")
+            Entry("Last seen", "Friends only ever see \"last seen recently\" — for a day after you last sent " +
+                "them something, even if you then go Invisible or close the app. Turn it off in Settings → Chats.")
             Entry("Minimise or Exit", "The white line minimises: the Engine keeps running. The red power " +
                 "symbol exits: it stops everything, clears memory and logs you out.")
 
             Section("5 · Privacy and panic buttons")
             Entry("Privacy & Safety", "Sensitive settings (server, stealth, guardians, PIN, wipe) sit " +
-                "behind a separate Privacy PIN. It's mandatory: you can change it, but never turn it off.")
+                "behind a separate Privacy PIN (digits, on the number pad). It's mandatory: you can change it, " +
+                "but never turn it off.")
             Entry("Cerberus", "Idle auto-wipe: if the app goes untouched for the time you choose (15 min–3 h), " +
                 "it clears memory, stops the Engine and closes. Your vault stays.")
-            Entry("Kill Timer", "A countdown you arm; at zero it does the same as Cerberus.")
+            Entry("Kill Timer", "Set it like an alarm (the time it goes off); then it does the same as Cerberus.")
             Entry("Decoy chat", "A fake friend. Tapping it instantly wipes your chats from memory, moves you " +
                 "to a new address and locks the app. Each friend sees \"Decoy chat triggered — chat erased.\" " +
                 "in your chat; their copy is erased once they leave it.")
             Entry("Shredder", "Type your PIN BACKWARDS at the lock screen: everything is silently erased " +
-                "and the app only says \"Error. Please restart the app.\"")
+                "and a small red \"Error. Please restart the app.\" appears under \"Welcome back\". Close and " +
+                "reopen the app and it starts fresh (no reinstall needed).")
             Entry("Wipe Everything", "Settings → Privacy & Safety. Erases all app data, then opens Android's " +
                 "uninstall prompt so the app itself can be removed too.")
             Entry("Bridges and cover traffic", "Bridges hide from your network that you use Tor (slower). " +

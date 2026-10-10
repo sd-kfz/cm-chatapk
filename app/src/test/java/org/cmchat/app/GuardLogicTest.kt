@@ -37,4 +37,19 @@ class GuardLogicTest {
         assertEquals(Guardian.CERBERUS, GuardLogic.firstToFire(t0, idle, null))
         assertEquals(GuardLogic.cerberusDeadline(t0, idle), GuardLogic.nextDeadline(t0, idle, null))
     }
+
+    @Test
+    fun kill_timer_set_like_an_alarm_fires_at_the_next_matching_time() {
+        val utc = java.util.TimeZone.getTimeZone("UTC")
+        val now = 1_700_000_000_000L                       // 22:13:20 UTC
+        // Later today.
+        assertEquals(now - (13 * 60_000L + 20_000L) + 60 * 60_000L,
+            GuardLogic.nextOccurrence(23, 0, now, utc))
+        // Already passed today -> tomorrow, never in the past.
+        val t = GuardLogic.nextOccurrence(7, 30, now, utc)
+        assertTrue(t > now && t - now <= 24 * 60 * 60_000L)
+        assertEquals(7 * 60 + 30, ((t / 60_000L) % 1440).toInt())
+        // The exact current minute counts as passed (fires tomorrow, not now).
+        assertTrue(GuardLogic.nextOccurrence(22, 13, now, utc) > now)
+    }
 }

@@ -366,7 +366,8 @@ class TorService : Service() {
     private fun restartTor() {
         bootstrapJob?.cancel()
         watchdogJob?.cancel()
-        runCatching { org.cmchat.app.tor.ServerController.stop() }
+        // The onion dies with Tor; it's re-published by itself once Tor is back.
+        runCatching { org.cmchat.app.tor.ServerController.pauseForTorRestart() }
         haltTorBounded()
         if (bound) { runCatching { unbindService(gpConnection) }; bound = false }
         runCatching { stopService(Intent(this, GpTorService::class.java)) }

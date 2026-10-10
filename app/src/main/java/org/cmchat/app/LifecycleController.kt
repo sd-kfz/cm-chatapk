@@ -71,6 +71,9 @@ object LifecycleController {
      * running, so minimised = still online and Cerberus keeps counting.
      */
     fun onAppBackground() {
+        // Shredder aftermath: leaving the app clears its error, so reopening
+        // shows a normal (fresh) lock screen — never a dead one.
+        org.cmchat.app.vault.Shredder.reset()
         if (org.cmchat.app.settings.AppSettings.stayReachable.value) return
         // 6h session window: don't re-lock while it's still valid.
         if (org.cmchat.app.settings.AppSettings.sessionStillValid()) return

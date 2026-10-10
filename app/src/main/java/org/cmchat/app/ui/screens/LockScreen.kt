@@ -1,6 +1,5 @@
 package org.cmchat.app.ui.screens
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -48,18 +47,11 @@ fun LockScreen(manager: VaultManager, onUnlocked: (String, VaultData, firstRun: 
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // STEALTH SHREDDER: after the duress PIN, show ONLY this line and accept no
-    // input at all (not even Back) until the app is restarted. No new-PIN
-    // prompt, no uninstall prompt — nothing that hints a wipe just happened.
+    // STEALTH SHREDDER: after the duress PIN the NORMAL lock screen stays up,
+    // with one small red line under "Welcome back", and its keys do nothing.
+    // Closing / leaving the app clears it (Shredder.reset) and a fresh lock
+    // screen appears — never a dead screen, never a reinstall.
     val shredded by org.cmchat.app.vault.Shredder.tripped.collectAsState()
-    if (shredded) {
-        BackHandler(enabled = true) { }
-        Box(Modifier.fillMaxSize().background(CmBackground), contentAlignment = Alignment.Center) {
-            Text("Error. Please restart the app.", color = CmRed, fontFamily = Nunito, fontSize = 15.sp,
-                fontStyle = FontStyle.Italic)
-        }
-        return
-    }
     val firstRun = remember { manager.firstRunNeeded() }
 
     var phase by remember { mutableStateOf(if (firstRun) Phase.NEW_PIN else Phase.UNLOCK) }
@@ -146,14 +138,20 @@ fun LockScreen(manager: VaultManager, onUnlocked: (String, VaultData, firstRun: 
         CmChatLogo(size = 30, sweepMs = 3250)
         Spacer(Modifier.height(6.dp))
         Text(
-            when (phase) {
-                Phase.NEW_PIN -> "Create a PIN — numbers, letters or symbols (4–56)"
-                Phase.CONFIRM_PIN -> "Confirm your PIN"
-                Phase.NICKNAME -> "Pick a nickname"
-                Phase.UNLOCK -> "Welcome back"
+            when {
+                shredded -> "Welcome back"
+                phase == Phase.NEW_PIN -> "Create a PIN — numbers, letters or symbols (4–56)"
+                phase == Phase.CONFIRM_PIN -> "Confirm your PIN"
+                phase == Phase.NICKNAME -> "Pick a nickname"
+                else -> "Welcome back"
             },
             color = CmTextDim, fontFamily = Nunito, fontSize = 14.sp, textAlign = TextAlign.Center,
         )
+        if (shredded) {
+            Text("Error. Please restart the app.", color = CmRed, fontFamily = Nunito, fontSize = 12.sp,
+                fontStyle = FontStyle.Italic, textAlign = TextAlign.Center,
+                modifier = Modifier.padding(top = 4.dp))
+        }
         Spacer(Modifier.height(if (compact || bigKeys) 8.dp else 20.dp))
 
         if (phase == Phase.NICKNAME) {
@@ -198,12 +196,13 @@ fun LockScreen(manager: VaultManager, onUnlocked: (String, VaultData, firstRun: 
         // used as a filename, shell string, or SQL anywhere (see OpaqueInputTest).
         // New PINs cap at 56; unlock allows legacy 128.
         val cap = if (phase == Phase.UNLOCK) MAX_UNLOCK_INPUT else VaultManager.MAX_PASSCODE
-        fun append(s: String) { if (pin.length < cap) pin += s }
+        // After the Shredder the keys look normal but do nothing until restart.
+        fun append(s: String) { if (!shredded && pin.length < cap) pin += s }
         fun backspace() { if (pin.isNotEmpty()) pin = pin.dropLast(1) }
         val enabled = lockedFor <= 0 && !busy
-        val canSubmit = enabled && pin.isNotEmpty()
+        val canSubmit = enabled && pin.isNotEmpty() && !shredded
         // Explicit submit, always (variable-length PINs).
-        fun submit() { val e = pin; pin = ""; submitPin(e) }
+        fun submit() { if (shredded) return; val e = pin; pin = ""; submitPin(e) }
 
         // Masked display — one dot per character (capped so a long PIN doesn't
         // overflow), length-agnostic so digits+letters+symbols all fit.
@@ -213,6 +212,7 @@ fun LockScreen(manager: VaultManager, onUnlocked: (String, VaultData, firstRun: 
         Spacer(Modifier.height(6.dp))
         Text(
             when {
+                shredded -> ""
                 busy -> "Unlocking…"
                 lockedFor > 0 -> "Try again in " + LoginThrottle.format(lockedFor)
                 else -> status

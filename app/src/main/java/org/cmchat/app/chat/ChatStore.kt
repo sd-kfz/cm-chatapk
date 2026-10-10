@@ -94,9 +94,26 @@ object ChatStore {
         })
     }
 
-    fun erase(chatId: String) = update(chatId) { ChatThread(teamHour = it.teamHour) }
+    /** Erase the conversation. The Team Clock and "last seen" are not chat
+     * content, so they stay. */
+    fun erase(chatId: String) = update(chatId) { ChatThread(teamHour = it.teamHour, peerLastSeen = it.peerLastSeen) }
 
-    fun touchPeer(chatId: String) = update(chatId) { it.copy(peerLastSeen = System.currentTimeMillis()) }
+    /** The friend is gone (deleted / terminated): drop everything about them. */
+    fun forget(chatId: String) = _threads.update { it - chatId }
+
+    fun touchPeer(chatId: String, at: Long = System.currentTimeMillis()) =
+        update(chatId) { it.copy(peerLastSeen = maxOf(at, it.peerLastSeen ?: 0L)) }
+
+    /**
+     * I'm Online with this chat on screen: everything in it is now SEEN — the
+     * orange dot and every "Missed Message" mark clear (and seen-based timers run).
+     */
+    fun markSeen(chatId: String, now: Long = System.currentTimeMillis()) = update(chatId) { t ->
+        if (!t.unread && t.messages.none { it.missed }) t
+        else t.copy(unread = false, messages = t.messages.map {
+            if (it.missed) it.copy(missed = false, seenAt = it.seenAt ?: now) else it
+        })
+    }
 
     /** A Buzz arrived from this friend (blue dot until the chat is opened). */
     fun markBuzzed(chatId: String) = update(chatId) { it.copy(buzzed = true) }
@@ -139,7 +156,7 @@ object ChatStore {
 
     /** A Team Clock change (from the friend, or mine): set it + a grey system line. */
     fun setTeamHour(chatId: String, value: String?, byName: String) = update(chatId) {
-        val what = TeamClock.decode(value)?.let { "set the Team Clock to ${TeamClock.label(it)}" }
+        val what = TeamClock.decode(value)?.let { "set the Team Clock to ${TeamClock.time12(System.currentTimeMillis(), it)}" }
             ?: "turned the Team Clock off"
         it.copy(
             teamHour = value,

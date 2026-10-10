@@ -35,10 +35,24 @@ class TeamClockDecoyBuzzTest {
 
     @Test
     fun team_clock_rejects_anything_not_exactly_canonical() {
-        for (bad in listOf(null, "", "UTC", "utc+02:00", " UTC+02:00", "UTC+02:00 ", "UTC+2", "UTC+02:07",
+        for (bad in listOf(null, "", "UTC", "utc+02:00", " UTC+02:00", "UTC+02:00 ", "UTC+2",
             "UTC+15:00", "UTC-13:00", "UTC+02:60", "GMT+02:00", "UTC+02:00;rm -rf /", "Team at noon")) {
             assertNull("must reject: $bad", TeamClock.decode(bad))
         }
+    }
+
+    @Test
+    fun setting_the_clock_like_an_alarm_shows_exactly_that_time() {
+        val t = 1_700_000_000_000L + 13 * 60_000L          // any instant
+        for ((h, m) in listOf(0 to 0, 4 to 30, 12 to 0, 16 to 7, 23 to 59)) {
+            val off = TeamClock.offsetFor(h, m, t)
+            assertTrue("offset in range", TeamClock.isValid(off))
+            assertEquals(h to m, TeamClock.hourMinuteAt(t, off))
+            assertEquals(off, TeamClock.decode(TeamClock.encode(off)))   // survives the wire
+        }
+        assertEquals("4:07 PM", org.cmchat.app.chat.formatHm12(16, 7))
+        assertEquals("12:00 AM", org.cmchat.app.chat.formatHm12(0, 0))
+        assertEquals("12:30 PM", org.cmchat.app.chat.formatHm12(12, 30))
     }
 
     @Test
@@ -55,10 +69,15 @@ class TeamClockDecoyBuzzTest {
 
     @Test
     fun setting_the_team_clock_leaves_a_line_in_the_chat() {
+        val before = TeamClock.time12(System.currentTimeMillis(), 120)
         ChatStore.setTeamHour(chat, "UTC+02:00", "Alice")
+        val after = TeamClock.time12(System.currentTimeMillis(), 120)
         val t = ChatStore.thread(chat)
         assertEquals("UTC+02:00", t.teamHour)
-        assertEquals("Alice set the Team Clock to UTC+2", t.messages.last().text)
+        // No time zones on screen: the line shows the team time itself.
+        assertTrue(t.messages.last().text in setOf(
+            "Alice set the Team Clock to $before", "Alice set the Team Clock to $after"))
+        assertFalse(t.messages.last().text.contains("UTC"))
         ChatStore.setTeamHour(chat, null, "Alice")
         assertNull(ChatStore.thread(chat).teamHour)
         assertEquals("Alice turned the Team Clock off", ChatStore.thread(chat).messages.last().text)

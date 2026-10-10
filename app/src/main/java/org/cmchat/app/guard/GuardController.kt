@@ -39,8 +39,6 @@ object GuardController {
     /** Idle windows offered in Settings. */
     val CERBERUS_CHOICES = listOf(15, 30, 60, 90, 180)
 
-    /** Kill Timer durations offered in Settings (minutes; capped by KILL_MAX_MS). */
-    val KILL_CHOICES = listOf(15, 30, 60, 120, 360, 720, 1440)
 
     @Volatile private var cerberusIdleMs: Long = GuardLogic.CERBERUS_90_MIN
     @Volatile private var lastTouch: Long = System.currentTimeMillis()
@@ -71,6 +69,11 @@ object GuardController {
     fun armKillTimer(durationMs: Long) {
         val d = durationMs.coerceIn(0, GuardLogic.KILL_MAX_MS)
         _killDeadline.value = System.currentTimeMillis() + d
+    }
+
+    /** Arm the Kill Timer like an alarm: fires at the next [hour]:[minute]. */
+    fun armKillAt(hour: Int, minute: Int, now: Long = System.currentTimeMillis()) {
+        _killDeadline.value = GuardLogic.nextOccurrence(hour, minute, now)
     }
 
     fun cancelKillTimer() { _killDeadline.value = null }

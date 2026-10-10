@@ -17,12 +17,25 @@ import java.security.SecureRandom
 object Shredder {
 
     /**
-     * Set the moment the Shredder (duress) PIN is entered. While true the
-     * lock screen shows ONLY "Error. Please restart the app." and accepts NO
-     * input — no new-PIN prompt, no uninstall prompt, nothing that hints at a
-     * wipe. RAM-only, so it lasts exactly until the process restarts.
+     * Set the moment the Shredder (duress) PIN is entered. While true the normal
+     * lock screen shows a small red "Error. Please restart the app." under
+     * "Welcome back" and its keys do nothing. It is cleared the moment the app
+     * is closed / goes to the background ([reset]) — NOT only when the process
+     * dies (Android often keeps it alive, which used to leave a dead screen
+     * that only a reinstall cleared). RAM-only.
      */
     val tripped = kotlinx.coroutines.flow.MutableStateFlow(false)
+
+    /** Bumped by [reset]: the lock screen is rebuilt fresh (the vault is gone,
+     * so it starts clean at "Create a PIN" — never stuck). */
+    val epoch = kotlinx.coroutines.flow.MutableStateFlow(0)
+
+    /** The app was closed / left after a Shredder trip: clear the error state. */
+    fun reset() {
+        if (!tripped.value) return
+        tripped.value = false
+        epoch.value = epoch.value + 1
+    }
 
     private val scope = kotlinx.coroutines.CoroutineScope(
         kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)

@@ -32,7 +32,12 @@ import java.util.concurrent.ConcurrentHashMap
  *                 their acceptance (and any message) can reach me.
  *  ACCEPT         they tap Accept → they add me, and send KNOCK_ACCEPT over the
  *                 forward-secret channel. ANY authenticated frame from a pending
- *                 friend (accept or message) confirms them on my side.
+ *                 friend (accept or message) confirms them on my side. Pending
+ *                 friends are re-knocked whenever Tor comes online (a knock or an
+ *                 acceptance lost to a closed app is recovered); a pending add can
+ *                 be CANCELLED (their request card is withdrawn).
+ *  REMOVE         delete a friend (my side only), or TERMINATE (also removes me
+ *                 from their list when it reaches them; kept until delivered).
  *  MESSAGES       every frame to a friend goes over the v4 handshake in
  *                 [SecureChannel] (one-time prekey + X3DH + AEAD).
  *  NO RETRY BUTTON  everything outgoing goes through the silent [Outbox]: it
@@ -66,6 +71,19 @@ object MessageService {
     /** Set by AppNav to persist a Team Clock the friend set (null = turned off). */
     @Volatile
     var onTeamClockChanged: ((cmId: String, value: String?) -> Unit)? = null
+
+    /** Set by AppNav: a friend TERMINATED (removed me from their list) → drop them too. */
+    @Volatile
+    var onFriendTerminated: ((cmId: String) -> Unit)? = null
+
+    /** Set by AppNav: my TERMINATE reached that ex-friend → forget it was pending. */
+    @Volatile
+    var onTerminationDelivered: ((cmId: String) -> Unit)? = null
+
+    /** Set by AppNav: a friend was active (sent me something real) → persist a
+     * coarse "last seen" so "last seen recently" survives restarts and erases. */
+    @Volatile
+    var onPeerSeen: ((cmId: String, atMs: Long) -> Unit)? = null
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -133,11 +151,24 @@ object MessageService {
     private val declinedAt = ConcurrentHashMap<String, Long>()
     /** I can't re-knock the same person faster than this (no mash-storms). */
     private const val KNOCK_RESEND_MS = 60_000L
+    /** Automatic re-knock of a still-pending friend at most this often. */
+    private const val KNOCK_AUTO_RESEND_MS = 10 * 60_000L
     private val knockSentAt = ConcurrentHashMap<String, Long>()
+    /** Knocks that reached their phone THIS run: not re-sent automatically again
+     * (their request card is already there) until the next app start. */
+    private val knockDelivered: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    /** Ex-friends I TERMINATED whose phones haven't received it yet. */
+    private val terminations: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    /** "Last seen" is persisted at most this often per friend (it's coarse anyway). */
+    private const val SEEN_PERSIST_EVERY_MS = 30 * 60_000L
+    private val seenPersistedAt = ConcurrentHashMap<String, Long>()
 
     /**
      * Wire protocol version. Bumped whenever the framing/crypto changes so two
      * peers on different builds detect the mismatch instead of failing silently.
+     * v5 = v4 + TERMINATE + knock withdrawal + minute-precise Team Clock;
      * v4 = forward-secret handshake + decoy alert + Team Clock (v3 = forward
      * secrecy only; v2 = static crypto_box + replay counter).
      */
@@ -184,10 +215,14 @@ object MessageService {
         pending.clear()
         outbox.clear()
         knockSentAt.clear()
+        knockDelivered.clear()
         declinedAt.clear()
         relinked.clear()
+        terminations.clear()
+        seenPersistedAt.clear()
         _incomingKnocks.value = emptyList()   // a stranger's name + ID must not survive a wipe
         activeChatCmId = null
+        org.cmchat.app.vault.PendingVaultEdits.clear()
     }
 
     /** Drop every queued outgoing frame (wipe/exit paths). */
@@ -202,6 +237,7 @@ object MessageService {
         knownContactCmIds: List<String>,
         contactNames: Map<String, String> = emptyMap(),
         pendingCmIds: Collection<String> = emptyList(),
+        pendingTerminations: Collection<String> = emptyList(),
     ) {
         this.myName = myDisplayName
         this.myCmId = myCmId
@@ -223,12 +259,18 @@ object MessageService {
         pending.retainAll(freshPending)
         pending.addAll(freshPending)
         ServerController.onIncoming = { socket -> handleIncoming(socket) }
-        // Whenever Tor comes (back) online, retry anything queued right away.
+        // Terminations not yet delivered (kept in the vault) go out again.
+        pendingTerminations.forEach { id -> if (id !in terminations) queueTerminate(id) }
+        // Whenever Tor comes (back) online, retry anything queued right away and
+        // re-knock friends still pending.
         if (torWatch == null) {
             torWatch = scope.launch {
-                TorService.status.collect { if (it is TorStatus.Online) outbox.kickAll() }
+                TorService.status.collect {
+                    if (it is TorStatus.Online) { outbox.kickAll(); resendPendingKnocks() }
+                }
             }
         }
+        resendPendingKnocks()
     }
 
     // ---- outgoing ----------------------------------------------------------
@@ -252,21 +294,129 @@ object MessageService {
         val alreadyFriend = contacts.containsKey(cmId) && cmId !in pending
         contacts.putIfAbsent(cmId, target)
         if (!alreadyFriend) pending.add(cmId)
-        val payload = Messages.json.encodeToString(KnockPayload.serializer(), KnockPayload(myName, myId))
-            .toByteArray()
+        queueKnock(cmId, target)
+        return KnockResult.QUEUED
+    }
+
+    /**
+     * Queue an anonymous knock (or, with [withdraw], the withdrawal of one) to
+     * [target]. It carries my CURRENT name + CMC-ID; latest one per friend wins.
+     */
+    private fun queueKnock(cmId: String, target: CmIdData, withdraw: Boolean = false) {
+        val ch = channel ?: return
+        val myId = myCmId ?: return
+        val payload = Messages.json.encodeToString(KnockPayload.serializer(),
+            KnockPayload(myName, myId, withdraw)).toByteArray()
         val sealed = ch.sealKnock(payload, target.identityPubKeyHex)
-        ConnDiag.sys("Add friend: knock queued → ${Redact.onionShort(target.onion)}")
+        val what = if (withdraw) "request withdrawal" else "knock"
+        ConnDiag.sys("Add friend: $what queued → ${Redact.onionShort(target.onion)}")
         outbox.enqueue(Outbox.Item(
-            peer = cmId, label = "knock", replaceKey = "knock",
+            peer = cmId, label = what, replaceKey = "knock",
             deliver = {
                 withConnection(target) { s ->
                     Transport.writeFrame(s.getOutputStream(), sealed)
-                    ConnDiag.out("knock sent (anonymous sealed box, ${sealed.size}b)")
+                    ConnDiag.out("$what sent (anonymous sealed box, ${sealed.size}b)")
                 }
             },
-            onDelivered = { ConnDiag.sys("Add friend: knock delivered — waiting for them to accept") },
+            onDelivered = {
+                if (!withdraw) knockDelivered.add(cmId)
+                ConnDiag.sys(if (withdraw) "Add friend: request withdrawn on their phone"
+                    else "Add friend: knock delivered — waiting for them to accept")
+            },
         ))
-        return KnockResult.QUEUED
+    }
+
+    /**
+     * Re-knock every friend still PENDING (my knock, or their acceptance, may have
+     * been lost when an app was closed). Once per app run once it's delivered,
+     * and at most once per [KNOCK_AUTO_RESEND_MS] before that; their phone merges
+     * it (no duplicate card) or, if they already accepted, simply re-sends the
+     * acceptance — which resolves the pending.
+     */
+    internal fun resendPendingKnocks(now: Long = System.currentTimeMillis()) {
+        if (channel == null || myCmId == null) return
+        for (id in pending.toList()) {
+            if (id in knockDelivered) continue
+            val last = knockSentAt[id]
+            if (last != null && now - last < KNOCK_AUTO_RESEND_MS) continue
+            val target = contacts[id] ?: CmId.decode(id) ?: continue
+            knockSentAt[id] = now
+            queueKnock(id, target)
+        }
+    }
+
+    /**
+     * Cancel my still-pending add of [cmId]: forget them here and withdraw my
+     * request card from their phone (best-effort, anonymous like the knock).
+     */
+    fun cancelPending(cmId: String): Boolean {
+        val id = currentId(cmId)
+        if (id !in pending) return false
+        val target = contacts[id] ?: CmId.decode(id)
+        forget(id)
+        ConnDiag.sys("Add friend: request cancelled")
+        if (target != null) queueKnock(id, target, withdraw = true)
+        return true
+    }
+
+    /** Delete a friend on MY side only (their phone isn't told). */
+    fun deleteFriend(cmId: String) {
+        forget(currentId(cmId))
+        ConnDiag.sys("Friend deleted (my side)")
+    }
+
+    /**
+     * TERMINATE: delete the friend here AND remove me from their list once it
+     * reaches their phone. The caller keeps it (in the vault) until
+     * [onTerminationDelivered], so it survives an app restart.
+     */
+    fun terminateFriend(cmId: String): Boolean {
+        val id = currentId(cmId)
+        val peer = contacts[id] ?: CmId.decode(id) ?: return false
+        forget(id)
+        ConnDiag.sys("Terminate: queued (removes you from their list when it reaches them)")
+        queueTerminate(id, peer)
+        return true
+    }
+
+    private fun queueTerminate(cmId: String, peer: CmIdData? = CmId.decode(cmId)) {
+        if (peer == null || channel == null) return
+        terminations.add(cmId)
+        outbox.enqueue(Outbox.Item(peer = cmId, label = "terminate", replaceKey = "terminate",
+            deliver = {
+                try {
+                    sendSecure(peer, FrameType.TERMINATE, ByteArray(0))
+                } catch (e: SecureWire.HandshakeFailed) {
+                    // Their phone answered but no longer accepts me as a friend:
+                    // they already dropped me — that IS the goal.
+                    if (e.message?.startsWith("no prekey reply") != true) throw e
+                }
+            },
+            stillWanted = { cmId in terminations },
+            onDelivered = {
+                terminations.remove(cmId)
+                ConnDiag.sys("Terminate: delivered — you're off their list")
+                onTerminationDelivered?.invoke(cmId)
+            }))
+    }
+
+    /**
+     * Drop [cmId] from every RAM table — friend, nickname, pending flag, old
+     * addresses, queued frames, the chat itself. (The vault is the caller's.)
+     */
+    private fun forget(cmId: String) {
+        val keys = HashSet<String>()
+        synchronized(relinkLock) {
+            keys += cmId
+            relinked.keys.filter { currentId(it) == cmId }.forEach { keys += it }
+            keys.forEach { k ->
+                relinked.remove(k)
+                contacts.remove(k); names.remove(k); pending.remove(k)
+                ChatStore.forget(k)
+                if (activeChatCmId == k) activeChatCmId = null
+            }
+        }
+        keys.forEach { k -> outbox.clearPeer(k); knockSentAt.remove(k); knockDelivered.remove(k); seenPersistedAt.remove(k) }
     }
 
     /** Is this friend still waiting to accept me? */
@@ -459,6 +609,9 @@ object MessageService {
                     // pending one, and retry anything queued for them right now.
                     confirmIfPending(r.cmId)
                     outbox.kick(r.cmId)
+                    // Anything they deliberately sent = they were around ("last
+                    // seen recently"). Cover traffic is noise and doesn't count.
+                    if (r.type != FrameType.COVER) markSeen(r.cmId)
                     if (buzzOnlyMode) dispatchBuzzOnly(r.cmId, r.type)
                     else dispatchFromContact(r.cmId, peer, r.type, r.body)
                 }
@@ -486,6 +639,16 @@ object MessageService {
         }
     }
 
+    /** A friend was active: refresh "last seen" (RAM) and, now and then, persist it. */
+    private fun markSeen(fromCmId: String, now: Long = System.currentTimeMillis()) {
+        val id = inChat(fromCmId) { id -> ChatStore.touchPeer(id, now); id }
+        val last = seenPersistedAt[id]
+        if (last == null || now - last >= SEEN_PERSIST_EVERY_MS) {
+            seenPersistedAt[id] = now
+            onPeerSeen?.invoke(id, now)
+        }
+    }
+
     /**
      * A knock (friend request). It ALWAYS reaches the Friends screen, even while
      * I'm Invisible — first contact has to get through somehow — but it's
@@ -497,6 +660,15 @@ object MessageService {
         val kp = decodeKnock(body) ?: return
         if (CmId.decode(kp.cmId) == null || kp.cmId == myCmId) {
             ConnDiag.inc("KNOCK ignored (malformed or my own ID)"); return
+        }
+        if (kp.withdraw) {
+            // They cancelled their request: take the card away (nothing else).
+            val cur = _incomingKnocks.value
+            if (cur.any { it.cmId == kp.cmId }) {
+                _incomingKnocks.value = cur.filterNot { it.cmId == kp.cmId }
+                ConnDiag.inc("KNOCK withdrawn by the sender → request removed")
+            }
+            return
         }
         val now = System.currentTimeMillis()
         declinedAt[kp.cmId]?.let { if (now - it < DECLINE_COOLDOWN_MS) {
@@ -559,7 +731,14 @@ object MessageService {
                 onTeamClockChanged?.invoke(chatCmId, value)
             }
             FrameType.ERASE_CHAT -> inChat(fromCmId) { ChatStore.erase(it) }
-            FrameType.KNOCK_ACCEPT -> inChat(fromCmId) { ChatStore.touchPeer(it) }   // confirmed above
+            FrameType.KNOCK_ACCEPT -> {}   // confirmed + marked seen above
+            FrameType.TERMINATE -> {
+                // They removed me from their list: remove them from mine too.
+                val id = currentId(fromCmId)
+                ConnDiag.inc("friend removed you (terminate) → removed them too")
+                forget(id)
+                onFriendTerminated?.invoke(id)
+            }
             FrameType.BUZZ -> onBuzz(fromCmId)
             FrameType.ADDR_UPDATE -> onAddressUpdate(currentId(fromCmId), peer, body)
             FrameType.COVER -> ConnDiag.inc("cover frame discarded")
@@ -603,6 +782,11 @@ object MessageService {
         when (type) {
             FrameType.BUZZ -> onBuzz(chatCmId)
             FrameType.DECOY_ALERT -> onDecoyAlert(chatCmId)
+            FrameType.TERMINATE -> {
+                val id = currentId(chatCmId)
+                forget(id)
+                onFriendTerminated?.invoke(id)
+            }
             else -> {}
         }
     }
@@ -624,9 +808,9 @@ object MessageService {
         // otherwise leave a blue Buzz dot on that friend until the chat is opened.
         org.cmchat.app.buzz.BuzzPolicy.requestShake(chatCmId)
         inChat(chatCmId) { id -> if (activeChatCmId != id) ChatStore.markBuzzed(id) }
-        // Generic "Activity" bar notification; nickname only if opted in.
+        // A real notification in the bar (heads-up + vibration), generic text only.
         org.cmchat.app.settings.AppSettings.appContext?.let { ctx ->
-            org.cmchat.app.notify.Notifier.activity(ctx)
+            org.cmchat.app.notify.Notifier.buzz(ctx)
         }
     }
 

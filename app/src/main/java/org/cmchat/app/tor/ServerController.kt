@@ -94,6 +94,46 @@ object ServerController {
     @Volatile
     var onIncoming: ((java.net.Socket) -> Unit)? = null
 
+    // ---- survive Tor restarts ------------------------------------------------
+    /** What is published right now (so a Tor restart can bring it back). */
+    private data class Published(val faceName: String, val key: String?, val onion: String?)
+    @Volatile private var lastPublished: Published? = null
+    /** Tor restarted under a running server: re-publish this once Tor is Online. */
+    @Volatile private var resumeOnOnline: Published? = null
+    @Volatile private var torWatch: kotlinx.coroutines.Job? = null
+
+    /**
+     * Tor is restarting (network switch, watchdog, bridges change). Its onion
+     * services die with it, so take the server down — but bring it back BY
+     * ITSELF once Tor is Online again, even while the app is locked. (Before,
+     * only an unlocked app re-published, so after a network switch in the
+     * background the phone silently stopped receiving anything.)
+     */
+    fun pauseForTorRestart() {
+        val again = lastPublished?.takeIf {
+            _status.value is ServerStatus.Online || _status.value is ServerStatus.Starting
+        }
+        stop()
+        resumeOnOnline = again
+        if (again != null) {
+            org.cmchat.app.diag.ConnDiag.sys("server paused for a Tor restart — republishes when Tor is back")
+        }
+    }
+
+    private fun ensureTorWatch() {
+        if (torWatch != null) return
+        torWatch = scope.launch {
+            TorService.status.collect { st ->
+                val again = resumeOnOnline
+                if (st is TorStatus.Online && again != null) {
+                    resumeOnOnline = null
+                    org.cmchat.app.diag.ConnDiag.sys("Tor back — republishing my server")
+                    start(again.faceName, again.key, again.onion) {}
+                }
+            }
+        }
+    }
+
     @Synchronized
     private fun acceptAllowed(): Boolean {
         val now = System.currentTimeMillis()
@@ -120,6 +160,7 @@ object ServerController {
         if (_status.value is ServerStatus.Online && activeKey == existingOnionKey) return
         // A publish is already in flight: never queue another one behind it.
         if (_status.value is ServerStatus.Starting) return
+        ensureTorWatch()
         scope.launch {
             // Single-flight: never run two publishes concurrently.
             publishMutex.withLock {
@@ -159,6 +200,7 @@ object ServerController {
                     OnionPublish("$addr.onion", priv)
                 }
                 result.onSuccess { pub ->
+                    lastPublished = Published(faceName, activeKey, pub.onion)
                     onPublished(pub)
                     org.cmchat.app.diag.Diag.i("onion", "published ${org.cmchat.app.diag.Redact.onionShort(pub.onion)}")
                     _status.value = ServerStatus.Online(pub.onion, faceName, System.currentTimeMillis())
@@ -230,6 +272,7 @@ object ServerController {
                     OnionPublish("$addr.onion", priv)
                 }.onSuccess { pub ->
                     _status.value = ServerStatus.Online(pub.onion, faceName, System.currentTimeMillis())
+                    lastPublished = Published(faceName, pub.newPrivateKey, pub.onion)
                     onNew(pub)
                     org.cmchat.app.diag.Diag.i("onion", "rotated to new address")
                     // Keep the old address alive ~24h, then remove it.
@@ -248,6 +291,8 @@ object ServerController {
     }
 
     fun stop() {
+        // An explicit stop never comes back by itself.
+        resumeOnOnline = null
         // Flip state synchronously so a following start()/restart() re-publishes.
         _status.value = ServerStatus.Off
         val id = currentServiceId

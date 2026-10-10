@@ -128,11 +128,20 @@ class SpineLoopbackTest {
         fun text(id: String, text: String) = send(FrameType.MSG,
             Messages.json.encodeToString(TextPayload.serializer(), TextPayload(id, text, "off")).toByteArray())
 
-        /** "Add friend" from this phone: an anonymous sealed knock to Alice. */
-        fun knock() {
-            val body = Messages.json.encodeToString(KnockPayload.serializer(), KnockPayload(name, cmId)).toByteArray()
+        /** "Add friend" from this phone: an anonymous sealed knock to Alice
+         * ([withdraw] = "I cancelled my request"). */
+        fun knock(withdraw: Boolean = false) {
+            val body = Messages.json.encodeToString(KnockPayload.serializer(),
+                KnockPayload(name, cmId, withdraw)).toByteArray()
             val sealed = ch.sealKnock(body, aPub)
             toAlice { s -> Transport.writeFrame(s.getOutputStream(), sealed) }
+        }
+
+        /** The next knock this phone received, decoded. */
+        fun nextKnock(ms: Long = 15_000): KnockPayload {
+            val r = next(ms)
+            if (r !is SecureWire.Received.Knock) throw AssertionError("$name expected a knock, got $r")
+            return Messages.json.decodeFromString(KnockPayload.serializer(), String(r.body))
         }
 
         fun next(ms: Long = 15_000): SecureWire.Received =
@@ -156,8 +165,12 @@ class SpineLoopbackTest {
     private fun textOf(m: SecureWire.Received.Message) =
         Messages.json.decodeFromString(TextPayload.serializer(), String(m.body)).text
 
-    private fun configureAlice(friends: List<String> = emptyList()) =
-        MessageService.configure(crypto, "Alice", aPub, aSec, aliceId, friends)
+    private fun configureAlice(
+        friends: List<String> = emptyList(),
+        pending: List<String> = emptyList(),
+        terminations: List<String> = emptyList(),
+    ) = MessageService.configure(crypto, "Alice", aPub, aSec, aliceId, friends,
+        pendingCmIds = pending, pendingTerminations = terminations)
 
     @Before
     fun setUp() {
@@ -197,7 +210,14 @@ class SpineLoopbackTest {
         }
         MessageService.onFriendConfirmed = { confirmed += it }
         MessageService.onContactAccepted = { accepted += it }
+        MessageService.onFriendTerminated = { terminatedBy += it }
+        MessageService.onTerminationDelivered = { terminationsDone += it }
+        MessageService.onPeerSeen = { id, at -> seenEvents += id to at }
     }
+
+    private val terminatedBy = CopyOnWriteArrayList<String>()
+    private val terminationsDone = CopyOnWriteArrayList<String>()
+    private val seenEvents = CopyOnWriteArrayList<Pair<String, Long>>()
 
     @After
     fun tearDown() {
@@ -205,6 +225,9 @@ class SpineLoopbackTest {
         MessageService.dialer = realDialer
         MessageService.onFriendConfirmed = null
         MessageService.onContactAccepted = null
+        MessageService.onFriendTerminated = null
+        MessageService.onTerminationDelivered = null
+        MessageService.onPeerSeen = null
         ServerController.onIncoming = null
         runCatching { aliceServer.close() }
         phones.forEach { it.down() }
@@ -428,5 +451,149 @@ class SpineLoopbackTest {
         configureAlice(friends = listOf(oldId))
         MessageService.sendText(oldId, "still here", SelfTimer.OFF)
         assertEquals("still here", textOf(bob.nextFrame()))
+    }
+
+    // ---- pending: re-knock, cancel ------------------------------------------
+
+    /** A pending add whose knock (or their acceptance) was lost to a closed app
+     *  is re-knocked by itself on the next start — no stuck "Pending". */
+    @Test
+    fun a_pending_friend_is_re_knocked_on_the_next_start() {
+        val bob = Phone("Bob", 'b').also { it.up() }
+        configureAlice(friends = listOf(bob.cmId), pending = listOf(bob.cmId))   // app restarted
+        val k = bob.nextKnock()
+        assertEquals(aliceId, k.cmId)
+        assertFalse(k.withdraw)
+        // Bob had already accepted: his acceptance resolves the pending.
+        bob.friends[aliceId] = aPub
+        bob.send(FrameType.KNOCK_ACCEPT,
+            Messages.json.encodeToString(KnockPayload.serializer(), KnockPayload("Bob", bob.cmId)).toByteArray())
+        waitUntil("pending resolved") { !MessageService.isPending(bob.cmId) && bob.cmId in confirmed }
+        // No knock storm: configuring again right away doesn't re-knock.
+        configureAlice(friends = listOf(bob.cmId))
+        assertNull(bob.inbox.poll(800, TimeUnit.MILLISECONDS))
+    }
+
+    @Test
+    fun cancelling_a_pending_add_forgets_them_and_withdraws_the_card() {
+        val bob = Phone("Bob", 'b').also { it.up() }
+        configureAlice()
+        assertEquals(KnockResult.QUEUED, MessageService.sendKnock(bob.cmId))
+        assertFalse(bob.nextKnock().withdraw)
+
+        assertTrue(MessageService.cancelPending(bob.cmId))
+        assertFalse(MessageService.isPending(bob.cmId))
+        val w = bob.nextKnock()
+        assertTrue("Bob's phone is told to drop the request card", w.withdraw)
+        assertEquals(aliceId, w.cmId)
+        // Alice no longer accepts frames from Bob (he's not on her list).
+        bob.friends[aliceId] = aPub
+        runCatching { bob.text("b-1", "hello?") }
+        Thread.sleep(300)
+        assertTrue(ChatStore.thread(bob.cmId).messages.isEmpty())
+    }
+
+    @Test
+    fun a_withdrawn_knock_removes_the_request_card() {
+        val carol = Phone("Carol", 'c').also { it.up() }
+        configureAlice()
+        carol.knock()
+        waitUntil("card shown") { MessageService.incomingKnocks.value.any { it.cmId == carol.cmId } }
+        carol.knock(withdraw = true)
+        waitUntil("card withdrawn") { MessageService.incomingKnocks.value.isEmpty() }
+    }
+
+    // ---- delete / terminate --------------------------------------------------
+
+    @Test
+    fun terminate_reaches_their_phone_and_removes_them_here() {
+        val bob = Phone("Bob", 'b').also { it.up() }
+        bob.friends[aliceId] = aPub
+        configureAlice(friends = listOf(bob.cmId))
+        bob.text("b-1", "hi")
+        waitUntil("chat exists") { ChatStore.thread(bob.cmId).messages.isNotEmpty() }
+
+        assertTrue(MessageService.terminateFriend(bob.cmId))
+        assertTrue("gone from my side at once", ChatStore.threads.value[bob.cmId] == null)
+        val t = bob.nextFrame()
+        assertEquals(FrameType.TERMINATE, t.type)
+        assertEquals(aliceId, t.cmId)
+        waitUntil("delivery recorded") { bob.cmId in terminationsDone }
+    }
+
+    @Test
+    fun a_terminate_kept_from_last_run_is_delivered_on_start() {
+        val bob = Phone("Bob", 'b').also { it.up() }
+        bob.friends[aliceId] = aPub
+        configureAlice(terminations = listOf(bob.cmId))   // saved in the vault last run
+        assertEquals(FrameType.TERMINATE, bob.nextFrame().type)
+        waitUntil("delivery recorded") { bob.cmId in terminationsDone }
+    }
+
+    @Test
+    fun when_a_friend_terminates_me_they_are_removed_here_too() {
+        val bob = Phone("Bob", 'b').also { it.up() }
+        bob.friends[aliceId] = aPub
+        configureAlice(friends = listOf(bob.cmId))
+        bob.text("b-1", "bye")
+        waitUntil("chat exists") { ChatStore.thread(bob.cmId).messages.isNotEmpty() }
+        bob.send(FrameType.TERMINATE, ByteArray(0))
+        waitUntil("removed here") { bob.cmId in terminatedBy }
+        assertTrue(ChatStore.threads.value[bob.cmId] == null)
+        // Nothing more from him gets in.
+        runCatching { bob.text("b-2", "still there?") }
+        Thread.sleep(300)
+        assertTrue(ChatStore.threads.value[bob.cmId]?.messages.isNullOrEmpty())
+    }
+
+    @Test
+    fun delete_friend_is_my_side_only() {
+        val bob = Phone("Bob", 'b').also { it.up() }
+        bob.friends[aliceId] = aPub
+        configureAlice(friends = listOf(bob.cmId))
+        MessageService.deleteFriend(bob.cmId)
+        // Nothing is sent to Bob.
+        assertNull(bob.inbox.poll(800, TimeUnit.MILLISECONDS))
+        // And his frames no longer get in.
+        runCatching { bob.text("b-1", "hey") }
+        Thread.sleep(300)
+        assertTrue(ChatStore.threads.value[bob.cmId]?.messages.isNullOrEmpty())
+    }
+
+    // ---- last seen, missed ----------------------------------------------------
+
+    @Test
+    fun last_seen_comes_from_anything_they_send_and_survives_an_erase() {
+        val bob = Phone("Bob", 'b').also { it.up() }
+        bob.friends[aliceId] = aPub
+        configureAlice(friends = listOf(bob.cmId))
+        bob.send(FrameType.BUZZ, ByteArray(0))            // not a message — still "seen"
+        waitUntil("seen") { ChatStore.thread(bob.cmId).peerLastSeen != null }
+        waitUntil("persist requested once") { seenEvents.count { it.first == bob.cmId } == 1 }
+        bob.text("b-1", "hi")
+        waitUntil("message in") { ChatStore.thread(bob.cmId).messages.isNotEmpty() }
+        assertEquals("persisted at most every 30 min", 1, seenEvents.count { it.first == bob.cmId })
+        // Wiping the conversation doesn't wipe "last seen recently".
+        MessageService.sendErase(bob.cmId)
+        assertTrue(ChatStore.thread(bob.cmId).messages.isEmpty())
+        assertTrue(ChatStore.thread(bob.cmId).peerLastSeen != null)
+    }
+
+    @Test
+    fun missed_messages_clear_once_seen_online() {
+        val bob = Phone("Bob", 'b').also { it.up() }
+        bob.friends[aliceId] = aPub
+        configureAlice(friends = listOf(bob.cmId))
+        AppSettings.invisibleMode.value = true
+        bob.text("b-1", "you there?")
+        waitUntil("held as missed") { ChatStore.thread(bob.cmId).messages.any { it.missed } }
+        assertTrue(ChatStore.thread(bob.cmId).unread)
+        // Go Online and open the chat:
+        AppSettings.invisibleMode.value = false
+        ChatStore.markSeen(bob.cmId)
+        val t = ChatStore.thread(bob.cmId)
+        assertFalse(t.unread)
+        assertTrue(t.messages.none { it.missed })
+        assertTrue(t.messages.single().seenAt != null)
     }
 }

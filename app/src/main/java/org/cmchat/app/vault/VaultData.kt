@@ -34,7 +34,14 @@ data class ContactRec(
     /** I added (knocked) them; they haven't accepted yet. Cleared by their
      * acceptance or any authenticated frame from them. */
     val pending: Boolean = false,
+    /** When they were last active, rounded DOWN to the hour, kept at most 24 h —
+     * so "last seen recently" survives restarts and chat erases. Never exact. */
+    val lastSeenAt: Long? = null,
 )
+
+/** A TERMINATE I sent that hasn't reached the ex-friend's phone yet. */
+@Serializable
+data class PendingTermination(val cmId: String, val sinceMs: Long)
 
 @Serializable
 data class VaultSettings(
@@ -66,4 +73,6 @@ data class VaultData(
     val faces: List<Face> = emptyList(),
     val contacts: List<ContactRec> = emptyList(),
     val settings: VaultSettings = VaultSettings(),
+    /** Terminations still to deliver (retried on every start, given up after 7 days). */
+    val terminations: List<PendingTermination> = emptyList(),
 )

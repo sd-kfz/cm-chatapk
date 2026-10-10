@@ -20,7 +20,40 @@ continue.
 - Release signing: not set up yet (release APK is unsigned). Stable-key
   signing via GitHub secrets is a later step; see "Signing TODO" below.
 
-## Spine working + critical fixes (latest)
+## Fixes from real-device testing (latest)
+- **A · Add-friend delivery:** root cause found — a Tor restart (network switch /
+  watchdog) killed my onion and only an UNLOCKED app re-published it, so a phone in
+  the background silently stopped receiving anything. `ServerController` now
+  re-publishes by itself when Tor is back (`pauseForTorRestart`). Pending friends
+  are re-knocked on start / Tor online (once per run after delivery); a knock from
+  an existing friend re-sends my acceptance; pending adds can be CANCELLED (row
+  "Cancel" → forgotten here + the request card withdrawn on their phone). Add-friend
+  screen: form scrolls, "Add friend" pinned at the bottom (adjustResize).
+- **B · Shredder:** no full-screen brick. Normal lock screen, small red italic
+  "Error. Please restart the app." under "Welcome back", keys inert; leaving the
+  app clears it (`Shredder.reset` on background) and a fresh lock screen starts
+  clean ("Create a PIN"). The old dead screen happened because Android kept the
+  process alive, so the RAM flag never cleared → reinstall.
+- **C · Chat red X:** Wipe conversation (both sides) / Delete friend (mine) /
+  Terminate (new TERMINATE frame: removes me from their list when it lands; kept in
+  the vault and retried until delivered, given up after 7 days). Two confirmations each.
+- **D:** h:mm AM/PM timestamps; "Missed" clears once Online with the chat open
+  (`ChatStore.markSeen`); Buzz posts a heads-up notification (own HIGH channel).
+- **E · Last seen:** from ANY deliberate frame (not cover traffic); kept through chat
+  erases; persisted coarse (hour, ≤24 h) in the vault.
+- **F · Clocks:** Team Clock + Kill Timer use an alarm-style picker (dial; compact
+  input on small screens); no time zones shown. Team Clock now minute-precise.
+- **G · Privacy PIN:** number pad, digits only (an older letter PIN can still verify).
+- **H · Chat layout:** rebuilt as a plain stack: top bar (back · name/last seen · X),
+  one scrollable status strip (Cerberus, timer, Kill, Team Clock — each its own pill;
+  hidden on very short windows), messages take the rest, composer with its own send.
+- **Also:** friend changes made while locked buffered process-wide
+  (`PendingVaultEdits`) and written in one save; all vault saves serialized (UI and
+  network threads could overwrite each other). Wire **v5** (both phones must update).
+- Tests: 116 green (SpineLoopbackTest ×19, PendingVaultEditsTest, alarm/clock tests);
+  new paths mutation-checked; network suites 10/10 on one CPU.
+
+## Spine working + critical fixes
 Goal: a WORKING add-contact → connect → send → receive path. Cloud-verified with
 loopback tests that drive the REAL MessageService; Tor itself needs two phones.
 - **Add friend = knock + pending friend.** `sendKnock` adds them on MY side at once

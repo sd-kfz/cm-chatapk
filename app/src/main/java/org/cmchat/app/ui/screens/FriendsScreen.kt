@@ -67,6 +67,8 @@ fun FriendsScreen(
     onOpenChat: (Contact) -> Unit,
     onOpenSettings: () -> Unit,
     onAddFriend: () -> Unit = {},
+    /** Cancel a still-pending add (removes them; withdraws the request card). */
+    onCancelPending: (Contact) -> Unit = {},
     onOpenTool: (String) -> Unit = {},
     onMinimise: () -> Unit = {},
     onExit: () -> Unit = {},
@@ -80,6 +82,23 @@ fun FriendsScreen(
     val invisible by org.cmchat.app.settings.AppSettings.invisibleMode.collectAsState()
     val versionMismatch by MessageService.versionMismatch.collectAsState()
     val online = torStatus is TorStatus.Online
+    var cancelFor by remember { mutableStateOf<Contact?>(null) }
+    cancelFor?.let { c ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { cancelFor = null },
+            title = { Text("Cancel your request?") },
+            text = { Text("${c.name} is removed from your list, and your friend request is " +
+                "taken back from their phone.") },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { cancelFor = null; onCancelPending(c) }) {
+                    Text("Cancel request", color = CmRed)
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { cancelFor = null }) { Text("Keep waiting") }
+            },
+        )
+    }
 
     Box(Modifier.fillMaxSize().background(CmBackground)) {
         Column(Modifier.fillMaxSize().padding(horizontal = 14.dp)) {
@@ -160,7 +179,7 @@ fun FriendsScreen(
                 verticalArrangement = Arrangement.spacedBy(5.dp),
                 contentPadding = PaddingValues(bottom = 80.dp),  // clear the "+"
             ) {
-                items(contacts) { c -> FriendRow(c, online, onOpenChat) }
+                items(contacts) { c -> FriendRow(c, online, onOpenChat, onCancel = { cancelFor = c }) }
             }
 
             // Tools dock (only when a tool is enabled) — behaviour unchanged.
@@ -307,7 +326,7 @@ private fun StatusLine(online: Boolean, status: TorStatus, invisible: Boolean, o
  * the right — ORANGE = new/missed message, BLUE = a Buzz, TEAL = seen recently.
  */
 @Composable
-private fun FriendRow(c: Contact, online: Boolean, onOpenChat: (Contact) -> Unit) {
+private fun FriendRow(c: Contact, online: Boolean, onOpenChat: (Contact) -> Unit, onCancel: () -> Unit = {}) {
     val recent = c.lastSeenMs != null && System.currentTimeMillis() - c.lastSeenMs <= 24 * 3_600_000L
     @OptIn(ExperimentalFoundationApi::class)
     Row(
@@ -335,6 +354,12 @@ private fun FriendRow(c: Contact, online: Boolean, onOpenChat: (Contact) -> Unit
                 c.buzzed -> Text("Buzzed you", color = CmBuzzBlue, fontFamily = Nunito, fontSize = 11.sp)
                 recent -> Text("last seen recently", color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp)
             }
+        }
+        if (c.pending) {
+            // A pending add can be cancelled right here.
+            Text("Cancel", color = CmRed, fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { onCancel() }
+                    .padding(horizontal = 10.dp, vertical = 6.dp))
         }
         Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
             if (c.unread || c.missed) Dot(CmOrange)

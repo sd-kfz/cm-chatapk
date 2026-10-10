@@ -4,6 +4,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -58,6 +60,18 @@ fun KnockScreen(
         )
     }
 
+    fun submit() {
+        val id = cmId.trim()
+        when {
+            CmId.decode(id) == null -> error = "That doesn't look like a CMC-ID"
+            myCmId != null && id == myCmId -> error = "That's your own ID 🙂"
+            nickname.isBlank() -> error = "Pick a nickname"
+            else -> onSend(id, nickname.trim())?.let { error = it }
+        }
+    }
+
+    // The form scrolls; the Add button is pinned at the bottom (above the
+    // keyboard too), so it can never fall below the fold on a small phone.
     Column(Modifier.fillMaxSize().background(CmBackground)) {
         Box(Modifier.fillMaxWidth().padding(16.dp)) {
             Text("‹ Back", color = CmBlue, fontFamily = Nunito, fontSize = 15.sp,
@@ -66,7 +80,8 @@ fun KnockScreen(
                 fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
         }
 
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             val colors = TextFieldDefaults.colors(
                 focusedContainerColor = CmCard, unfocusedContainerColor = CmCard,
                 focusedTextColor = CmText, unfocusedTextColor = CmText, cursorColor = CmBlue,
@@ -74,19 +89,19 @@ fun KnockScreen(
             OutlinedTextField(
                 value = cmId, onValueChange = { cmId = it; error = null; scanned = false },
                 label = { Text("Their CMC-ID (cmc1:…)", color = CmTextDim) },
-                singleLine = false, colors = colors, modifier = Modifier.fillMaxWidth(),
+                singleLine = false, maxLines = 4, colors = colors, modifier = Modifier.fillMaxWidth(),
             )
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Box(Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).background(CmCard)
                     .clickable { openScanner() }
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(horizontal = 12.dp, vertical = 12.dp),
                     contentAlignment = Alignment.Center) {
                     Text("Scan their QR", color = CmBlue, fontFamily = Nunito, fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold)
                 }
                 Box(Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).background(CmCard)
                     .clickable { onShowMyQr() }
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(horizontal = 12.dp, vertical = 12.dp),
                     contentAlignment = Alignment.Center) {
                     Text("Show my QR", color = CmBlue, fontFamily = Nunito, fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold)
@@ -102,25 +117,20 @@ fun KnockScreen(
                     fontFamily = Nunito, fontSize = 13.sp)
             }
             error?.let { Text(it, color = CmRed, fontFamily = Nunito, fontSize = 13.sp) }
-
-            Box(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(CmBlue)
-                    .clickable {
-                        val id = cmId.trim()
-                        when {
-                            CmId.decode(id) == null -> error = "That doesn't look like a CMC-ID"
-                            myCmId != null && id == myCmId -> error = "That's your own ID 🙂"
-                            nickname.isBlank() -> error = "Pick a nickname"
-                            else -> onSend(id, nickname.trim())?.let { error = it }
-                        }
-                    }
-                    .padding(vertical = 13.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("Add friend", color = CmBackground,
-                    fontFamily = Nunito, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-            }
+            Text("They get a friend request (even if they're Invisible). You'll see them as " +
+                "\"Waiting for them to accept\" until they do — you can cancel it there.",
+                color = CmTextFaint, fontFamily = Nunito, fontSize = 12.sp)
+            Spacer(Modifier.height(8.dp))
         }
-        Spacer(Modifier.weight(1f))
+
+        Box(
+            Modifier.fillMaxWidth().padding(16.dp).clip(RoundedCornerShape(14.dp)).background(CmBlue)
+                .clickable { submit() }
+                .padding(vertical = 14.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("Add friend", color = CmBackground,
+                fontFamily = Nunito, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        }
     }
 }

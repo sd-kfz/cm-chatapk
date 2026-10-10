@@ -91,6 +91,15 @@ class Outbox(
         }
     }
 
+    /** Drop everything queued for ONE friend (deleted / cancelled). */
+    fun clearPeer(peer: String) {
+        synchronized(lock) {
+            queues.remove(peer)
+            workers.remove(peer)?.cancel()
+            pokes.remove(peer)
+        }
+    }
+
     fun size(): Int = synchronized(lock) { queues.values.sumOf { it.size } }
 
     private suspend fun drain(peer: String, poke: MutableStateFlow<Long>) {
