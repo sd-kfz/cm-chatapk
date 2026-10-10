@@ -65,7 +65,6 @@ fun KnockScreen(
         when {
             CmId.decode(id) == null -> error = "That doesn't look like a CMC-ID"
             myCmId != null && id == myCmId -> error = "That's your own ID 🙂"
-            nickname.isBlank() -> error = "Pick a nickname"
             else -> onSend(id, nickname.trim())?.let { error = it }
         }
     }
@@ -109,16 +108,17 @@ fun KnockScreen(
             }
             OutlinedTextField(
                 value = nickname, onValueChange = { nickname = it.take(24) },
-                label = { Text("Nickname for them", color = CmTextDim) },
+                label = { Text("Nickname for them (optional)", color = CmTextDim) },
                 singleLine = true, colors = colors, modifier = Modifier.fillMaxWidth(),
             )
             if (scanned && error == null) {
-                Text("✓ Scanned. Pick a nickname, then tap Add friend.", color = CmGreen,
+                Text("✓ Scanned. Add a nickname if you like, then tap Add friend.", color = CmGreen,
                     fontFamily = Nunito, fontSize = 13.sp)
             }
             error?.let { Text(it, color = CmRed, fontFamily = Nunito, fontSize = 13.sp) }
-            Text("They get a friend request (even if they're Invisible). You'll see them as " +
-                "\"Waiting for them to accept\" until they do — you can cancel it there.",
+            Text("They get a friend request (even if they're Invisible or their app is closed). " +
+                "Until they accept they show as \"New Friend\" (or your nickname for them); then " +
+                "the name they chose — unless you gave them one. Tap a waiting friend to cancel.",
                 color = CmTextFaint, fontFamily = Nunito, fontSize = 12.sp)
             Spacer(Modifier.height(8.dp))
         }

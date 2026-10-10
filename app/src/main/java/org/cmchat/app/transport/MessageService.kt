@@ -75,9 +75,22 @@ object MessageService {
     @Volatile
     var onContactAddressUpdated: ((oldCmId: String, newCmId: String) -> Unit)? = null
 
-    /** Set by AppNav to persist a Team Clock the friend set (null = turned off). */
+    /** Set by AppNav to persist a Team Clock the friend set (null = turned off) and
+     * when they set it (newest wins). */
     @Volatile
-    var onTeamClockChanged: ((cmId: String, value: String?) -> Unit)? = null
+    var onTeamClockChanged: ((cmId: String, value: String?, atMs: Long) -> Unit)? = null
+
+    /** Set by AppNav: MY Team Clock change [atMs] reached that friend → stop re-sending it. */
+    @Volatile
+    var onTeamClockSynced: ((cmId: String, atMs: Long) -> Unit)? = null
+
+    /** Set by AppNav: a friend's OWN nickname (from their acceptance, or they changed it). */
+    @Volatile
+    var onFriendName: ((cmId: String, name: String) -> Unit)? = null
+
+    /** Set by AppNav: my nickname [name] reached that friend → stop re-sending it. */
+    @Volatile
+    var onNameConfirmed: ((cmId: String, name: String) -> Unit)? = null
 
     /** Set by AppNav: a friend TERMINATED (removed me from their list) → drop them too. */
     @Volatile
@@ -190,6 +203,12 @@ object MessageService {
      * Anyone not on my current address gets it again until they confirm it. */
     private val addressConfirmed = ConcurrentHashMap<String, String>()
 
+    /** friend cmId -> my nickname their phone confirmed (re-sent until it's my current one). */
+    private val nameConfirmed = ConcurrentHashMap<String, String>()
+
+    /** friend cmId -> when the Team Clock I hold for that chat was set (newest wins). */
+    private val teamClockAt = ConcurrentHashMap<String, Long>()
+
     /** "Last seen" is persisted at most this often per friend (it's coarse anyway). */
     private const val SEEN_PERSIST_EVERY_MS = 30 * 60_000L
     private val seenPersistedAt = ConcurrentHashMap<String, Long>()
@@ -280,6 +299,8 @@ object MessageService {
         relinked.clear()
         terminations.clear()
         addressConfirmed.clear()
+        nameConfirmed.clear()
+        teamClockAt.clear()
         seenPersistedAt.clear()
         knockRate.clear()
         contactRate.clear()
@@ -321,6 +342,12 @@ object MessageService {
         pendingTerminations: Collection<String> = emptyList(),
         /** friend cmId -> the address of mine they confirmed (null/absent = never). */
         confirmedAddresses: Map<String, String> = emptyMap(),
+        /** friend cmId -> my nickname they confirmed (absent = never). */
+        confirmedNames: Map<String, String> = emptyMap(),
+        /** friend cmId -> when the stored Team Clock was set. */
+        teamClockTimes: Map<String, Long> = emptyMap(),
+        /** friend cmId -> (value, setAt): MY Team Clock changes that haven't reached them yet. */
+        unsyncedTeamClocks: Map<String, Pair<String, Long>> = emptyMap(),
     ) {
         this.myName = myDisplayName
         this.myCmId = myCmId
@@ -347,6 +374,9 @@ object MessageService {
         // this run (not saved yet) is kept.
         confirmedAddresses.forEach { (id, mine) -> addressConfirmed.putIfAbsent(currentId(id), mine) }
         addressConfirmed.keys.retainAll(contacts.keys)
+        confirmedNames.forEach { (id, n) -> nameConfirmed.putIfAbsent(currentId(id), n) }
+        nameConfirmed.keys.retainAll(contacts.keys)
+        teamClockTimes.forEach { (id, at) -> teamClockAt.merge(currentId(id), at) { a, b -> maxOf(a, b) } }
         ServerController.onIncoming = { socket -> handleIncoming(socket) }
         // Terminations not yet delivered (kept in the vault) go out again.
         pendingTerminations.forEach { id -> if (id !in terminations) queueTerminate(id) }
@@ -370,6 +400,12 @@ object MessageService {
         }
         resendPendingKnocks()
         resendAddress()
+        resendName()
+        // My Team Clock changes that never reached them (kept in the vault) go again.
+        unsyncedTeamClocks.forEach { (id, v) ->
+            val cur = currentId(id)
+            if (!outbox.has(cur) { it.replaceKey == "teamclock" && it.tag == v.second }) sendTeamClock(cur, v.first, v.second)
+        }
     }
 
     // ---- outgoing ----------------------------------------------------------
@@ -650,35 +686,72 @@ object MessageService {
      * the background (a friend who's offline gets it when they're back, while my
      * engine runs). The caller then rotates the onion address and locks the app.
      */
-    fun tripDecoy() {
-        val peers = contacts.keys.toList()
+    fun tripDecoy(): Int {
+        // Only CONFIRMED friends: a pending one never had a conversation with me.
+        val peers = contacts.keys.filter { it !in pending }
         outbox.clear()
         ChatStore.clearAll()
         dropHeld()
         org.cmchat.app.buzz.BuzzPolicy.clear()
         org.cmchat.app.tools.ToolsState.clear()
         activeChatCmId = null
-        ConnDiag.sys("Decoy tripped: my chats wiped; alerting ${peers.size} friend(s)")
-        if (channel == null) return
-        peers.forEach { id ->
-            outbox.enqueue(Outbox.Item(peer = id, label = "decoy alert", replaceKey = "decoy", keepOnClose = true,
-                deliver = { sendSecureTo(id, FrameType.DECOY_ALERT, ByteArray(0)) },
-                onDelivered = { ConnDiag.out("decoy alert delivered") }))
+        ConnDiag.sys("Decoy tripped: my chats wiped")
+        if (channel == null || peers.isEmpty()) {
+            ConnDiag.sys("Decoy: no confirmed friends to signal")
+            return 0
         }
+        // Best-effort BURN signal: it wipes our chat on THEIR phone too — but only
+        // when it reaches them (they must be online while my engine still runs).
+        ConnDiag.sys("Decoy: burn signal sent to ${peers.size} friend(s) — it wipes our chat on " +
+            "their phone when it reaches them (only while they're online)")
+        peers.forEach { id ->
+            outbox.enqueue(Outbox.Item(peer = id, label = "burn signal", replaceKey = "decoy", keepOnClose = true,
+                deliver = { sendSecureTo(id, FrameType.DECOY_ALERT, ByteArray(0)) },
+                onDelivered = { ConnDiag.out("burn signal delivered — a friend's copy of the chat is wiped") }))
+        }
+        return peers.size
     }
 
     /**
      * Share this conversation's Team Clock with the friend ([value] = canonical
-     * "UTC+hh:mm", or "" to turn it off). Queued like a message (latest wins).
+     * offset, or "" to turn it off), stamped with when it was set ([atMs]) so
+     * the NEWEST setting wins on both phones. Kept until their phone confirms
+     * it — and re-sent after a restart from the vault ([onTeamClockSynced]).
      */
-    fun sendTeamClock(cmId: String, value: String): Boolean {
+    fun sendTeamClock(cmId: String, value: String, atMs: Long = System.currentTimeMillis()): Boolean {
         val chatCmId = currentId(cmId)
         if (channel == null || !contacts.containsKey(chatCmId)) return false
         if (value.isNotEmpty() && org.cmchat.app.chat.TeamClock.decode(value) == null) return false
-        val bytes = value.toByteArray(Charsets.US_ASCII)
+        teamClockAt.merge(chatCmId, atMs) { a, b -> maxOf(a, b) }
+        val bytes = "$value|$atMs".toByteArray(Charsets.US_ASCII)
         outbox.enqueue(Outbox.Item(peer = chatCmId, label = "team clock", replaceKey = "teamclock",
-            deliver = { sendSecureTo(chatCmId, FrameType.TEAM_CLOCK, bytes) }))
+            keepOnClose = true, tag = atMs,
+            deliver = { sendSecureTo(chatCmId, FrameType.TEAM_CLOCK, bytes) },
+            onDelivered = { onTeamClockSynced?.invoke(currentId(chatCmId), atMs) }))
         return true
+    }
+
+    /** My nickname changed: every friend gets it, until their phone confirms it. */
+    fun setMyName(name: String) {
+        myName = name
+        resendName()
+    }
+
+    private fun resendName() {
+        if (channel == null || myName.isBlank()) return
+        val mine = myName
+        for (id in contacts.keys.toList()) {
+            if (id in pending || nameConfirmed[id] == mine) continue
+            if (outbox.has(id) { it.replaceKey == "nick" && it.tag == mine }) continue
+            outbox.enqueue(Outbox.Item(peer = id, label = "nickname", replaceKey = "nick", keepOnClose = true, tag = mine,
+                deliver = { sendSecureTo(id, FrameType.NICKNAME, mine.toByteArray(Charsets.UTF_8)) },
+                stillWanted = { myName == mine && nameConfirmed[currentId(id)] != mine },
+                onDelivered = {
+                    val now = currentId(id)
+                    nameConfirmed[now] = mine
+                    onNameConfirmed?.invoke(now, mine)
+                }))
+        }
     }
 
     /**
@@ -737,8 +810,9 @@ object MessageService {
     private fun queueAccept(cmId: String, via: String? = null) {
         val myId = myCmId ?: return
         if (channel == null || !contacts.containsKey(cmId)) return
+        val payloadName = myName
         val payload = Messages.json.encodeToString(KnockPayload.serializer(),
-            KnockPayload(myName, myId, yours = cmId)).toByteArray()
+            KnockPayload(payloadName, myId, yours = cmId)).toByteArray()
         val viaPeer = via?.let { CmId.decode(it) }
             ?.takeIf { it.identityPubKeyHex.equals(contacts[cmId]?.identityPubKeyHex, ignoreCase = true) }
         outbox.enqueue(Outbox.Item(peer = cmId, label = "accept", replaceKey = "accept", keepOnClose = true,
@@ -747,6 +821,9 @@ object MessageService {
             onDelivered = {
                 ConnDiag.sys("Add friend: acceptance delivered")
                 addressReached(cmId, myId)
+                // My nickname travelled in it too.
+                nameConfirmed[currentId(cmId)] = payloadName
+                onNameConfirmed?.invoke(currentId(cmId), payloadName)
             }))
     }
 
@@ -1001,7 +1078,8 @@ object MessageService {
                 if (key in deliveredIds || key in heldIds) return Ack.OK   // a re-send after a lost receipt
                 msgKey = key
             }
-            FrameType.TEAM_CLOCK -> if (teamClockValue(body) == null) return Ack.REJECTED
+            FrameType.TEAM_CLOCK -> if (teamClock(body) == null) return Ack.REJECTED
+            FrameType.NICKNAME -> if (nicknameFrom(body) == null) return Ack.REJECTED
             FrameType.ADDR_UPDATE -> if (addressFrom(peer, body) == null) return Ack.REJECTED
             FrameType.ERASE_CHAT -> {
                 // Their earlier held frames go now, and the chat in RAM too.
@@ -1010,7 +1088,7 @@ object MessageService {
                 ConnDiag.inc("erase while locked → chat erased (+$gone held item(s) shredded)")
                 return Ack.OK
             }
-            FrameType.KNOCK_ACCEPT, FrameType.TERMINATE, FrameType.DECOY_ALERT, FrameType.NICKNAME -> {}
+            FrameType.KNOCK_ACCEPT, FrameType.TERMINATE, FrameType.DECOY_ALERT -> {}
             else -> return Ack.REJECTED
         }
         if (type == FrameType.DECOY_ALERT) {
@@ -1181,12 +1259,16 @@ object MessageService {
             }
             FrameType.DECOY_ALERT -> onDecoyAlert(fromCmId, peer, replay)
             FrameType.TEAM_CLOCK -> {
-                val v = teamClockValue(body) ?: return Ack.REJECTED
+                val (v, at) = teamClock(body) ?: return Ack.REJECTED
+                val id = currentId(fromCmId)
+                // Newest wins: an older setting (re-sent, or crossed with mine) changes nothing.
+                if (at <= (teamClockAt[id] ?: Long.MIN_VALUE)) { ConnDiag.inc("older Team Clock ignored (newest wins)"); return Ack.OK }
+                teamClockAt[id] = at
                 val value = v.ifEmpty { null }
-                val chatCmId = inChat(fromCmId) { id ->
-                    ChatStore.setTeamHour(id, value, names[id] ?: "Your friend"); id
+                val chatCmId = inChat(fromCmId) { cid ->
+                    ChatStore.setTeamHour(cid, value, names[cid]?.ifBlank { null } ?: "Your friend"); cid
                 }
-                onTeamClockChanged?.invoke(chatCmId, value)
+                onTeamClockChanged?.invoke(chatCmId, value, at)
             }
             FrameType.ERASE_CHAT -> inChat(fromCmId) { ChatStore.erase(it) }
             FrameType.KNOCK_ACCEPT -> followAcceptance(fromCmId, peer, body)   // confirmed + seen already
@@ -1197,7 +1279,10 @@ object MessageService {
                 onAddressUpdate(currentId(fromCmId), peer, body)
             }
             FrameType.COVER -> ConnDiag.inc("cover frame discarded")
-            FrameType.NICKNAME -> {}
+            FrameType.NICKNAME -> {
+                val n = nicknameFrom(body) ?: return Ack.REJECTED
+                onFriendName?.invoke(currentId(fromCmId), n)
+            }
             else -> return Ack.REJECTED
         }
         return Ack.OK
@@ -1218,6 +1303,8 @@ object MessageService {
         kp.yours.takeIf { y -> mine != null && CmId.decode(y)?.identityPubKeyHex.equals(mine, ignoreCase = true) }
             ?.let { addressReached(currentId(fromCmId), it) }
         resendAddress()
+        // Their OWN nickname travels in the acceptance: shown unless I named them.
+        kp.displayName.trim().take(24).takeIf { it.isNotEmpty() }?.let { onFriendName?.invoke(currentId(fromCmId), it) }
     }
 
     /** They removed me from their list: remove them from mine too. */
@@ -1229,10 +1316,23 @@ object MessageService {
         onFriendTerminated?.invoke(id)
     }
 
-    /** A Team Clock value, strictly validated: a canonical offset, or "" (off). */
-    private fun teamClockValue(body: ByteArray): String? {
-        val v = runCatching { String(body, Charsets.US_ASCII) }.getOrNull() ?: return null
-        return if (v.isEmpty() || org.cmchat.app.chat.TeamClock.decode(v) != null) v else null
+    /** A Team Clock change "value|setAtMs", strictly validated: a canonical offset
+     * or "" (off), and a positive time. */
+    private fun teamClock(body: ByteArray): Pair<String, Long>? {
+        if (body.size > 40) return null
+        val s = String(body, Charsets.US_ASCII)
+        val v = s.substringBefore('|', missingDelimiterValue = "\u0000")
+        val at = s.substringAfter('|', "").toLongOrNull() ?: return null
+        if (at <= 0 || !(v.isEmpty() || org.cmchat.app.chat.TeamClock.decode(v) != null)) return null
+        return v to at
+    }
+
+    /** A nickname frame: short, plain text (no control / invisible characters). */
+    private fun nicknameFrom(body: ByteArray): String? {
+        if (body.isEmpty() || body.size > 96) return null
+        val n = String(body, Charsets.UTF_8).filter { !it.isISOControl() && Character.getType(it) != Character.FORMAT.toInt() }
+            .trim().take(24)
+        return n.ifEmpty { null }
     }
 
     /** The new CMC-ID in an address update — only if it keeps the SAME identity key. */

@@ -48,7 +48,7 @@ fun OnboardingScreen(startPage: Int = 0, onPage: (Int) -> Unit = {}, onDone: () 
         }
 
         Spacer(Modifier.height(40.dp))
-        CmChatLogo(size = 30)
+        CmChatLogo(size = 38)
         Spacer(Modifier.height(28.dp))
         Text(stringResource(pages[page].first), color = CmText, fontFamily = Nunito,
             fontSize = 22.sp, fontWeight = FontWeight.Bold)

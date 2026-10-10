@@ -220,8 +220,10 @@ class SpineLoopbackTest {
         confirmed: Map<String, String> = friends.associateWith { aliceId },
         locked: Boolean = false,
     ) {
+        // As saved in her vault: her friends already have her address and nickname.
         MessageService.configure(crypto, "Alice", aPub, aSec, aliceId, friends,
-            pendingCmIds = pending, pendingTerminations = terminations, confirmedAddresses = confirmed)
+            pendingCmIds = pending, pendingTerminations = terminations, confirmedAddresses = confirmed,
+            confirmedNames = friends.associateWith { "Alice" })
         if (!locked) {
             MessageService.openVault()
             waitUntil("vault open") { MessageService.vaultIsOpen() }
@@ -515,21 +517,132 @@ class SpineLoopbackTest {
         assertEquals(FrameType.DECOY_ALERT, bob.nextFrame().type)
     }
 
+    /** F1: a friend's decoy = their BURN signal: our chat is wiped here at once;
+     *  only the notice remains, and it goes when I leave the chat. */
     @Test
-    fun a_friends_decoy_shows_the_notice_and_erases_when_i_leave_the_chat() {
+    fun a_friends_burn_signal_wipes_our_chat_here_at_once() {
         val bob = Phone("Bob", 'b').also { it.up() }
         bob.friends[aliceId] = aPub
         configureAlice(friends = listOf(bob.cmId))
         bob.text("b-1", "earlier message")
         waitUntil("message in") { ChatStore.thread(bob.cmId).messages.size == 1 }
 
-        bob.send(FrameType.DECOY_ALERT, ByteArray(0))
-        waitUntil("notice shown") {
-            ChatStore.thread(bob.cmId).messages.any { it.alert && it.text == ChatStore.DECOY_NOTICE }
-        }
-        assertEquals("not destroyed instantly", 2, ChatStore.thread(bob.cmId).messages.size)
+        assertEquals(Ack.OK, bob.send(FrameType.DECOY_ALERT, ByteArray(0)))
+        val t = ChatStore.thread(bob.cmId)
+        assertEquals("burned: only the notice is left", listOf(ChatStore.DECOY_NOTICE), t.messages.map { it.text })
         ChatStore.leaveChat(bob.cmId)                 // leave the chat…
-        assertTrue("…and it's gone", ChatStore.thread(bob.cmId).messages.isEmpty())
+        assertTrue("…and the notice is gone too", ChatStore.thread(bob.cmId).messages.isEmpty())
+    }
+
+    /** F1: the burn signal goes to CONFIRMED friends only, and the log says how many. */
+    @Test
+    fun the_burn_signal_goes_to_confirmed_friends_only_and_is_logged_honestly() {
+        val bob = Phone("Bob", 'b').also { it.up() }
+        val carol = Phone("Carol", 'c').also { it.up() }
+        bob.friends[aliceId] = aPub
+        configureAlice(friends = listOf(bob.cmId, carol.cmId), pending = listOf(carol.cmId))
+        carol.nextKnock()                              // (the re-knock to pending Carol)
+        assertEquals(1, MessageService.tripDecoy())
+        assertEquals(FrameType.DECOY_ALERT, bob.nextFrame().type)
+        assertNull("pending Carol gets nothing", carol.inbox.poll(800, TimeUnit.MILLISECONDS))
+        assertTrue(ConnDiag.dump().contains("burn signal sent to 1 friend(s)"))
+        waitUntil("delivery logged") { ConnDiag.dump().contains("burn signal delivered") }
+
+        MessageService.zeroKeys(); ConnDiag.clear()
+        configureAlice()                               // nobody confirmed
+        assertEquals(0, MessageService.tripDecoy())
+        assertTrue(ConnDiag.dump().contains("no confirmed friends to signal"))
+    }
+
+    // ---- I. nicknames ------------------------------------------------------------
+
+    @Test
+    fun their_own_nickname_comes_with_the_acceptance_and_with_a_change() {
+        val names = CopyOnWriteArrayList<Pair<String, String>>()
+        MessageService.onFriendName = { id, n -> names += id to n }
+        try {
+            val bob = Phone("Bob", 'b').also { it.up() }
+            configureAlice()
+            MessageService.sendKnock(bob.cmId); bob.nextKnock()
+            bob.friends[aliceId] = aPub
+            bob.send(FrameType.KNOCK_ACCEPT, Messages.json.encodeToString(KnockPayload.serializer(),
+                KnockPayload("Robert", bob.cmId, yours = aliceId)).toByteArray())
+            assertEquals(listOf(bob.cmId to "Robert"), names)
+            // He renames himself later: the NICKNAME frame (control characters stripped).
+            assertEquals(Ack.OK, bob.send(FrameType.NICKNAME, "Bobby\u0007".toByteArray()))
+            assertEquals(bob.cmId to "Bobby", names.last())
+        } finally {
+            MessageService.onFriendName = null
+        }
+    }
+
+    @Test
+    fun my_new_nickname_goes_to_every_friend_until_each_one_has_it() {
+        val got = CopyOnWriteArrayList<Pair<String, String>>()
+        MessageService.onNameConfirmed = { id, n -> got += id to n }
+        try {
+            val bob = Phone("Bob", 'b').also { it.up() }
+            bob.friends[aliceId] = aPub
+            MessageService.configure(crypto, "Alice", aPub, aSec, aliceId, listOf(bob.cmId),
+                confirmedAddresses = mapOf(bob.cmId to aliceId), confirmedNames = mapOf(bob.cmId to "Alice"))
+            assertNull("he already has it", bob.inbox.poll(600, TimeUnit.MILLISECONDS))
+            MessageService.setMyName("Ally")
+            val f = bob.nextFrame()
+            assertEquals(FrameType.NICKNAME, f.type)
+            assertEquals("Ally", String(f.body))
+            waitUntil("confirmed") { got.lastOrNull() == (bob.cmId to "Ally") }
+        } finally {
+            MessageService.onNameConfirmed = null
+        }
+    }
+
+    // ---- J. Team Clock -----------------------------------------------------------
+
+    private fun clock(v: String, at: Long) = "$v|$at".toByteArray()
+
+    @Test
+    fun the_team_clock_is_newest_wins_and_survives_a_locked_phone() {
+        val changes = CopyOnWriteArrayList<Triple<String, String?, Long>>()
+        MessageService.onTeamClockChanged = { id, v, at -> changes += Triple(id, v, at) }
+        val bob = Phone("Bob", 'b').also { it.up() }
+        bob.friends[aliceId] = aPub
+        configureAlice(friends = listOf(bob.cmId))
+        assertEquals(Ack.OK, bob.send(FrameType.TEAM_CLOCK, clock("UTC+02:00", 2_000)))
+        assertEquals(Ack.OK, bob.send(FrameType.TEAM_CLOCK, clock("UTC+05:00", 1_000)))   // older: ignored
+        assertEquals(listOf(Triple(bob.cmId, "UTC+02:00" as String?, 2_000L)), changes)
+        assertEquals("UTC+02:00", ChatStore.thread(bob.cmId).teamHour)
+        assertEquals("garbage refused", Ack.REJECTED, bob.send(FrameType.TEAM_CLOCK, "UTC+99:99|5".toByteArray()))
+        // A change while I'm locked is held — and applied at unlock (even after a killed app).
+        MessageService.closeVault()
+        assertEquals(Ack.OK, bob.send(FrameType.TEAM_CLOCK, clock("", 3_000)))
+        assertEquals(1, heldFiles())
+        MessageService.zeroKeys(); changes.clear()
+        MessageService.configure(crypto, "Alice", aPub, aSec, aliceId, listOf(bob.cmId),
+            confirmedAddresses = mapOf(bob.cmId to aliceId), confirmedNames = mapOf(bob.cmId to "Alice"),
+            teamClockTimes = mapOf(bob.cmId to 2_000L))
+        MessageService.openVault()
+        waitUntil("vault open") { MessageService.vaultIsOpen() }
+        assertEquals(listOf(Triple(bob.cmId, null as String?, 3_000L)), changes)
+    }
+
+    @Test
+    fun my_team_clock_change_is_re_sent_after_a_restart_until_it_reaches_them() {
+        val synced = CopyOnWriteArrayList<Pair<String, Long>>()
+        MessageService.onTeamClockSynced = { id, at -> synced += id to at }
+        try {
+            val bob = Phone("Bob", 'b').also { it.up() }
+            bob.friends[aliceId] = aPub
+            // The vault says: my change of 4 000 never reached Bob.
+            MessageService.configure(crypto, "Alice", aPub, aSec, aliceId, listOf(bob.cmId),
+                confirmedAddresses = mapOf(bob.cmId to aliceId), confirmedNames = mapOf(bob.cmId to "Alice"),
+                unsyncedTeamClocks = mapOf(bob.cmId to ("UTC+03:00" to 4_000L)))
+            val f = bob.nextFrame()
+            assertEquals(FrameType.TEAM_CLOCK, f.type)
+            assertEquals("UTC+03:00|4000", String(f.body))
+            waitUntil("synced") { synced == listOf(bob.cmId to 4_000L) }
+        } finally {
+            MessageService.onTeamClockSynced = null
+        }
     }
 
     /** A decoy rotates the onion: the friend's open chat must keep working. */

@@ -18,9 +18,6 @@ import org.cmchat.app.vault.VaultSettings
  * safety failure, not a cosmetic one.
  */
 object AppSettings {
-    /** Strip EXIF/GPS from every photo before sending. Default ON. */
-    val metadataScrub = MutableStateFlow(true)
-
     /** App-wide text size step, -6..+6 (0 = default), loaded from the vault. */
     val textSize = MutableStateFlow(0)
 
@@ -44,12 +41,6 @@ object AppSettings {
 
     /** The app was exited or closed: the next start is a fresh one — Invisible. */
     fun startupPresence() { invisibleMode.value = true }
-
-    /**
-     * Keep a minimal "buzz-listener" alive after the app is swiped away, so a
-     * Buzz can still reach me while the full app is closed. Default ON. Saved.
-     */
-    val buzzListenerWhenClosed = MutableStateFlow(true)
 
     /**
      * Keep the FULL server running after the app is closed, until the user taps
@@ -95,7 +86,6 @@ object AppSettings {
     fun restoreFrom(s: VaultSettings) {
         generalTimer.value = SelfTimer.fromLabel(s.defaultSelfTimer).takeIf { it != SelfTimer.VIEW_ONCE } ?: SelfTimer.OFF
         BuzzPolicy.frequency.value = BuzzFrequency.entries.firstOrNull { it.name == s.buzzFrequency } ?: BuzzFrequency.H1
-        buzzListenerWhenClosed.value = s.buzzWhenClosed
         decoyEnabled.value = s.decoyEnabled
         decoyName.value = s.decoyName
         decoyAtTop.value = s.decoyAtTop
@@ -108,7 +98,6 @@ object AppSettings {
     fun applyTo(s: VaultSettings): VaultSettings = s.copy(
         defaultSelfTimer = generalTimer.value.label,
         buzzFrequency = BuzzPolicy.frequency.value.name,
-        buzzWhenClosed = buzzListenerWhenClosed.value,
         decoyEnabled = decoyEnabled.value,
         decoyName = decoyName.value,
         decoyAtTop = decoyAtTop.value,
@@ -119,7 +108,7 @@ object AppSettings {
 
     /** Emits whenever any saved choice changes (and once with the current values). */
     val savedChoices: Flow<Unit> = combine(
-        listOf<Flow<Any>>(generalTimer, BuzzPolicy.frequency, buzzListenerWhenClosed, decoyEnabled, decoyName,
+        listOf<Flow<Any>>(generalTimer, BuzzPolicy.frequency, decoyEnabled, decoyName,
             decoyAtTop, ToolsState.calcEnabled, ToolsState.notesEnabled, ToolsState.flashlightEnabled),
     ) { }
 }

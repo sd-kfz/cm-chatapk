@@ -71,7 +71,8 @@ fun ChatScreen(
     onBack: () -> Unit,
     onRename: (String) -> Unit = {},
     teamHour: String? = null,
-    onSetTeamHour: (String) -> Unit = {},
+    /** (value, when I set it) — "" = off. */
+    onSetTeamHour: (String, Long) -> Unit = { _, _ -> },
     /** Persisted (vault) "last seen", so it survives restarts and erases. */
     lastSeenSaved: Long? = null,
     onDeleteFriend: () -> Unit = {},
@@ -241,17 +242,19 @@ fun ChatScreen(
             confirmLabel = "Set",
             extra = if (teamOffset != null) { {
                 TextButton(onClick = {
-                    onSetTeamHour("")
+                    val at = System.currentTimeMillis()
+                    onSetTeamHour("", at)
                     ChatStore.setTeamHour(chatId, null, "You")
-                    MessageService.sendTeamClock(chatCmId, "")
+                    MessageService.sendTeamClock(chatCmId, "", at)
                     editingTeam = false
                 }) { Text("Turn the Team Clock off", color = CmRed) }
             } } else null,
             onConfirm = { hh, mm ->
-                val v = TeamClock.encode(TeamClock.offsetFor(hh, mm, System.currentTimeMillis()))
-                onSetTeamHour(v)
+                val at = System.currentTimeMillis()
+                val v = TeamClock.encode(TeamClock.offsetFor(hh, mm, at))
+                onSetTeamHour(v, at)
                 ChatStore.setTeamHour(chatId, v, "You")
-                MessageService.sendTeamClock(chatCmId, v)
+                MessageService.sendTeamClock(chatCmId, v, at)
                 editingTeam = false
             },
             onDismiss = { editingTeam = false },
@@ -281,9 +284,10 @@ fun ChatScreen(
                                 cursorBrush = SolidColor(CmBlue),
                                 modifier = Modifier.weight(1f, fill = false).widthIn(min = 60.dp, max = 180.dp),
                             )
+                            // Empty = no label of mine: their own nickname shows again.
                             Text("Save", color = CmGreen, fontFamily = Nunito, fontSize = 13.sp,
                                 modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable {
-                                    val n = newName.trim(); if (n.isNotEmpty()) onRename(n); renaming = false
+                                    onRename(newName.trim()); renaming = false
                                 }.padding(8.dp))
                         }
                     } else {

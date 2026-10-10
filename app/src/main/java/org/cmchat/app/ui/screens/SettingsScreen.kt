@@ -39,12 +39,16 @@ fun SettingsScreen(
     onAbout: () -> Unit = {},
     onHelp: () -> Unit = {},
     onLanguage: () -> Unit = {},
+    /** The language now in use, shown on its row. */
+    languageLabel: String = "",
     onRamDiag: () -> Unit = {},
     privacyPinSet: Boolean = false,
     /** The stored Privacy PIN is all digits (typed on the number pad). */
     privacyPinNumeric: Boolean = true,
     verifyPrivacyPin: (String) -> Boolean = { false },
     onCreatePrivacyPin: (String) -> Unit = {},
+    /** Remove the Privacy PIN (after the current one is entered). */
+    onRemovePrivacyPin: () -> Unit = {},
     onSessionWindow: (Boolean) -> Unit = {},
     onOpenIntegrity: () -> Unit = {},
     verifyVaultPin: (String, (Boolean) -> Unit) -> Unit = { _, cb -> cb(false) },
@@ -52,10 +56,17 @@ fun SettingsScreen(
     onCerberusChange: (armed: Boolean, minutes: Int) -> Unit = { _, _ -> },
     textSize: Int = 0,
     onTextSize: (Int) -> Unit = {},
+    /** My own nickname (what friends see unless they named me). */
+    myNickname: String = "",
+    onRenameMe: (String) -> Unit = {},
+    /** Cover mode: open to a calculator. */
+    coverOn: Boolean = false,
+    onCoverMode: (Boolean) -> Unit = {},
 ) {
     var privacyUnlocked by remember { mutableStateOf(false) }
     var askMode by remember { mutableStateOf<PinMode?>(null) }
     var showChangePin by remember { mutableStateOf(false) }
+    var renamingMe by remember { mutableStateOf(false) }
 
     if (showChangePin) {
         ChangePinDialog(
@@ -72,13 +83,36 @@ fun SettingsScreen(
             storedNumeric = privacyPinNumeric,
             verify = verifyPrivacyPin,
             onSetNew = onCreatePrivacyPin,
+            onRemove = onRemovePrivacyPin,
             onPass = {
-                if (mode == PinMode.UNLOCK || mode == PinMode.SET) privacyUnlocked = true
+                privacyUnlocked = true
                 askMode = null
             },
             onDismiss = { askMode = null },
         )
     }
+
+    if (renamingMe) {
+        var v by remember { mutableStateOf(myNickname) }
+        AlertDialog(
+            onDismissRequest = { renamingMe = false },
+            title = { Text("Your nickname") },
+            text = {
+                Column {
+                    OutlinedTextField(value = v, onValueChange = { v = it.take(24) }, singleLine = true)
+                    Text("Friends see this unless they gave you a name of their own.",
+                        color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { v.trim().takeIf { it.isNotEmpty() }?.let(onRenameMe); renamingMe = false }) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { renamingMe = false }) { Text("Cancel") } },
+        )
+    }
+
+    // The sensitive group is open when no Privacy PIN is set, or once it's entered.
+    val privacyOpen = !privacyPinSet || privacyUnlocked
 
     Column(Modifier.fillMaxSize().background(CmBackground)) {
         Box(Modifier.fillMaxWidth().padding(16.dp)) {
@@ -88,81 +122,104 @@ fun SettingsScreen(
                 fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
         }
 
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // A lazy list: only the rows on screen are built, and a vault save or a
+        // Tor tick doesn't rebuild the whole page.
+        androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
 
-            // One identity per app (no multiple "Faces"/tags).
-            GroupHeader("Identity")
-            Setting("My identity (CMC-ID · QR)", onClick = onOpenMyId,
-                hint = "Your address + QR for friends to add you.")
+            // 1) Language first.
+            item { Setting("Language", languageLabel, onClick = onLanguage, hint = "Choose the app's language.") }
 
-            GroupHeader("Chats")
-            GeneralTimerRow()
-            BuzzFrequencyRow()
-            ToolToggle("Let a Buzz reach me when closed",
-                org.cmchat.app.settings.AppSettings.buzzListenerWhenClosed,
-                hint = "A nudge can still wake you after you close the app.")
+            // 2) The groups.
+            item { GroupHeader("Identity") }
+            item { Setting("My identity (CMC-ID · QR)", onClick = onOpenMyId,
+                hint = "Your address + QR for friends to add you.") }
+            item { Setting("My nickname", myNickname, onClick = { renamingMe = true },
+                hint = "The name your friends see for you.") }
 
-            // SENSITIVE settings — behind the Privacy PIN. The PIN can be CHANGED
-            // but never removed: once set, this section is always gated.
-            GroupHeader("Privacy & Safety 🔒")
-            if (!privacyUnlocked) {
-                Setting(
-                    if (privacyPinSet) "Unlock Privacy & Safety" else "Set a Privacy PIN",
-                    if (privacyPinSet) "🔒 locked" else "set up",
-                    onClick = { askMode = if (privacyPinSet) PinMode.UNLOCK else PinMode.SET },
-                    hint = "Guards the server, stealth, wipe and PIN settings.",
-                )
+            item { GroupHeader("Chats") }
+            item { GeneralTimerRow() }
+            item { BuzzFrequencyRow() }
+
+            item { GroupHeader("Privacy & Safety 🔒") }
+            if (!privacyOpen) {
+                item {
+                    Setting("Unlock Privacy & Safety", "🔒 locked", onClick = { askMode = PinMode.UNLOCK },
+                        hint = "Guards the server, stealth, wipe, PIN and diagnostics settings.")
+                }
             } else {
-                CerberusRow(onCerberusChange)
-                KillTimerRow()
-                StayReachableRow()
-                ShredderRow()
-                DecoyGroup()
-                StatusDefaultRow()
-                Setting("My Server", onClick = onOpenMyServer,
-                    hint = "Your own address that friends connect to.")
-                Setting("Stealth / Bridges (obfs4 · Snowflake)", onClick = onOpenBridges,
-                    hint = "Hide that you use Tor from your network. Can be slower.")
-                ToolToggle("Metadata scrub (strip EXIF/GPS)", org.cmchat.app.settings.AppSettings.metadataScrub,
-                    hint = "Removes hidden location/date from photos you send.")
-                Setting("Keep engine running in background", onClick = onIgnoreBattery,
-                    hint = "Ask Android not to sleep the engine so messages still arrive.")
-                SessionWindowRow(onSessionWindow)
-                Setting("Change app PIN", onClick = { showChangePin = true },
-                    hint = "Change the PIN that unlocks the app.")
-                Setting("Change Privacy PIN", onClick = { askMode = PinMode.CHANGE },
-                    hint = "Enter the current PIN, then set a new one.")
-                Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
-                    .background(CmRed.copy(alpha = 0.15f)).clickable { onWipeEverything() }.padding(14.dp),
-                    contentAlignment = Alignment.Center) {
-                    Text("Wipe Everything Now", color = CmRed, fontFamily = Nunito,
-                        fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                if (!privacyPinSet) item {
+                    Setting("Set a Privacy PIN", "set up", onClick = { askMode = PinMode.SET },
+                        hint = "Locks this group (digits only).")
+                }
+                item { CerberusRow(onCerberusChange) }
+                item { KillTimerRow() }
+                item { StayReachableRow() }
+                item { ShredderRow() }
+                item { DecoyGroup() }
+                item {
+                    Column {
+                        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CmCard)
+                            .clickable { onCoverMode(!coverOn) }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("Open as a calculator (cover)", color = CmText, fontFamily = Nunito, fontSize = 14.sp,
+                                modifier = Modifier.weight(1f))
+                            Text(if (coverOn) "Yes" else "No", color = if (coverOn) CmGreen else CmTextDim,
+                                fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                        Text("Opens to a working calculator. Tap the same key 10× in a row to get in; " +
+                            "tap “reset” 20× to choose a different key.", color = CmTextFaint, fontFamily = Nunito,
+                            fontSize = 11.sp, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                            modifier = Modifier.padding(start = 4.dp, top = 2.dp))
+                    }
+                }
+                item { StatusDefaultRow() }
+                item { Setting("My Server", onClick = onOpenMyServer, hint = "Your own address that friends connect to.") }
+                item { Setting("Stealth / Bridges (obfs4 · Snowflake)", onClick = onOpenBridges,
+                    hint = "Hide that you use Tor from your network. Can be slower.") }
+                item { InfoRow("Photo / video data removal", "Yes — always",
+                    "Location and camera data are removed from every photo and video you send.") }
+                item { Setting("Keep engine running in background", onClick = onIgnoreBattery,
+                    hint = "Ask Android not to sleep the engine so messages still arrive.") }
+                item { SessionWindowRow(onSessionWindow) }
+                item { Setting("Change app PIN", onClick = { showChangePin = true },
+                    hint = "Change the PIN that unlocks the app.") }
+                if (privacyPinSet) {
+                    item { Setting("Change Privacy PIN", onClick = { askMode = PinMode.CHANGE },
+                        hint = "Enter the current PIN, then set a new one.") }
+                    item { Setting("Remove Privacy PIN", onClick = { askMode = PinMode.REMOVE },
+                        hint = "This group then opens without a PIN.") }
+                }
+                item { GroupHeader("Diagnostics") }
+                item { Setting("Diagnostics & troubleshoot", onClick = onOpenDiagnostics,
+                    hint = "See what's happening if something isn't working.") }
+                item { Setting("Connection test (Link Test)", onClick = onOpenConnection,
+                    hint = "Watch each step of reaching a friend, live.") }
+                item { Setting("RAM diagnostics", onClick = onRamDiag,
+                    hint = "See which features use the most memory.") }
+                item {
+                    Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+                        .background(CmRed.copy(alpha = 0.15f)).clickable { onWipeEverything() }.padding(14.dp),
+                        contentAlignment = Alignment.Center) {
+                        Text("Wipe Everything Now", color = CmRed, fontFamily = Nunito,
+                            fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    }
                 }
             }
 
-            GroupHeader("Tools")
-            ToolToggle("Tool: Calculator", org.cmchat.app.tools.ToolsState.calcEnabled)
-            ToolToggle("Tool: Notes", org.cmchat.app.tools.ToolsState.notesEnabled)
-            ToolToggle("Tool: Flashlight", org.cmchat.app.tools.ToolsState.flashlightEnabled)
+            // 3) Everything else.
+            item { GroupHeader("System") }
+            item { TextSizeRow(textSize, onTextSize) }
+            item { Setting("Verify App Integrity", onClick = onOpenIntegrity, hint = "Check the app's signature + version.") }
+            item { Setting("How to use", onClick = onHelp, hint = "Plain-language guide, from setup to panic buttons.") }
+            item { Setting("About / Version", onClick = onAbout, hint = "App version and credits.") }
 
-            GroupHeader("System")
-            TextSizeRow(textSize, onTextSize)
-            Setting("Diagnostics & troubleshoot", onClick = onOpenDiagnostics,
-                hint = "See what's happening if something isn't working.")
-            Setting("Connection test (Link Test)", onClick = onOpenConnection,
-                hint = "Watch each step of reaching a friend, live.")
-            Setting("RAM diagnostics", onClick = onRamDiag,
-                hint = "See which features use the most memory.")
-            Setting("Verify App Integrity", onClick = onOpenIntegrity,
-                hint = "Check the app's signature + version.")
-            Setting("Language", onClick = onLanguage,
-                hint = "Choose the app's language.")
-            Setting("How to use", onClick = onHelp,
-                hint = "Plain-language guide, from setup to panic buttons.")
-            Setting("About / Version", onClick = onAbout,
-                hint = "App version and credits.")
-            Spacer(Modifier.height(4.dp))
+            // 4) Tools last.
+            item { GroupHeader("Tools") }
+            item { ToolToggle("Tool: Calculator", org.cmchat.app.tools.ToolsState.calcEnabled) }
+            item { ToolToggle("Tool: Notes", org.cmchat.app.tools.ToolsState.notesEnabled) }
+            item { ToolToggle("Tool: Flashlight", org.cmchat.app.tools.ToolsState.flashlightEnabled) }
+            item { Spacer(Modifier.height(4.dp)) }
         }
 
         Box(Modifier.fillMaxWidth().padding(16.dp)
@@ -171,6 +228,19 @@ fun SettingsScreen(
             Text("Exit (stop server, clear RAM, log out)", color = CmText, fontFamily = Nunito,
                 fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
         }
+    }
+}
+
+/** A fixed fact (not a switch). */
+@Composable
+private fun InfoRow(label: String, value: String, hint: String) {
+    Column {
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CmCard).padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Text(label, color = CmText, fontFamily = Nunito, fontSize = 14.sp, modifier = Modifier.weight(1f))
+            Text(value, color = CmGreen, fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        }
+        Hint(hint)
     }
 }
 
@@ -188,12 +258,12 @@ private fun CerberusRow(onChange: (Boolean, Int) -> Unit) {
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("Cerberus · idle auto-wipe", color = CmText, fontFamily = Nunito, fontSize = 14.sp)
+                Text("Cerberus · idle auto-wipe armed", color = CmText, fontFamily = Nunito, fontSize = 14.sp)
                 Text(if (reach) "Off while \"Stay reachable\" is on."
                      else "Untouched this long → clears RAM, stops the engine, closes the app.",
                     color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp)
             }
-            Text(if (armed) "Armed" else "Off", color = if (armed) CmGreen else CmTextDim,
+            Text(if (armed) "Yes" else "No", color = if (armed) CmGreen else CmTextDim,
                 fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.clip(RoundedCornerShape(8.dp))
                     .clickable(enabled = !reach) { onChange(!armed, minutes) }.padding(6.dp))
@@ -320,7 +390,7 @@ private fun SessionWindowRow(onChange: (Boolean) -> Unit) {
             Text("Don't re-ask the PIN for 6h after unlocking (this run only).",
                 color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp)
         }
-        Text(if (on) "On" else "Off", color = if (on) CmGreen else CmTextDim,
+        Text(if (on) "Yes" else "No", color = if (on) CmGreen else CmTextDim,
             fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
     }
 }
@@ -331,9 +401,8 @@ private fun GroupHeader(title: String) {
         fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp, start = 4.dp))
 }
 
-/** Which flow the privacy-PIN lock is running. There is deliberately NO
- * "remove": the Privacy PIN can be changed, never turned off. */
-enum class PinMode { UNLOCK, SET, CHANGE }
+/** Which flow the privacy-PIN lock is running. */
+enum class PinMode { UNLOCK, SET, CHANGE, REMOVE }
 
 /**
  * A real lock for the privacy PIN (not a plain text field):
@@ -342,7 +411,7 @@ enum class PinMode { UNLOCK, SET, CHANGE }
  *  - SET / CHANGE require enter + confirm, with a clear mismatch error;
  *  - verifying the current PIN (UNLOCK / CHANGE) applies the same escalating
  *    lockout as the login screen ([LoginThrottle]);
- *  - distinct Set / Change actions (no Remove — the PIN can't be turned off).
+ *  - distinct Set / Change / Remove actions (Remove also needs the current PIN).
  */
 @Composable
 private fun PrivacyPinDialog(
@@ -350,6 +419,7 @@ private fun PrivacyPinDialog(
     storedNumeric: Boolean,
     verify: (String) -> Boolean,
     onSetNew: (String) -> Unit,
+    onRemove: () -> Unit,
     onPass: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -375,6 +445,7 @@ private fun PrivacyPinDialog(
                     when (mode) {
                         PinMode.UNLOCK -> onPass()
                         PinMode.CHANGE -> phase = "new"
+                        PinMode.REMOVE -> { onRemove(); onPass() }
                         PinMode.SET -> {}
                     }
                 } else {
@@ -398,6 +469,7 @@ private fun PrivacyPinDialog(
     val title = when {
         phase == "current" && mode == PinMode.UNLOCK -> "Unlock Privacy & Safety"
         phase == "current" && mode == PinMode.CHANGE -> "Enter current PIN"
+        phase == "current" && mode == PinMode.REMOVE -> "Remove the Privacy PIN"
         phase == "new" -> "Create a Privacy PIN"
         phase == "confirm" -> "Confirm the Privacy PIN"
         else -> "Privacy PIN"
@@ -410,19 +482,19 @@ private fun PrivacyPinDialog(
             Column {
                 // The NUMBER pad — except to verify an older PIN that has letters.
                 val numberPad = phase != "current" || storedNumeric
-                OutlinedTextField(
+                org.cmchat.app.ui.components.PinField(
                     value = entry,
                     onValueChange = { v -> if (lockedFor <= 0) {
                         entry = (if (numberPad) v.filter { it.isDigit() } else v).take(VaultManager.MAX_PASSCODE)
                         err = null
                     } },
-                    singleLine = true,
+                    numeric = numberPad,
                     enabled = lockedFor <= 0,
-                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                        keyboardType = if (numberPad) androidx.compose.ui.text.input.KeyboardType.NumberPassword
-                            else androidx.compose.ui.text.input.KeyboardType.Password),
                 )
+                if (mode == PinMode.REMOVE && phase == "current") {
+                    Text("Without it, Privacy & Safety opens for anyone holding the unlocked phone.",
+                        color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                }
                 if (phase == "new") {
                     Text("Digits · 4 to 56", color = CmTextDim, fontFamily = Nunito,
                         fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
@@ -438,7 +510,7 @@ private fun PrivacyPinDialog(
         },
         confirmButton = {
             val label = when (phase) {
-                "current" -> "Unlock"
+                "current" -> if (mode == PinMode.REMOVE) "Remove" else "Unlock"
                 "new" -> "Next"
                 else -> if (mode == PinMode.CHANGE) "Change" else "Set"
             }
@@ -525,14 +597,11 @@ private fun ChangePinDialog(
         title = { Text(title) },
         text = {
             Column {
-                OutlinedTextField(
+                org.cmchat.app.ui.components.PinField(
                     value = entry,
                     onValueChange = { v -> if (!working && lockedFor <= 0) { entry = v.take(if (phase == "current") 128 else 56); err = null } },
-                    singleLine = true,
+                    numeric = false,
                     enabled = !working && lockedFor <= 0,
-                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Password),
                 )
                 if (phase == "new" && !working) {
                     Text("Numbers, letters or symbols · 4 to 56", color = CmTextDim, fontFamily = Nunito,
@@ -587,7 +656,7 @@ private fun DecoyGroup() {
                 Text("A fake contact; tapping it silently Exits + wipes RAM.",
                     color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp)
             }
-            Text(if (on) "On" else "Off", color = if (on) CmGreen else CmTextDim,
+            Text(if (on) "Yes" else "No", color = if (on) CmGreen else CmTextDim,
                 fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.clickable { org.cmchat.app.settings.AppSettings.decoyEnabled.value = !on })
         }
@@ -627,7 +696,7 @@ private fun StayReachableRow() {
             Text("Keeps the server up after close (forces Cerberus + Kill off)",
                 color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp)
         }
-        Text(if (on) "On" else "Off", color = if (on) CmGreen else CmTextDim,
+        Text(if (on) "Yes" else "No", color = if (on) CmGreen else CmTextDim,
             fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
     }
 }
@@ -686,7 +755,7 @@ private fun ToolToggle(label: String, flow: kotlinx.coroutines.flow.MutableState
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CmCard)
             .clickable { flow.value = !on }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(label, color = CmText, fontFamily = Nunito, fontSize = 14.sp, modifier = Modifier.weight(1f))
-            Text(if (on) "On" else "Off", color = if (on) CmGreen else CmTextDim,
+            Text(if (on) "Yes" else "No", color = if (on) CmGreen else CmTextDim,
                 fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
         if (hint.isNotEmpty()) Hint(hint)

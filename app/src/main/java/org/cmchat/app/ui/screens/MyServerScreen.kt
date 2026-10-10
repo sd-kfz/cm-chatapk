@@ -74,7 +74,7 @@ fun MyServerScreen(
             val live = server as? ServerStatus.Online
             Text("Onion address", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
             Text(live?.onion ?: "—", color = CmText, fontFamily = Nunito, fontSize = 13.sp)
-            Text("Tag: ${live?.faceName ?: "—"}", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
+            Text("Nickname: ${live?.faceName ?: "—"}", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
             val uptime = live?.let { formatUptime(now - it.sinceMs) } ?: "—"
             Text("Uptime: $uptime", color = CmTextDim, fontFamily = Nunito, fontSize = 12.sp)
             (server as? ServerStatus.Failed)?.let {

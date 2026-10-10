@@ -40,6 +40,15 @@ data class ContactRec(
     /** The address (CMC-ID) of MINE their phone confirmed. While it isn't my
      * current one, my address keeps being re-sent to them (across restarts). */
     val addrConfirmed: String? = null,
+    /** Their OWN nickname (from their acceptance / their change). [name] — my
+     * private label for them — wins when it's set. */
+    val theirName: String? = null,
+    /** My nickname their phone confirmed (re-sent until it's my current one). */
+    val nameConfirmed: String? = null,
+    /** When [teamHour] was set (whoever set it): the newest setting wins. */
+    val teamHourAt: Long = 0,
+    /** MY latest Team Clock change has reached them (if not, it's re-sent). */
+    val teamHourSynced: Boolean = true,
 )
 
 /** A TERMINATE I sent that hasn't reached the ex-friend's phone yet. */
@@ -76,7 +85,8 @@ data class VaultSettings(
     // ---- settings that used to live only in RAM (they reset on every restart) ----
     /** "Accept Buzz" frequency ([org.cmchat.app.buzz.BuzzFrequency] name). */
     val buzzFrequency: String = "H1",
-    /** "Let a Buzz reach me when closed". */
+    /** Retired: the Buzz listener is always on after close now. Kept so older
+     * vaults still read; never used. */
     val buzzWhenClosed: Boolean = true,
     /** Decoy chat on/off, its name, and whether it sits at the top. */
     val decoyEnabled: Boolean = false,

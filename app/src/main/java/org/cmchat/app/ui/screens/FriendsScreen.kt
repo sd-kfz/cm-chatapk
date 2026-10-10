@@ -200,9 +200,9 @@ fun FriendsScreen(
                 val torchOn by org.cmchat.app.tools.Flashlight.on.collectAsState()
                 Row(Modifier.fillMaxWidth().padding(vertical = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(28.dp, Alignment.CenterHorizontally)) {
-                    if (calcOn) DockTool("Calculator", "▦") { onOpenTool("calculator") }
-                    if (notesOn) DockTool("Notes", "☑") { onOpenTool("notes") }
-                    if (flashOn) DockTool(if (torchOn) "Torch on" else "Flashlight", "☀",
+                    if (calcOn) DockTool("Calculator", org.cmchat.app.ui.components.ToolIcon.CALCULATOR) { onOpenTool("calculator") }
+                    if (notesOn) DockTool("Notes", org.cmchat.app.ui.components.ToolIcon.NOTES) { onOpenTool("notes") }
+                    if (flashOn) DockTool(if (torchOn) "Torch on" else "Flashlight", org.cmchat.app.ui.components.ToolIcon.FLASHLIGHT,
                         active = torchOn) { org.cmchat.app.tools.Flashlight.toggle(ctx) }
                 }
             }
@@ -239,13 +239,13 @@ fun FriendsScreen(
 @Composable
 private fun Wordmark(online: Boolean) {
     if (!online) {
-        Text("CM-Chat", color = Grey, fontFamily = Nunito, fontSize = 20.sp,
-            fontWeight = FontWeight.ExtraBold, letterSpacing = 0.5.sp)
+        Text("CM-Chat", color = Grey, fontFamily = Nunito, fontSize = 24.sp,
+            fontWeight = FontWeight.ExtraBold, letterSpacing = 1.sp)
         return
     }
     fun glow(c: Color) = TextStyle(
-        color = c, fontFamily = Nunito, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold,
-        letterSpacing = 0.5.sp,
+        color = c, fontFamily = Nunito, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold,
+        letterSpacing = 1.sp,
         shadow = Shadow(color = c.copy(alpha = 0.9f), offset = Offset(0f, 0f), blurRadius = 3f),
     )
     Row {
@@ -308,12 +308,14 @@ private fun StatusLine(online: Boolean, status: TorStatus, invisible: Boolean, s
                 fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
         Spacer(Modifier.weight(1f))
+        // My own status: "● Online" / "● Invisible", the dot in the status colour.
         Row(verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable { onToggleMe() }
                 .padding(horizontal = 6.dp, vertical = 4.dp)) {
-            Text("Me: ", color = CmTextDim, fontFamily = Nunito, fontSize = 13.sp)
-            Text(if (invisible) "Invisible" else "Online",
-                color = if (!online) Grey else if (invisible) CmBlue else CmTeal,
+            val c = if (!online) Grey else if (invisible) CmBlue else CmTeal
+            Dot(c)
+            Spacer(Modifier.width(6.dp))
+            Text(if (invisible) "Invisible" else "Online", color = c,
                 fontFamily = Nunito, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
     }
@@ -329,7 +331,9 @@ private fun FriendRow(c: Contact, onOpenChat: (Contact) -> Unit) {
     val recent = c.lastSeenMs != null && System.currentTimeMillis() - c.lastSeenMs <= 24 * 3_600_000L
     @OptIn(ExperimentalFoundationApi::class)
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(CmCard)
+        // Every row the same height — with or without a second line (so the
+        // decoy row can't be told apart).
+        Modifier.fillMaxWidth().heightIn(min = 54.dp).clip(RoundedCornerShape(10.dp)).background(CmCard)
             .combinedClickable(
                 onClick = { onOpenChat(c) },
                 onLongClick = { c.cmId?.let { MessageService.sendBuzz(it) } },
@@ -369,7 +373,7 @@ private fun FriendRow(c: Contact, onOpenChat: (Contact) -> Unit) {
 private fun Dot(color: Color) = Box(Modifier.size(9.dp).clip(CircleShape).background(color))
 
 @Composable
-private fun DockTool(label: String, glyph: String, active: Boolean = false, onClick: () -> Unit) {
+private fun DockTool(label: String, icon: org.cmchat.app.ui.components.ToolIcon, active: Boolean = false, onClick: () -> Unit) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             Modifier.size(46.dp).clip(CircleShape)
@@ -378,7 +382,7 @@ private fun DockTool(label: String, glyph: String, active: Boolean = false, onCl
                 .clickable { onClick() },
             contentAlignment = Alignment.Center,
         ) {
-            Text(glyph, color = if (active) Color.White else CmOrange, fontFamily = Nunito, fontSize = 20.sp)
+            org.cmchat.app.ui.components.ToolGlyph(icon, if (active) Color.White else CmOrange)
         }
         Spacer(Modifier.height(4.dp))
         Text(label, color = CmTextDim, fontFamily = Nunito, fontSize = 11.sp)

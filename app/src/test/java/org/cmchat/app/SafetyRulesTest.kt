@@ -49,13 +49,12 @@ class SafetyRulesTest {
 
     @Test
     fun saved_choices_round_trip_through_the_vault_settings() {
-        val saved = VaultSettings(defaultSelfTimer = "5m", buzzFrequency = "H24", buzzWhenClosed = false,
+        val saved = VaultSettings(defaultSelfTimer = "5m", buzzFrequency = "H24",
             decoyEnabled = true, decoyName = "Bank", decoyAtTop = false,
             toolCalc = true, toolNotes = false, toolFlash = true)
         AppSettings.restoreFrom(saved)
         assertEquals(SelfTimer.M5, AppSettings.generalTimer.value)
         assertEquals(BuzzFrequency.H24, BuzzPolicy.frequency.value)
-        assertFalse(AppSettings.buzzListenerWhenClosed.value)
         assertTrue(AppSettings.decoyEnabled.value)
         assertEquals("Bank", AppSettings.decoyName.value)
         assertFalse(AppSettings.decoyAtTop.value)

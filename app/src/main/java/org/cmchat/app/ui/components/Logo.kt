@@ -10,6 +10,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameMillis
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
@@ -68,16 +73,18 @@ fun CmChatLogo(modifier: Modifier = Modifier, size: Int = 26, sweepMs: Int = 650
         }
         return
     }
-    val transition = rememberInfiniteTransition(label = "logoSweep")
-    val sweep = transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = sweepMs, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart,
-        ),
-        label = "sweep",
-    )
+    // The sweep position, ~20 times a second (a slow glow needs no more), and
+    // only while the screen is actually showing: in the background it stops.
+    val sweep = remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
+    val lifecycle = androidx.compose.ui.platform.LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle, sweepMs) {
+        lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.RESUMED) {
+            while (true) {
+                withFrameMillis { ms -> sweep.floatValue = (ms % sweepMs) / sweepMs.toFloat() }
+                delay(50)
+            }
+        }
+    }
     Box(modifier.clipToBounds()) {
         // Constant soft glow.
         Text(BASE, pad, fontFamily = Nunito, fontSize = size.sp, fontWeight = FontWeight.Bold)
@@ -91,7 +98,7 @@ fun CmChatLogo(modifier: Modifier = Modifier, size: Int = 26, sweepMs: Int = 650
                     val w = this.size.width   // the DrawScope's size, not the font size
                     val band = w * 0.3f
                     // The band enters from off the left edge and leaves off the right.
-                    val cx = -band + (w + 2 * band) * sweep.value
+                    val cx = -band + (w + 2 * band) * sweep.floatValue
                     drawRect(
                         brush = Brush.horizontalGradient(
                             0f to Color.Transparent, 0.5f to Color.Black, 1f to Color.Transparent,

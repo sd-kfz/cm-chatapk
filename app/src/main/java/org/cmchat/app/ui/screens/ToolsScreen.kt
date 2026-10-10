@@ -70,41 +70,94 @@ private fun FlashlightUi() {
 // ---- Calculator: Google-calculator look, CT-200N key set ------------------
 
 @Composable
-private fun CalculatorUi() {
+private fun CalculatorUi() = CalculatorPad()
+
+/**
+ * The calculator: display + keys that SHARE the height that's there — on an
+ * old, short or low-res screen (or with large text) the keys get shorter
+ * instead of falling off the bottom. [onKey] sees every key pressed (the
+ * cover's secret); [footer] sits under the keys.
+ */
+@Composable
+fun CalculatorPad(onKey: (String) -> Unit = {}, footer: (@Composable (clear: () -> Unit) -> Unit)? = null) {
     val engine = remember { CalcEngine() }
     var display by remember { mutableStateOf(engine.display) }
     var hasMem by remember { mutableStateOf(engine.hasMemory) }
     fun sync() { display = engine.display; hasMem = engine.hasMemory }
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        // Display
-        Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(CmCard)
-            .padding(horizontal = 20.dp, vertical = 28.dp), contentAlignment = Alignment.CenterEnd) {
-            if (hasMem) Text("M", color = CmOrange, fontFamily = Nunito, fontSize = 14.sp,
-                modifier = Modifier.align(Alignment.CenterStart))
-            // Always ONE line: a long number shrinks until every digit fits
-            // (never wraps with the last digit under the first).
-            FitOneLine(display, Modifier.fillMaxWidth().padding(start = 18.dp))
-        }
-        Spacer(Modifier.height(16.dp))
+    BoxWithConstraints(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
+        val short = maxHeight < 520.dp
+        val gap = if (short) 6.dp else 10.dp
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(gap)) {
+            // Display
+            Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(CmCard)
+                .padding(horizontal = 18.dp, vertical = if (short) 10.dp else 24.dp),
+                contentAlignment = Alignment.CenterEnd) {
+                if (hasMem) Text("M", color = CmOrange, fontFamily = Nunito, fontSize = 14.sp,
+                    modifier = Modifier.align(Alignment.CenterStart))
+                // Always ONE line: a long number shrinks until every digit fits
+                // (never wraps with the last digit under the first).
+                FitOneLine(display, Modifier.fillMaxWidth().padding(start = 18.dp),
+                    max = if (short) 30.sp else 40.sp)
+            }
 
-        val rows = listOf(
-            listOf("MRC", "M-", "M+", "C/CE"),
-            listOf("√", "%", "÷", "×"),
-            listOf("7", "8", "9", "−"),
-            listOf("4", "5", "6", "+"),
-            listOf("1", "2", "3", "="),
-            listOf("0", ".", "", ""),
-        )
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            for (row in rows) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    for (key in row) {
-                        if (key.isEmpty()) { Spacer(Modifier.weight(1f)); continue }
-                        CalcKey(key, Modifier.weight(1f)) {
-                            press(engine, key); sync()
+            val rows = listOf(
+                listOf("MRC", "M-", "M+", "C/CE"),
+                listOf("√", "%", "÷", "×"),
+                listOf("7", "8", "9", "−"),
+                listOf("4", "5", "6", "+"),
+                listOf("1", "2", "3", "="),
+                listOf("0", ".", "", ""),
+            )
+            Column(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(gap)) {
+                for (row in rows) {
+                    Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
+                        for (key in row) {
+                            if (key.isEmpty()) { Spacer(Modifier.weight(1f)); continue }
+                            CalcKey(key, Modifier.weight(1f).fillMaxHeight(), small = short) {
+                                press(engine, key); sync(); onKey(key)
+                            }
                         }
                     }
+                }
+            }
+            footer?.invoke { engine.clearCe(); engine.clearCe(); sync() }
+        }
+    }
+}
+
+/**
+ * Cover mode: a calculator and nothing else — it works like one. The same key
+ * 10 times in a row opens the real app; "reset" clears the calculator, and 20
+ * in a row forgets the key (see [org.cmchat.app.tools.CoverSecret]). The only
+ * tell is the small italic "tap 10 times".
+ */
+@Composable
+fun CalculatorCover(onOpen: () -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val secret = remember { org.cmchat.app.tools.CoverSecret(org.cmchat.app.tools.CoverMode.secretKey(ctx)) }
+    fun feed(k: String) {
+        when (secret.press(k)) {
+            org.cmchat.app.tools.CoverSecret.Action.OPEN -> {
+                org.cmchat.app.tools.CoverMode.setSecretKey(ctx, secret.key)
+                onOpen()
+            }
+            org.cmchat.app.tools.CoverSecret.Action.FORGET -> org.cmchat.app.tools.CoverMode.setSecretKey(ctx, null)
+            org.cmchat.app.tools.CoverSecret.Action.NONE -> {}
+        }
+    }
+    Column(Modifier.fillMaxSize().background(CmBackground)) {
+        Text("Calculator", color = CmText, fontFamily = Nunito, fontSize = 17.sp, fontWeight = FontWeight.Bold,
+            modifier = Modifier.fillMaxWidth().padding(16.dp), textAlign = TextAlign.Center)
+        Box(Modifier.weight(1f)) {
+            CalculatorPad(onKey = { feed(it) }) { clear ->
+                Row(Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("tap 10 times", color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp,
+                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic, modifier = Modifier.weight(1f))
+                    Text("reset", color = CmTextDim, fontFamily = Nunito, fontSize = 13.sp,
+                        modifier = Modifier.clip(RoundedCornerShape(8.dp))
+                            .clickable { clear(); feed(org.cmchat.app.tools.CoverSecret.RESET) }
+                            .padding(horizontal = 10.dp, vertical = 6.dp))
                 }
             }
         }
@@ -151,7 +204,7 @@ private fun press(e: CalcEngine, key: String) {
 }
 
 @Composable
-private fun CalcKey(label: String, modifier: Modifier, onClick: () -> Unit) {
+private fun CalcKey(label: String, modifier: Modifier, small: Boolean = false, onClick: () -> Unit) {
     val isOp = label in setOf("+", "−", "×", "÷")
     val isEquals = label == "="
     val isFn = label in setOf("√", "%", "C/CE", "MRC", "M-", "M+")
@@ -167,10 +220,11 @@ private fun CalcKey(label: String, modifier: Modifier, onClick: () -> Unit) {
         isFn -> CmBlue
         else -> CmText
     }
-    Box(modifier.height(58.dp).clip(RoundedCornerShape(16.dp)).background(bg).clickable { onClick() },
-        contentAlignment = Alignment.Center) {
-        Text(label, color = fg, fontFamily = Nunito,
-            fontSize = if (label.length > 2) 15.sp else 20.sp, fontWeight = FontWeight.SemiBold)
+    Box(modifier.heightIn(min = 34.dp).clip(RoundedCornerShape(if (small) 12.dp else 16.dp)).background(bg)
+        .clickable { onClick() }, contentAlignment = Alignment.Center) {
+        Text(label, color = fg, fontFamily = Nunito, maxLines = 1,
+            fontSize = when { label.length > 2 -> if (small) 13.sp else 15.sp; small -> 17.sp; else -> 20.sp },
+            fontWeight = FontWeight.SemiBold)
     }
 }
 

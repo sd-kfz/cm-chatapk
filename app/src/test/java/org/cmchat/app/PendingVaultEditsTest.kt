@@ -35,7 +35,7 @@ class PendingVaultEditsTest {
         val moved = mapOf("B-old" to "B-new")
         PendingVaultEdits.relinked("B-old", "B-new")
         PendingVaultEdits.confirmed("B-old")                 // accepted, then moved
-        PendingVaultEdits.teamClockSet("C", "UTC+02:07")
+        PendingVaultEdits.teamClockSet("C", "UTC+02:07", now - 60_000L)
         PendingVaultEdits.removedByFriend("D")               // Dave terminated me
         PendingVaultEdits.terminationDelivered("E")
         PendingVaultEdits.seen("C", now - 5 * 60_000L)
@@ -57,9 +57,40 @@ class PendingVaultEditsTest {
     fun last_seen_older_than_a_day_is_forgotten() {
         val now = 1_700_000_000_000L
         val d = VaultData(contacts = listOf(c("bob", "B", seen = now - 25 * hour)))
-        PendingVaultEdits.teamClockSet("B", null)          // any pending change triggers a pass
+        PendingVaultEdits.teamClockSet("B", null, now)     // any pending change triggers a pass
         val out = PendingVaultEdits.drainInto(d, { it }, now)
         assertNull(out.contacts.single().lastSeenAt)
         assertNull(out.contacts.single().teamHour)
+    }
+
+    /** J2: the Team Clock is newest-wins, and MY change stays "unsynced" until it reaches them. */
+    @Test
+    fun team_clock_newest_wins_and_my_change_waits_for_their_confirmation() {
+        val now = 1_700_000_000_000L
+        val mine = c("bob", "B").copy(teamHour = "UTC+01:00", teamHourAt = now, teamHourSynced = false)
+        // An OLDER change of theirs (crossed with mine) loses…
+        PendingVaultEdits.teamClockSet("B", "UTC+05:00", now - 1)
+        var out = PendingVaultEdits.drainInto(VaultData(contacts = listOf(mine)), { it }, now)
+        assertEquals("UTC+01:00", out.contacts.single().teamHour)
+        assertFalse("mine still has to reach them", out.contacts.single().teamHourSynced)
+        // …their confirmation of MY change marks it synced…
+        PendingVaultEdits.teamClockSynced("B", now)
+        out = PendingVaultEdits.drainInto(out, { it }, now)
+        assertTrue(out.contacts.single().teamHourSynced)
+        // …and a NEWER change of theirs wins.
+        PendingVaultEdits.teamClockSet("B", "", now + 5)
+        out = PendingVaultEdits.drainInto(out, { it }, now)
+        assertNull("turned off by them, later", out.contacts.single().teamHour)
+        assertEquals(now + 5, out.contacts.single().teamHourAt)
+    }
+
+    /** I1: their own nickname lands in the vault; my label for them is untouched. */
+    @Test
+    fun their_own_nickname_is_kept_next_to_my_label() {
+        val now = 1_700_000_000_000L
+        PendingVaultEdits.theirName("B", "Robert")
+        val out = PendingVaultEdits.drainInto(VaultData(contacts = listOf(c("bob", "B"))), { it }, now)
+        assertEquals("Robert", out.contacts.single().theirName)
+        assertEquals("my label stays", "bob", out.contacts.single().name)
     }
 }

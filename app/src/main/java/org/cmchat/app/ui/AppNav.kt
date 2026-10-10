@@ -89,6 +89,13 @@ private fun requestUninstall(context: android.content.Context) {
     }
 }
 
+/**
+ * The name shown for a friend: MY private label for them if I gave one;
+ * otherwise "New Friend" until they've accepted, then THEIR own nickname.
+ */
+private fun shownName(c: org.cmchat.app.vault.ContactRec): String =
+    c.name.ifBlank { if (c.pending) "New Friend" else c.theirName?.takeIf { it.isNotBlank() } ?: "New Friend" }
+
 private fun myCmId(data: VaultData?): String? {
     val face = data?.faces?.firstOrNull() ?: return null
     val onion = face.onionAddress ?: return null
@@ -117,8 +124,10 @@ private fun AppNavContent() {
 
     var nav by remember { mutableStateOf<Nav>(Nav.Lock) }
     var data by remember { mutableStateOf<VaultData?>(null) }
+    // Cover mode: the app opens to a working calculator (the same key 10× gets in).
+    var coverOn by remember { mutableStateOf(org.cmchat.app.tools.CoverMode.isOn(context)) }
+    var coverPassed by remember { mutableStateOf(false) }
 
-    val torStatus by TorService.status.collectAsState()
     val shredEpoch by org.cmchat.app.vault.Shredder.epoch.collectAsState()
     var showWipeConfirm by remember { mutableStateOf(false) }
     // Exit wipes RAM — Notes included. If there are notes, confirm first so one
@@ -172,7 +181,7 @@ private fun AppNavContent() {
     }
     // Removing friends (the chat's X menu / cancelling a pending add).
     fun removeContact(d: VaultData, cmId: String?, name: String): VaultData =
-        d.copy(contacts = d.contacts.filterNot { if (cmId != null) it.cmId == cmId else it.cmId == null && it.name == name })
+        d.copy(contacts = d.contacts.filterNot { if (cmId != null) it.cmId == cmId else it.cmId == null && shownName(it) == name })
     fun deleteFriend(cmId: String?, name: String) {
         cmId?.let { MessageService.deleteFriend(it) }
         saveVault { removeContact(it, cmId, name) }
@@ -332,10 +341,14 @@ private fun AppNavContent() {
             myIdentitySecHex = face.secretKey,
             myCmId = myCmId(d),
             knownContactCmIds = d.contacts.mapNotNull { it.cmId },
-            contactNames = d.contacts.mapNotNull { c -> c.cmId?.let { it to c.name } }.toMap(),
+            contactNames = d.contacts.mapNotNull { c -> c.cmId?.let { it to shownName(c) } }.toMap(),
             pendingCmIds = d.contacts.filter { it.pending }.mapNotNull { it.cmId },
             pendingTerminations = d.terminations.map { it.cmId },
             confirmedAddresses = d.contacts.mapNotNull { c -> c.cmId?.let { id -> c.addrConfirmed?.let { id to it } } }.toMap(),
+            confirmedNames = d.contacts.mapNotNull { c -> c.cmId?.let { id -> c.nameConfirmed?.let { id to it } } }.toMap(),
+            teamClockTimes = d.contacts.mapNotNull { c -> c.cmId?.let { it to c.teamHourAt } }.toMap(),
+            unsyncedTeamClocks = d.contacts.filter { !it.teamHourSynced && it.teamHourAt > 0 }
+                .mapNotNull { c -> c.cmId?.let { it to ((c.teamHour ?: "") to c.teamHourAt) } }.toMap(),
         )
         val edits = org.cmchat.app.vault.PendingVaultEdits
         // A friend I added proved they accepted me → no longer pending.
@@ -347,7 +360,12 @@ private fun AppNavContent() {
             (nav as? Nav.Chat)?.takeIf { it.cmId == oldCmId }?.let { nav = it.copy(cmId = newCmId) }
         }
         // A friend set / turned off this chat's Team Clock: persist it per friend.
-        MessageService.onTeamClockChanged = { cmId, value -> edits.teamClockSet(cmId, value); flushEdits() }
+        MessageService.onTeamClockChanged = { cmId, value, at -> edits.teamClockSet(cmId, value, at); flushEdits() }
+        // MY Team Clock change reached them: no need to send it again after a restart.
+        MessageService.onTeamClockSynced = { cmId, at -> edits.teamClockSynced(cmId, at); flushEdits() }
+        // A friend's OWN nickname (their acceptance, or they changed it).
+        MessageService.onFriendName = { cmId, name -> edits.theirName(cmId, name); flushEdits() }
+        MessageService.onNameConfirmed = { cmId, name -> edits.nameConfirmed(cmId, name); flushEdits() }
         // A friend TERMINATED: they removed me, so they go from my list too.
         MessageService.onFriendTerminated = { cmId ->
             edits.removedByFriend(cmId); flushEdits()
@@ -370,9 +388,11 @@ private fun AppNavContent() {
                     // We had knocked them too: accepting their knock settles it.
                     cur.copy(contacts = cur.contacts.map { if (it.cmId == req.cmId) it.copy(pending = false) else it })
                 } else {
+                    // No private label yet: their OWN nickname (from the request) shows.
                     cur.copy(contacts = cur.contacts + org.cmchat.app.vault.ContactRec(
                         id = manager.crypto.randomHex(8),
-                        name = req.displayName,
+                        name = "",
+                        theirName = req.displayName,
                         colorArgb = 0xFF6FB8D9,
                         faceId = face.id,
                         cmId = req.cmId,
@@ -385,18 +405,22 @@ private fun AppNavContent() {
         MessageService.openVault()
     }
 
-    // Once Tor is ONLINE, publish the active Tag's onion service. The server
-    // stays up even while Invisible — messages still arrive but are held as
-    // "missed" (no receipts, so Invisible is indistinguishable to a sender).
-    LaunchedEffect(torStatus, data) {
+    // Once Tor is ONLINE, publish my onion service. The server stays up even
+    // while Invisible — messages still arrive but are held as "missed" (the
+    // receipt says only "stored", so Invisible is indistinguishable to a sender).
+    // Tor's status is collected HERE, not read by the whole screen: a progress
+    // tick (5 %, 10 %, …) no longer redraws whatever page is open.
+    LaunchedEffect(data) {
         val d = data ?: return@LaunchedEffect
         val face = d.faces.firstOrNull() ?: return@LaunchedEffect
-        // (Stopped on My Server = stays down: ServerController.start refuses.)
-        if (torStatus is TorStatus.Online) {
-            ServerController.start(face.name, face.onionKey, face.onionAddress) { pub ->
-                val keyChanged = pub.newPrivateKey != null && pub.newPrivateKey != face.onionKey
-                val addrChanged = face.onionAddress != pub.onion
-                if (keyChanged || addrChanged) keepMyOnion(face, pub)
+        TorService.status.collect { st ->
+            // (Stopped on My Server = stays down: ServerController.start refuses.)
+            if (st is TorStatus.Online) {
+                ServerController.start(face.name, face.onionKey, face.onionAddress) { pub ->
+                    val keyChanged = pub.newPrivateKey != null && pub.newPrivateKey != face.onionKey
+                    val addrChanged = face.onionAddress != pub.onion
+                    if (keyChanged || addrChanged) keepMyOnion(face, pub)
+                }
             }
         }
     }
@@ -404,7 +428,10 @@ private fun AppNavContent() {
     when (val n = nav) {
         // A fresh lock screen after the Shredder's error is cleared (the app was
         // closed and reopened) — it then starts clean, never stuck.
-        Nav.Lock -> key(shredEpoch) { LockScreen(manager) { opened ->
+        Nav.Lock -> if (coverOn && !coverPassed) {
+            org.cmchat.app.ui.screens.CalculatorCover(onOpen = { coverPassed = true })
+        } else key(shredEpoch) { LockScreen(manager) { opened ->
+            coverPassed = false   // the next lock shows the calculator again
             // A new address made while the app was locked goes into the vault
             // FIRST — before the server starts with an older key.
             val unlocked = withStashedOnion(opened)
@@ -437,7 +464,7 @@ private fun AppNavContent() {
             val real = data?.contacts?.takeIf { it.isNotEmpty() }
                 ?.map {
                     val t = it.cmId?.let { id -> threads[id] }
-                    Contact(it.name, Color(it.colorArgb),
+                    Contact(shownName(it), Color(it.colorArgb),
                         unread = t?.unread ?: false,
                         cmId = it.cmId,
                         // RAM (this run) or the vault's coarse copy (survives restarts).
@@ -452,7 +479,8 @@ private fun AppNavContent() {
             val decoyName by org.cmchat.app.settings.AppSettings.decoyName.collectAsState()
             val decoyTop by org.cmchat.app.settings.AppSettings.decoyAtTop.collectAsState()
             val contacts = if (decoyOn) {
-                val decoy = Contact(decoyName, CmGreen, unread = false, cmId = DECOY_CM_ID)
+                // Looks like every other friend (same colour, same row) — no tell.
+                val decoy = Contact(decoyName, Color(0xFF6FB8D9), unread = false, cmId = DECOY_CM_ID)
                 if (decoyTop) listOf(decoy) + real else real + decoy
             } else real
             FriendsScreen(
@@ -518,17 +546,24 @@ private fun AppNavContent() {
             teamHour = data?.contacts?.firstOrNull { it.cmId == n.cmId }?.teamHour,
             lastSeenSaved = data?.contacts?.firstOrNull { it.cmId == n.cmId }?.lastSeenAt,
             onDeleteFriend = { deleteFriend(n.cmId, n.name); nav = Nav.Friends },
-            onSetTeamHour = { value ->
+            // MY change: stored with when I set it, and kept "unsynced" until it
+            // reaches them — after a restart it is sent again (newest wins).
+            onSetTeamHour = { value, at ->
                 if (n.cmId != null) saveVault { cur ->
                     cur.copy(contacts = cur.contacts.map {
-                        if (it.cmId == n.cmId) it.copy(teamHour = value.ifEmpty { null }) else it
+                        if (it.cmId == n.cmId) it.copy(teamHour = value.ifEmpty { null }, teamHourAt = at,
+                            teamHourSynced = false) else it
                     })
                 }
             },
+            // My private label for them (empty = show their own nickname again).
             onRename = { newName ->
+                var shown = newName
                 if (n.cmId != null && saveVault { cur ->
-                        cur.copy(contacts = cur.contacts.map { if (it.cmId == n.cmId) it.copy(name = newName) else it })
-                    }) nav = Nav.Chat(newName, n.cmId)
+                        cur.copy(contacts = cur.contacts.map {
+                            if (it.cmId == n.cmId) it.copy(name = newName).also { c -> shown = shownName(c) } else it
+                        })
+                    }) nav = Nav.Chat(shown, n.cmId)
             },
         )
         is Nav.Tool -> org.cmchat.app.ui.screens.ToolsScreen(n.which) { nav = Nav.Friends }
@@ -554,6 +589,7 @@ private fun AppNavContent() {
             onAbout = { nav = Nav.About },
             onHelp = { nav = Nav.Help },
             onLanguage = { nav = Nav.Language },
+            languageLabel = org.cmchat.app.settings.Languages.displayName(data?.settings?.language ?: "en"),
             onRamDiag = { nav = Nav.RamDiag },
             privacyPinSet = data?.settings?.privacyPin != null,
             // An all-digit Privacy PIN is typed on the number pad (any older
@@ -562,6 +598,18 @@ private fun AppNavContent() {
             verifyPrivacyPin = { entered -> entered == data?.settings?.privacyPin },
             onCreatePrivacyPin = { newPin ->
                 saveVault { cur -> cur.copy(settings = cur.settings.copy(privacyPin = newPin)) }
+            },
+            onRemovePrivacyPin = {
+                saveVault { cur -> cur.copy(settings = cur.settings.copy(privacyPin = null)) }
+            },
+            coverOn = coverOn,
+            onCoverMode = { on -> org.cmchat.app.tools.CoverMode.setOn(context, on); coverOn = on },
+            myNickname = data?.faces?.firstOrNull()?.name ?: "",
+            // My own nickname: saved, and sent to every friend until each one has it.
+            onRenameMe = { newName ->
+                if (saveVault { cur ->
+                        cur.copy(faces = cur.faces.mapIndexed { i, f -> if (i == 0) f.copy(name = newName) else f })
+                    }) MessageService.setMyName(newName)
             },
             onCerberusChange = { armed, minutes ->
                 org.cmchat.app.guard.GuardController.setCerberusMinutes(minutes)
@@ -606,7 +654,7 @@ private fun AppNavContent() {
         )
         Nav.Help -> org.cmchat.app.ui.screens.HelpScreen(onBack = { nav = Nav.Settings })
         Nav.Connection -> org.cmchat.app.ui.screens.ConnectionScreen(
-            contacts = data?.contacts?.mapNotNull { c -> c.cmId?.let { id -> c.name to id } } ?: emptyList(),
+            contacts = data?.contacts?.mapNotNull { c -> c.cmId?.let { id -> shownName(c) to id } } ?: emptyList(),
             onLinkTest = { cmId -> MessageService.linkTest(cmId) },
             onBack = { nav = Nav.Settings },
         )

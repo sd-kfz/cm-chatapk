@@ -56,6 +56,7 @@ fun LockScreen(manager: VaultManager, onUnlocked: (VaultData) -> Unit) {
 
     var phase by remember { mutableStateOf(if (firstRun) Phase.NEW_PIN else Phase.UNLOCK) }
     var pin by remember { mutableStateOf("") }
+    var shownPin by remember { mutableStateOf(false) }   // the eye: show what's typed
     var firstPin by remember { mutableStateOf("") }
     var nickname by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("") }
@@ -137,7 +138,7 @@ fun LockScreen(manager: VaultManager, onUnlocked: (VaultData) -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Spacer(Modifier.height(if (compact || bigKeys) 4.dp else 32.dp))
-        CmChatLogo(size = 30, sweepMs = 3250)
+        CmChatLogo(size = 38, sweepMs = 3250)
         Spacer(Modifier.height(6.dp))
         Text(
             when {
@@ -207,9 +208,9 @@ fun LockScreen(manager: VaultManager, onUnlocked: (VaultData) -> Unit) {
         // Explicit submit, always (variable-length PINs).
         fun submit() { if (shredded) return; val e = pin; pin = ""; submitPin(e) }
 
-        // Masked display — one dot per character (capped so a long PIN doesn't
-        // overflow), length-agnostic so digits+letters+symbols all fit.
-        MaskedDots(pin.length)
+        // Masked display — one dot per character, wrapping onto more lines for a
+        // long PIN (no "+N"); the eye shows what's typed instead.
+        MaskedDots(pin, shownPin) { shownPin = !shownPin }
         // Strength hint while CREATING a PIN — encourages 8+, never blocks.
         if (phase == Phase.NEW_PIN) PinStrengthHint(pin, Modifier.padding(top = 4.dp))
         Spacer(Modifier.height(6.dp))
@@ -311,15 +312,25 @@ internal fun PinStrengthHint(pin: String, modifier: Modifier = Modifier) {
         fontFamily = Nunito, fontSize = 12.sp, modifier = modifier)
 }
 
-/** Masked PIN display: one dot per char, capped so it never overflows. */
+/**
+ * The PIN being typed: one dot per character, WRAPPING onto more lines for a
+ * long one (every character counted, no "+N"). The eye shows the characters
+ * themselves instead (hidden again when the screen is left).
+ */
 @Composable
-private fun MaskedDots(count: Int) {
-    val shown = count.coerceAtMost(20)
-    val text = "●".repeat(shown) + if (count > 20) " +${count - 20}" else ""
-    // Reserve height so the layout doesn't jump between empty and filled.
-    Box(Modifier.heightIn(min = 20.dp), contentAlignment = Alignment.Center) {
-        Text(text, color = CmBlue, fontFamily = Nunito, fontSize = 18.sp,
-            fontWeight = FontWeight.Bold)
+private fun MaskedDots(pin: String, shown: Boolean, onToggle: () -> Unit) {
+    // A break chance between characters, so a long run wraps instead of overflowing.
+    val text = (if (shown) pin else "●".repeat(pin.length)).toList().joinToString("\u200B")
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Spacer(Modifier.size(40.dp))
+        Box(Modifier.weight(1f).heightIn(min = 24.dp), contentAlignment = Alignment.Center) {
+            Text(text, color = CmBlue, fontFamily = Nunito, fontSize = if (pin.length > 16) 15.sp else 18.sp,
+                fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, softWrap = true, maxLines = 4)
+        }
+        Box(Modifier.size(40.dp).clip(androidx.compose.foundation.shape.CircleShape)
+            .clickable(enabled = pin.isNotEmpty()) { onToggle() }, contentAlignment = Alignment.Center) {
+            if (pin.isNotEmpty()) org.cmchat.app.ui.components.EyeIcon(open = shown, color = CmTextDim)
+        }
     }
 }
 

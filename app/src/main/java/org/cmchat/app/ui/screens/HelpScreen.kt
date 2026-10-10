@@ -49,9 +49,9 @@ fun HelpScreen(onBack: () -> Unit) {
                 "they do — tap Cancel there to take the request back. Only ONE of you needs to add the other. " +
                 "It keeps trying quietly in the background (and again each time your Engine comes online), " +
                 "so it lands once both Engines are online.")
-            Entry("Knocks", "A friend request arrives as a \"Knock\" card on the Friends screen — Accept or " +
-                "Decline. A first knock gets through even while you're Invisible. A declined person can't " +
-                "knock again for an hour.")
+            Entry("+Add (friend requests)", "A friend request arrives as a card on the Friends screen — " +
+                "Accept or Decline. It gets through even while you're Invisible or the app is closed. A " +
+                "declined person can't send another for an hour.")
             Entry("QR codes", "Everything happens on the phone. The camera is only used while you're scanning.")
 
             Section("3 · Messaging")

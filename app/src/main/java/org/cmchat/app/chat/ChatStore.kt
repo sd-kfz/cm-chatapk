@@ -169,13 +169,19 @@ object ChatStore {
     const val DECOY_NOTICE = "Decoy chat triggered — chat erased."
 
     /**
-     * A friend's decoy was triggered: their copy of this chat is NOT destroyed
-     * instantly. The notice line is shown where the next message would be, and
-     * the whole chat is erased once the user leaves it ([leaveChat]).
+     * A friend's decoy was triggered — their BURN signal: our conversation is
+     * wiped on this phone right away; only the notice line remains, and it goes
+     * too once the user leaves the chat ([leaveChat]).
      */
-    fun addDecoyNotice(chatId: String, at: Long = System.currentTimeMillis()) = update(chatId) {
-        // ONE atomic change: the line never shows without its "erase on leave" flag.
-        it.copy(messages = it.messages + alertLine(DECOY_NOTICE, at), unread = true, decoyErase = true)
+    fun addDecoyNotice(chatId: String, at: Long = System.currentTimeMillis()) {
+        val gone = thread(chatId).messages
+        update(chatId) {
+            // ONE atomic change: the chat is gone and the line never shows without
+            // its "erase on leave" flag.
+            ChatThread(teamHour = it.teamHour, peerLastSeen = it.peerLastSeen,
+                messages = listOf(alertLine(DECOY_NOTICE, at)), unread = true, decoyErase = true)
+        }
+        wipeReceivedFiles(gone)
     }
 
     /** Leaving a chat: burn seen view-once messages; erase it if a decoy notice was
