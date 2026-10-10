@@ -12,7 +12,9 @@ enum class Ack(val code: Int) {
     /** Not stored right now (e.g. locked and this can't be held, or full): retry later. */
     RETRY(1),
     /** Refused for good (e.g. a file over the size cap): don't retry. */
-    REJECTED(2);
+    REJECTED(2),
+    /** (File offers only) Already stored — its earlier final receipt got lost: delivered. */
+    HAVE(3);
 
     companion object {
         fun of(code: Int): Ack? = entries.firstOrNull { it.code == code }

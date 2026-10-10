@@ -35,7 +35,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.drawscope.scale
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import org.cmchat.app.chat.ChatMessage
 import org.cmchat.app.chat.ChatStore
@@ -92,6 +94,64 @@ fun ChatScreen(
     var logRefused by remember { mutableStateOf(false) }
     var selfTimer by remember { mutableStateOf(SelfTimer.OFF) }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    // ---- files: pick → (cleaned / refused) → confirm → send; received → Save ----
+    var preparing by remember { mutableStateOf(false) }
+    var readyFile by remember { mutableStateOf<org.cmchat.app.media.MediaPolicy.Decision.Ready?>(null) }
+    var fileNote by remember { mutableStateOf<String?>(null) }
+    val pickFile = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null || chatCmId == null) return@rememberLauncherForActivityResult
+        preparing = true
+        fileNote = null
+        scope.launch {
+            val d = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                org.cmchat.app.media.FilePrep.prepare(context, uri)
+            }
+            preparing = false
+            when (d) {
+                is org.cmchat.app.media.MediaPolicy.Decision.Ready -> readyFile = d
+                is org.cmchat.app.media.MediaPolicy.Decision.Refused -> fileNote = d.reason
+            }
+        }
+    }
+    var saving by remember { mutableStateOf<org.cmchat.app.chat.ChatFile?>(null) }
+    val saveFile = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+        val f = saving
+        saving = null
+        if (uri == null || f == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            // Written exactly as received — never opened or interpreted here.
+            val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { context.contentResolver.openOutputStream(uri)?.use { f.writeTo(it) } != null }
+                    .getOrDefault(false)
+            }
+            fileNote = if (ok) "Saved." else "Couldn't save the file."
+        }
+    }
+    readyFile?.let { f ->
+        AlertDialog(
+            onDismissRequest = { f.file.wipe(); readyFile = null },
+            title = { Text("Send this file?") },
+            text = { Text("${f.name} · ${humanSize(f.file.size)}\n\n${f.note}\n\n" +
+                "Like messages, files are kept in memory only.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    readyFile = null
+                    when (if (chatCmId != null) MessageService.sendFile(chatCmId, f.name, f.mime, f.file, selfTimer)
+                          else MessageService.FileResult.NOT_READY) {
+                        MessageService.FileResult.QUEUED -> selfTimer = SelfTimer.OFF
+                        MessageService.FileResult.TOO_BIG -> fileNote = org.cmchat.app.media.MediaPolicy.TOO_BIG
+                        MessageService.FileResult.EMPTY -> fileNote = "That file is empty."
+                        MessageService.FileResult.NOT_READY -> fileNote = "Not ready yet — wait until the Engine is Online."
+                    }
+                }) { Text("Send") }
+            },
+            dismissButton = { TextButton(onClick = { f.file.wipe(); readyFile = null }) { Text("Cancel") } },
+        )
+    }
 
     // Self-timers: drop expired messages once a second. No screen state is
     // touched here, so the chat is redrawn only when something actually goes
@@ -293,6 +353,11 @@ fun ChatScreen(
                             modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
                         m.system -> Text(m.text, color = CmTextFaint, fontFamily = Nunito, fontSize = 12.sp,
                             modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+                        m.file != null -> FileBubble(m, m.file, bubbleMax, onSave = { f ->
+                            saving = f
+                            org.cmchat.app.LifecycleController.expectOwnLaunch()
+                            runCatching { saveFile.launch(f.name) }
+                        })
                         else -> Bubble(m, bubbleMax)
                     }
                 }
@@ -339,14 +404,29 @@ fun ChatScreen(
                     fontFamily = Nunito, fontSize = 11.sp, textAlign = TextAlign.End,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp))
             }
+            // Files: being prepared / refused (with the reason) / saved.
+            if (preparing || fileNote != null) {
+                Text(if (preparing) "Preparing the file (removing location and camera data)…" else fileNote ?: "",
+                    color = if (preparing) CmTextDim else CmOrange, fontFamily = Nunito,
+                    fontSize = 11.sp, modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 2.dp))
+            }
             // A pasted engine log is refused (logs stay in Connection/Diagnostics).
             if (logRefused) {
                 Text(org.cmchat.app.chat.EngineLog.NOT_SENT_HINT, color = CmRed, fontFamily = Nunito,
                     fontSize = 11.sp, modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 2.dp))
             }
-            // Message box (grows to ~5 lines, then scrolls) + its own send button.
+            // Attach (left) · message box (grows to ~5 lines, then scrolls) · send (right).
             Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.Bottom) {
+                Box(Modifier.size(46.dp).clip(CircleShape).background(CmCard)
+                    .clickable(enabled = chatCmId != null && !preparing) {
+                        // Our own file picker: don't re-lock while it covers the app.
+                        org.cmchat.app.LifecycleController.expectOwnLaunch()
+                        runCatching { pickFile.launch(arrayOf("*/*")) }
+                    }, contentAlignment = Alignment.Center) {
+                    PaperclipIcon(if (chatCmId != null && !preparing) CmBlue else CmTextFaint)
+                }
+                Spacer(Modifier.width(8.dp))
                 Box(Modifier.weight(1f).heightIn(min = 46.dp).clip(RoundedCornerShape(22.dp)).background(CmCard)
                     .padding(horizontal = 16.dp, vertical = 12.dp)) {
                     if (input.isEmpty()) Text("Message…", color = CmTextDim, fontFamily = Nunito, fontSize = 15.sp)
@@ -379,6 +459,80 @@ fun ChatScreen(
                 }
             }
         }
+    }
+}
+
+/** "1.2 MB" / "340 KB" (the units the phone itself shows). */
+private fun humanSize(bytes: Long): String = when {
+    bytes >= 1_000_000 -> "%.1f MB".format(bytes / 1_000_000.0)
+    bytes >= 1_000 -> "${bytes / 1_000} KB"
+    else -> "$bytes B"
+}
+
+/** Kinds of file that can run or open something — a received one gets a warning. */
+private val RISKY = setOf("apk", "exe", "bat", "cmd", "com", "msi", "scr", "js", "vbs", "jar", "sh",
+    "html", "htm", "svg", "xhtml", "hta", "ps1", "dex", "so")
+
+/**
+ * A file in the chat. Received: name, size and a Save button — it is NEVER
+ * opened, previewed or interpreted by the app (it's opaque bytes); Save writes
+ * it exactly as it arrived to a place YOU pick.
+ */
+@Composable
+private fun FileBubble(m: ChatMessage, f: org.cmchat.app.chat.ChatFile, maxBubble: androidx.compose.ui.unit.Dp,
+                       onSave: (org.cmchat.app.chat.ChatFile) -> Unit) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = if (m.mine) Arrangement.End else Arrangement.Start) {
+        Column(horizontalAlignment = if (m.mine) Alignment.End else Alignment.Start) {
+            if (m.missed || m.closedMiss) {
+                Text("Missed Message", color = CmRed, fontFamily = Nunito, fontSize = 11.sp,
+                    fontStyle = FontStyle.Italic, modifier = Modifier.padding(bottom = 2.dp))
+            }
+            Column(Modifier.widthIn(max = maxBubble).clip(RoundedCornerShape(16.dp))
+                .background(if (m.mine) CmBubbleMine else CmBubbleTheirs)
+                .padding(horizontal = 14.dp, vertical = 10.dp)) {
+                val fg = if (m.mine) CmBubbleMineText else CmBubbleText
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    PaperclipIcon(fg, 16)
+                    Spacer(Modifier.width(6.dp))
+                    Text(f.name, color = fg, fontFamily = Nunito, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+                Text(humanSize(f.size), color = fg.copy(alpha = 0.75f), fontFamily = Nunito, fontSize = 12.sp)
+                if (!m.mine) {
+                    if (f.name.substringAfterLast('.', "").lowercase() in RISKY) {
+                        Text("This kind of file can run code — only open it if you trust it.",
+                            color = CmRedGlow, fontFamily = Nunito, fontSize = 11.sp)
+                    }
+                    Text("Save", color = CmBlue, fontFamily = Nunito, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 6.dp).clip(RoundedCornerShape(8.dp))
+                            .background(CmBackground).clickable { onSave(f) }
+                            .padding(horizontal = 14.dp, vertical = 6.dp))
+                }
+            }
+            Row(Modifier.padding(top = 2.dp, start = 4.dp, end = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(formatTimestamp(m.createdAt), color = CmTextFaint, fontFamily = Nunito, fontSize = 10.sp)
+                if (m.selfTimer != SelfTimer.OFF) {
+                    Text(if (m.selfTimer == SelfTimer.VIEW_ONCE) "👁 view once" else m.selfTimer.label,
+                        color = CmRed, fontFamily = Nunito, fontSize = 10.sp)
+                }
+            }
+        }
+    }
+}
+
+/** The attach paperclip (Material "attach file" outline, drawn — no font glyph). */
+@Composable
+private fun PaperclipIcon(color: androidx.compose.ui.graphics.Color, sizeDp: Int = 22) {
+    val path = remember {
+        androidx.compose.ui.graphics.vector.PathParser().parsePathString(
+            "M16.5,6v11.5c0,2.21 -1.79,4 -4,4s-4,-1.79 -4,-4V5c0,-1.38 1.12,-2.5 2.5,-2.5s2.5,1.12 2.5,2.5v10.5" +
+                "c0,0.55 -0.45,1 -1,1s-1,-0.45 -1,-1V6H10v9.5c0,1.38 1.12,2.5 2.5,2.5s2.5,-1.12 2.5,-2.5V5" +
+                "c0,-2.21 -1.79,-4 -4,-4S7,2.79 7,5v12.5c0,3.04 2.46,5.5 5.5,5.5s5.5,-2.46 5.5,-5.5V6h-1.5z"
+        ).toPath()
+    }
+    Canvas(Modifier.size(sizeDp.dp)) {
+        val k = size.minDimension / 24f
+        scale(k, k, pivot = Offset.Zero) { drawPath(path, color) }
     }
 }
 

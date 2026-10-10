@@ -20,6 +20,21 @@ data class KnockPayload(
     val yours: String = "",
 )
 
+/** A file offer (inside the forward-secret FILE_OFFER frame). See [FileTransfer]. */
+@kotlinx.serialization.Serializable
+data class FileOffer(
+    /** 16 random bytes, hex: names this transfer (chunks + final receipt). */
+    val id: String,
+    /** The sender's file name — the receiver makes it safe before showing it. */
+    val name: String,
+    val size: Long,
+    val mime: String = "application/octet-stream",
+    /** This file's own 32-byte key (hex). Travels only inside the forward-secret frame. */
+    val key: String,
+    val chunks: Int,
+    val selfTimer: String = "off",
+)
+
 @kotlinx.serialization.Serializable
 data class TextPayload(
     val id: String,

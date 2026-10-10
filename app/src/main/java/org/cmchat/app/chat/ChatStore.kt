@@ -41,24 +41,28 @@ object ChatStore {
         _threads.update { m -> m.toMutableMap().also { it[chatId] = f(it[chatId] ?: ChatThread()) } }
     }
 
-    fun addMine(chatId: String, text: String, timer: SelfTimer): ChatMessage {
-        val m = ChatMessage(newId(), mine = true, text = text, state = MsgState.SENDING, selfTimer = timer)
+    fun addMine(chatId: String, text: String, timer: SelfTimer, file: ChatFile? = null): ChatMessage {
+        val m = ChatMessage(newId(), mine = true, text = text, state = MsgState.SENDING, selfTimer = timer, file = file)
         update(chatId) { it.copy(messages = it.messages + m) }
         return m
     }
+
+    /** A RECEIVED file's bytes exist only here: zero them the moment it leaves. */
+    private fun wipeReceivedFiles(gone: Collection<ChatMessage>) =
+        gone.forEach { if (!it.mine) it.file?.wipe() }
 
     /**
      * [at] = when it arrived (a message held while locked is added later, with
      * its real time); [closedMiss] = it arrived while the app was closed.
      */
     fun addTheirs(chatId: String, id: String, text: String, timer: SelfTimer, missed: Boolean = false,
-                  at: Long? = null, closedMiss: Boolean = false) {
+                  at: Long? = null, closedMiss: Boolean = false, file: ChatFile? = null) {
         // A missed (invisible) message isn't "seen" yet, so its self-timer
         // doesn't start until the user goes Online and views it.
         val now = System.currentTimeMillis()
         val m = ChatMessage(id, mine = false, text = text, state = MsgState.SENT,
             selfTimer = timer, createdAt = at ?: now, seenAt = if (missed) null else now, missed = missed,
-            closedMiss = closedMiss)
+            closedMiss = closedMiss, file = file)
         // Every new message is unread until the chat is viewed while Online.
         update(chatId) { it.copy(messages = it.messages + m, unread = true) }
         touchPeer(chatId)
@@ -102,18 +106,27 @@ object ChatStore {
      * now read is gone and never shown again. (Outgoing view-once copies are
      * removed on send; see [setState].)
      */
-    fun burnViewOnce(chatId: String) = update(chatId) { t ->
-        t.copy(messages = t.messages.filterNot {
-            !it.mine && it.selfTimer == SelfTimer.VIEW_ONCE && it.seenAt != null
-        })
+    fun burnViewOnce(chatId: String) {
+        val burn = thread(chatId).messages.filter { !it.mine && it.selfTimer == SelfTimer.VIEW_ONCE && it.seenAt != null }
+        if (burn.isEmpty()) return
+        update(chatId) { t -> t.copy(messages = t.messages.filterNot { m -> burn.any { it === m } }) }
+        wipeReceivedFiles(burn)
     }
 
     /** Erase the conversation. The Team Clock and "last seen" are not chat
      * content, so they stay. */
-    fun erase(chatId: String) = update(chatId) { ChatThread(teamHour = it.teamHour, peerLastSeen = it.peerLastSeen) }
+    fun erase(chatId: String) {
+        val gone = thread(chatId).messages
+        update(chatId) { ChatThread(teamHour = it.teamHour, peerLastSeen = it.peerLastSeen) }
+        wipeReceivedFiles(gone)
+    }
 
     /** The friend is gone (deleted / terminated): drop everything about them. */
-    fun forget(chatId: String) = _threads.update { it - chatId }
+    fun forget(chatId: String) {
+        val gone = thread(chatId).messages
+        _threads.update { it - chatId }
+        wipeReceivedFiles(gone)
+    }
 
     fun touchPeer(chatId: String, at: Long = System.currentTimeMillis()) =
         update(chatId) { it.copy(peerLastSeen = maxOf(at, it.peerLastSeen ?: 0L)) }
@@ -196,12 +209,17 @@ object ChatStore {
     /** Drop self-timer-expired messages across all threads. (Runs every second:
      * nothing changes — and nothing is redrawn — unless something expired.) */
     fun purgeExpired(now: Long = System.currentTimeMillis()) {
+        val expired = _threads.value.values.flatMap { t ->
+            t.messages.filter { SelfTimerRules.isExpired(it.seenAt, it.selfTimer, now) }
+        }
+        if (expired.isEmpty()) return
         _threads.update { m ->
             if (m.values.none { t -> t.messages.any { SelfTimerRules.isExpired(it.seenAt, it.selfTimer, now) } }) m
             else m.mapValues { (_, t) ->
                 t.copy(messages = t.messages.filterNot { SelfTimerRules.isExpired(it.seenAt, it.selfTimer, now) })
             }
         }
+        wipeReceivedFiles(expired)
     }
 
     /**
@@ -228,6 +246,8 @@ object ChatStore {
 
     /** Full wipe of all RAM chat state (Cerberus / Kill / logout). */
     fun clearAll() {
+        val gone = _threads.value.values.flatMap { it.messages }
         _threads.value = emptyMap()
+        wipeReceivedFiles(gone)
     }
 }

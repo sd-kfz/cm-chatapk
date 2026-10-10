@@ -216,6 +216,12 @@ object MessageService {
     /** Cap pending knock requests so a knock flood can't grow RAM without bound. */
     private const val MAX_PENDING_KNOCKS = 20
 
+    /** Files go on their own queue per friend, so a big one never holds up messages. */
+    private const val FILE_LANE = "#file"
+    /** Incoming files at once (each can take up to 100 MB of RAM). */
+    private const val MAX_INCOMING_FILES = 1
+    private val incomingFiles = java.util.concurrent.atomic.AtomicInteger(0)
+
     /** Silent background delivery (RAM-only). See [Outbox]. */
     private val outbox = Outbox(scope)
     @Volatile private var torWatch: Job? = null
@@ -519,7 +525,10 @@ object MessageService {
                 if (activeChatCmId == k) activeChatCmId = null
             }
         }
-        keys.forEach { k -> outbox.clearPeer(k); knockSentAt.remove(k); knockDelivered.remove(k); seenPersistedAt.remove(k) }
+        keys.forEach { k ->
+            outbox.clearPeer(k); outbox.clearPeer(k + FILE_LANE)
+            knockSentAt.remove(k); knockDelivered.remove(k); seenPersistedAt.remove(k)
+        }
     }
 
     /** Is this friend still waiting to accept me? */
@@ -586,6 +595,42 @@ object MessageService {
             stillWanted = { ChatStore.thread(currentId(chatCmId)).messages.any { it.id == msg.id } },
             onDelivered = { ChatStore.setState(currentId(chatCmId), msg.id, MsgState.SENT) },
         ))
+    }
+
+    enum class FileResult { QUEUED, TOO_BIG, EMPTY, NOT_READY }
+
+    /**
+     * Send a file that the caller already cleaned ([org.cmchat.app.media.MediaPolicy]).
+     * It shows in the chat at once and is delivered silently in the background
+     * like a message — on its own queue, so it never holds messages up — and
+     * counts as delivered only on their final receipt (all pieces stored).
+     * Over 100 MB is refused here too (defence in depth). RAM only.
+     */
+    fun sendFile(cmId: String, name: String, mime: String, file: org.cmchat.app.media.Chunked,
+                 timer: SelfTimer): FileResult {
+        if (file.size == 0L) return FileResult.EMPTY
+        if (file.size > FileTransfer.MAX_BYTES) return FileResult.TOO_BIG
+        if (channel == null) return FileResult.NOT_READY
+        val effective = if (timer != SelfTimer.OFF) timer else org.cmchat.app.settings.AppSettings.generalTimer.value
+        val safe = org.cmchat.app.media.FileNames.safe(name)
+        val chatFile = org.cmchat.app.chat.ChatFile(safe, file.size, mime, file.pieces)
+        val (chatCmId, msg) = inChat(cmId) { id -> id to ChatStore.addMine(id, safe, effective, chatFile) }
+        if (!contacts.containsKey(chatCmId)) return FileResult.NOT_READY
+        val rnd = java.security.SecureRandom()
+        val fileId = ByteArray(FileTransfer.ID_BYTES).also { rnd.nextBytes(it) }
+        val key = ByteArray(FileTransfer.KEY_BYTES).also { rnd.nextBytes(it) }
+        val offer = Messages.json.encodeToString(FileOffer.serializer(), FileOffer(
+            id = toHex(fileId), name = safe, size = file.size, mime = mime, key = toHex(key),
+            chunks = file.pieces.size, selfTimer = effective.label)).toByteArray()
+        val wanted = { ChatStore.thread(currentId(chatCmId)).messages.any { it.id == msg.id } }
+        ConnDiag.sys("File: queued (${file.pieces.size} piece(s))")
+        outbox.enqueue(Outbox.Item(
+            peer = chatCmId + FILE_LANE, label = "file",
+            deliver = { sendFileTo(chatCmId, offer, fileId, key, file.pieces, wanted) },
+            stillWanted = wanted,
+            onDelivered = { ChatStore.setState(currentId(chatCmId), msg.id, MsgState.SENT) },
+        ))
+        return FileResult.QUEUED
     }
 
     /** The normal chat Erase: wipes BOTH sides (theirs as soon as it reaches them). */
@@ -812,10 +857,11 @@ object MessageService {
                     // Any authenticated frame proves this friend has me: confirm a
                     // pending one, and retry anything queued for them right now.
                     confirmIfPending(r.cmId)
-                    outbox.kick(r.cmId)
+                    outbox.kick(r.cmId); outbox.kick(r.cmId + FILE_LANE)
                     // Anything they deliberately sent = they were around ("last
                     // seen recently"). Cover traffic is noise and doesn't count.
                     if (r.type != FrameType.COVER) markSeen(r.cmId)
+                    if (r.type == FrameType.FILE_OFFER) { receiveFile(r, socket, ch, peer); return }
                     val ack = try {
                         take(r.cmId, peer, r.type, r.body)
                     } catch (_: Exception) {
@@ -840,6 +886,64 @@ object MessageService {
             org.cmchat.app.diag.Diag.droppedFrame()
         }
     }
+
+    /**
+     * A friend offers a file. Everything is checked against the OFFER before a
+     * single byte of the file is read or allocated: the 100 MB cap, the piece
+     * count, free memory, one incoming file at a time — and while locked the
+     * answer is "retry later" (files are RAM-only and not held). Then exactly
+     * the announced pieces are read and verified; only when ALL of them opened
+     * is it kept (RAM) and the final receipt sent. Never opened or interpreted.
+     */
+    private fun receiveFile(r: SecureWire.Received.Message, socket: Socket, ch: SecureChannel, peer: CmIdData) {
+        val offer = runCatching { Messages.json.decodeFromString(FileOffer.serializer(), String(r.body)) }.getOrNull()
+        val fileId = offer?.id?.let { fromHex(it) }?.takeIf { it.size == FileTransfer.ID_BYTES }
+        val key = offer?.key?.let { fromHex(it) }?.takeIf { it.size == FileTransfer.KEY_BYTES }
+        if (offer == null || fileId == null || key == null) {
+            ConnDiag.inc("file offer malformed → refused"); r.reply(Ack.REJECTED); return
+        }
+        if (offer.size <= 0 || offer.size > FileTransfer.MAX_BYTES || offer.chunks != FileTransfer.chunkCount(offer.size)) {
+            ConnDiag.inc("file refused: over 100 MB or malformed (nothing read)"); r.reply(Ack.REJECTED); return
+        }
+        val dedup = "${peer.identityPubKeyHex.lowercase()}:file:${offer.id}"
+        if (synchronized(holdLock) { deliveredIds.containsKey(dedup) }) {
+            ConnDiag.inc("file already here → told them"); r.reply(Ack.HAVE); return
+        }
+        if (!vaultOpen) { ConnDiag.inc("file while locked → they'll retry after unlock"); r.reply(Ack.RETRY); return }
+        if (!FileTransfer.fitsInMemory(offer.size)) { ConnDiag.inc("file: not enough free memory now → retry"); r.reply(Ack.RETRY); return }
+        if (incomingFiles.incrementAndGet() > MAX_INCOMING_FILES) {
+            incomingFiles.decrementAndGet(); ConnDiag.inc("file: another one is arriving → retry"); r.reply(Ack.RETRY); return
+        }
+        try {
+            if (!r.reply(Ack.OK)) return
+            ConnDiag.inc("file offer accepted (${offer.chunks} piece(s))")
+            // Generous for a slow Tor link (~16 KB/s), but never forever.
+            val deadline = System.currentTimeMillis() + 10 * 60_000L + offer.size / 16
+            val pieces = SecureWire.readFileChunks(ch, socket.getInputStream(), key, fileId, offer.size,
+                offer.chunks, deadline)
+            if (pieces == null) { ConnDiag.inc("file broke off or was tampered with → discarded"); return }
+            val file = org.cmchat.app.chat.ChatFile(org.cmchat.app.media.FileNames.safe(offer.name), offer.size,
+                safeMime(offer.mime), pieces)
+            synchronized(holdLock) {
+                deliveredIds[dedup] = true
+                val invisible = org.cmchat.app.settings.AppSettings.invisibleMode.value
+                val chatCmId = inChat(r.cmId) { id ->
+                    ChatStore.addTheirs(id, "f-${offer.id}", file.name, SelfTimer.fromLabel(offer.selfTimer),
+                        missed = invisible, file = file); id
+                }
+                if (!invisible && !chatOnScreen(chatCmId)) notify(Notice.MESSAGE)
+            }
+            Transport.writeFrame(socket.getOutputStream(), ch.fileReceipt(fileId, Ack.OK, peer.identityPubKeyHex))
+            ConnDiag.inc("file stored (RAM) → final receipt sent")
+        } finally {
+            key.fill(0)
+            incomingFiles.decrementAndGet()
+        }
+    }
+
+    /** A type label we pass on only if it looks like one (it's only a hint for saving). */
+    private fun safeMime(m: String): String =
+        m.takeIf { it.length <= 80 && Regex("^[a-z]+/[a-z0-9.+-]+$").matches(it) } ?: "application/octet-stream"
 
     private fun confirmIfPending(cmId: String) {
         if (pending.remove(cmId)) {
@@ -1244,9 +1348,22 @@ object MessageService {
         }
     }
 
+    /** One file to a friend's CURRENT address: offer, pieces, final receipt. */
+    private fun sendFileTo(cmId: String, offer: ByteArray, fileId: ByteArray, key: ByteArray,
+                           pieces: List<ByteArray>, stillWanted: () -> Boolean) {
+        val peer = contacts[currentId(cmId)] ?: throw IOException("not a friend any more")
+        val ch = channel ?: throw IOException("engine not ready")
+        withConnection(peer) { s ->
+            s.soTimeout = HANDSHAKE_READ_TIMEOUT_MS
+            requireStored(SecureWire.sendFile(ch, s.getInputStream(), s.getOutputStream(), peer.identityPubKeyHex,
+                offer, fileId, key, pieces, onStage = { ConnDiag.out(it) },
+                onVersionMismatch = { versionMismatch.value = true }, stillWanted = stillWanted))
+        }
+    }
+
     /** OK = stored on their phone. RETRY = keep it and try later; REJECTED = never. */
     private fun requireStored(ack: Ack) = when (ack) {
-        Ack.OK -> Unit
+        Ack.OK, Ack.HAVE -> Unit
         Ack.RETRY -> throw SecureWire.HandshakeFailed("their phone asked to retry later")
         Ack.REJECTED -> throw Outbox.GiveUp("their phone refused it")
     }

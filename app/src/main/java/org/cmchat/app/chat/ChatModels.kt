@@ -53,6 +53,17 @@ fun SelfTimer.displayLabel(): String = when (this) {
 /** True if this message self-destructs on first view (no timer). */
 val SelfTimer.isViewOnce: Boolean get() = this == SelfTimer.VIEW_ONCE
 
+/**
+ * A file in a chat — RAM only, like a message: never written anywhere unless
+ * the user taps Save, and never opened or interpreted by the app. [name] is
+ * already made safe ([org.cmchat.app.media.FileNames]). Not a data class: the
+ * bytes are compared by identity, and [wipe] zeroes them when it leaves the chat.
+ */
+class ChatFile(val name: String, val size: Long, val mime: String, val chunks: List<ByteArray>) {
+    fun writeTo(out: java.io.OutputStream) = chunks.forEach { out.write(it) }
+    fun wipe() = chunks.forEach { it.fill(0) }
+}
+
 /** A chat message. RAM-only; never written to disk. */
 data class ChatMessage(
     val id: String,
@@ -70,6 +81,8 @@ data class ChatMessage(
     val closedMiss: Boolean = false,
     /** A system ALERT (e.g. "Decoy chat tripped."): a small red timestamped line. */
     val alert: Boolean = false,
+    /** A file instead of text ([text] is then its name). */
+    val file: ChatFile? = null,
 )
 
 /**

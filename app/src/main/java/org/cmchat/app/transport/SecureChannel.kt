@@ -123,7 +123,7 @@ class SecureChannel(
         val CONTENT_TYPES: Set<FrameType> = setOf(
             FrameType.MSG, FrameType.ERASE_CHAT, FrameType.BUZZ, FrameType.ADDR_UPDATE,
             FrameType.COVER, FrameType.KNOCK_ACCEPT, FrameType.DECOY_ALERT, FrameType.TEAM_CLOCK,
-            FrameType.TERMINATE, FrameType.NICKNAME,
+            FrameType.TERMINATE, FrameType.NICKNAME, FrameType.FILE_OFFER,
         )
     }
 
@@ -158,6 +158,34 @@ class SecureChannel(
     /** Knocker: the receipt for MY knock carrying [nonce], made by [recipientIdPubHex]; null if not. */
     fun openKnockReceipt(frame: ByteArray, nonce: ByteArray, recipientIdPubHex: String): Ack? =
         openReceipt(frame, nonce, recipientIdPubHex)
+
+    // ---- files (see FileTransfer) ---------------------------------------------
+
+    /** One piece of a file, sealed under the file's own key; padded to a full piece. */
+    fun sealFileChunk(key: ByteArray, fileId: ByteArray, index: Int, total: Int, data: ByteArray): ByteArray {
+        require(data.size <= FileTransfer.CHUNK) { "chunk too large" }
+        val plain = if (data.size == FileTransfer.CHUNK) data
+            else data + crypto.randomBytes(FileTransfer.CHUNK - data.size)
+        try {
+            return crypto.aeadSeal(plain, key, FileTransfer.nonce(index), FileTransfer.aad(fileId, index, total))
+        } finally {
+            if (plain !== data) plain.fill(0)
+        }
+    }
+
+    /** A piece of THIS file at THIS position (the full padded piece), or null. */
+    fun openFileChunk(key: ByteArray, fileId: ByteArray, index: Int, total: Int, frame: ByteArray): ByteArray? =
+        if (frame.size != FileTransfer.SEALED_CHUNK) null
+        else crypto.aeadOpen(frame, key, FileTransfer.nonce(index), FileTransfer.aad(fileId, index, total))
+
+    /** The receipt after the whole file: over the file id (not the challenge). */
+    fun fileReceipt(fileId: ByteArray, status: Ack, peerIdPubHex: String): ByteArray {
+        require(fileId.size == CHALLENGE) { "bad file id" }
+        return sealReceipt(fileId, status, peerIdPubHex)
+    }
+
+    fun openFileReceipt(frame: ByteArray, fileId: ByteArray, peerIdPubHex: String): Ack? =
+        openReceipt(frame, fileId, peerIdPubHex)
 
     // ---- receipts (step 4) -------------------------------------------------
 
@@ -392,6 +420,80 @@ object SecureWire {
         onStage: (String) -> Unit = {},
         onVersionMismatch: () -> Unit = {},
     ): Ack {
+        val (client, prekey) = handshake(ch, input, output, peerIdPubHex, onStage, onVersionMismatch)
+        val frame = client.seal(prekey, type, payload)
+        // Never send a frame the receiver's length cap would silently discard.
+        if (frame.size > Transport.MAX_FRAME_BYTES) throw HandshakeFailed("message too large")
+        Transport.writeFrame(output, frame)
+        onStage("forward-secret frame sent (${frame.size}b)")
+        // Delivered = THEY say it's stored. A frame that went out but got no
+        // receipt is NOT delivered (they may have crashed or dropped it): retried.
+        val r = Transport.readFrame(input)
+            ?: throw HandshakeFailed("no receipt — not confirmed stored, will retry")
+        val ack = client.verifyReceipt(r) ?: throw HandshakeFailed("receipt not authenticated")
+        onStage("receipt: ${ack.name}")
+        return ack
+    }
+
+    /**
+     * Sender of a FILE (see [FileTransfer]): handshake, the offer, the receiver's
+     * go-ahead, every piece, then the final receipt over the file id. Returns
+     * that final status (or a refusal of the offer); throws when there's none.
+     * [stillWanted] is checked between pieces (the chat was erased → stop).
+     */
+    fun sendFile(
+        ch: SecureChannel, input: InputStream, output: OutputStream,
+        peerIdPubHex: String, offer: ByteArray, fileId: ByteArray, key: ByteArray, chunks: List<ByteArray>,
+        onStage: (String) -> Unit = {},
+        onVersionMismatch: () -> Unit = {},
+        stillWanted: () -> Boolean = { true },
+    ): Ack {
+        val (client, prekey) = handshake(ch, input, output, peerIdPubHex, onStage, onVersionMismatch)
+        Transport.writeFrame(output, client.seal(prekey, FrameType.FILE_OFFER, offer))
+        onStage("file offer sent (${chunks.size} piece(s))")
+        val r = Transport.readFrame(input) ?: throw HandshakeFailed("no answer to the file offer — will retry")
+        val go = client.verifyReceipt(r) ?: throw HandshakeFailed("receipt not authenticated")
+        if (go == Ack.HAVE) { onStage("file already on their phone"); return Ack.OK }
+        if (go != Ack.OK) { onStage("file offer answered: ${go.name}"); return go }
+        chunks.forEachIndexed { i, c ->
+            if (!stillWanted()) throw HandshakeFailed("file cancelled (erased) — stopped")
+            Transport.writeFrame(output, ch.sealFileChunk(key, fileId, i, chunks.size, c))
+        }
+        onStage("all ${chunks.size} piece(s) sent")
+        val fin = Transport.readFrame(input)
+            ?: throw HandshakeFailed("no receipt after the file — not confirmed stored, will retry")
+        val ack = ch.openFileReceipt(fin, fileId, peerIdPubHex) ?: throw HandshakeFailed("file receipt not authenticated")
+        onStage("file receipt: ${ack.name}")
+        return ack
+    }
+
+    /**
+     * Receiver: read exactly [total] pieces of THIS file (key, id, positions all
+     * checked) and return the file's bytes as pieces; null on ANY problem — a
+     * tampered, missing, reordered or wrong-size piece, a stall, or the
+     * [deadlineMs] passing — and whatever was read is wiped.
+     */
+    fun readFileChunks(
+        ch: SecureChannel, input: InputStream, key: ByteArray, fileId: ByteArray, size: Long, total: Int,
+        deadlineMs: Long,
+    ): List<ByteArray>? {
+        val out = ArrayList<ByteArray>(total)
+        fun fail(): List<ByteArray>? { out.forEach { it.fill(0) }; return null }
+        for (i in 0 until total) {
+            if (System.currentTimeMillis() > deadlineMs) return fail()
+            val f = Transport.readFrame(input) ?: return fail()
+            val p = ch.openFileChunk(key, fileId, i, total, f) ?: return fail()
+            val keep = if (i == total - 1) (size - FileTransfer.CHUNK.toLong() * (total - 1)).toInt() else FileTransfer.CHUNK
+            out += if (keep == FileTransfer.CHUNK) p else p.copyOf(keep).also { p.fill(0) }
+        }
+        return out
+    }
+
+    /** Steps 1–2: a one-time prekey, verified against the contact's identity key. */
+    private fun handshake(
+        ch: SecureChannel, input: InputStream, output: OutputStream, peerIdPubHex: String,
+        onStage: (String) -> Unit, onVersionMismatch: () -> Unit,
+    ): Pair<SecureChannel.Client, SecureChannel.Prekey> {
         val client = ch.Client(peerIdPubHex)
         Transport.writeFrame(output, client.request)
         onStage("prekey requested")
@@ -407,18 +509,7 @@ object SecureWire {
             is SecureChannel.Verdict.Rejected -> throw HandshakeFailed("prekey rejected: ${v.reason}")
         }
         onStage("one-time prekey verified against the contact's identity key")
-        val frame = client.seal(prekey, type, payload)
-        // Never send a frame the receiver's length cap would silently discard.
-        if (frame.size > Transport.MAX_FRAME_BYTES) throw HandshakeFailed("message too large")
-        Transport.writeFrame(output, frame)
-        onStage("forward-secret frame sent (${frame.size}b)")
-        // Delivered = THEY say it's stored. A frame that went out but got no
-        // receipt is NOT delivered (they may have crashed or dropped it): retried.
-        val r = Transport.readFrame(input)
-            ?: throw HandshakeFailed("no receipt — not confirmed stored, will retry")
-        val ack = client.verifyReceipt(r) ?: throw HandshakeFailed("receipt not authenticated")
-        onStage("receipt: ${ack.name}")
-        return ack
+        return client to prekey
     }
 
     /**

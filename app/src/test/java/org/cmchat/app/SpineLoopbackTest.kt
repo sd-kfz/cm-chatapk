@@ -12,6 +12,8 @@ import org.cmchat.app.diag.ConnDiag
 import org.cmchat.app.settings.AppSettings
 import org.cmchat.app.tor.ServerController
 import org.cmchat.app.transport.Ack
+import org.cmchat.app.transport.FileOffer
+import org.cmchat.app.transport.FileTransfer
 import org.cmchat.app.transport.FrameType
 import org.cmchat.app.transport.InnerCodec
 import org.cmchat.app.transport.KnockPayload
@@ -92,6 +94,10 @@ class SpineLoopbackTest {
         val inbox = LinkedBlockingQueue<SecureWire.Received>()
         /** The receipt this phone answers with; null = it stores nothing, no receipt. */
         @Volatile var receipt: Ack? = Ack.OK
+        /** Files this phone received whole: (offer, bytes). */
+        val files = LinkedBlockingQueue<Pair<FileOffer, ByteArray>>()
+        /** Its final receipt for a file; null = it never confirms. */
+        @Volatile var fileReceipt: Ack? = Ack.OK
         @Volatile private var server: ServerSocket? = null
 
         fun up() {
@@ -105,6 +111,9 @@ class SpineLoopbackTest {
                         s.use {
                             it.soTimeout = 5_000
                             val r = SecureWire.receive(ch, it.getInputStream(), it.getOutputStream(), friends)
+                            if (r is SecureWire.Received.Message && r.type == FrameType.FILE_OFFER) {
+                                takeFile(r, it); return@use
+                            }
                             val ack = receipt
                             if (ack != null) when (r) {
                                 is SecureWire.Received.Message -> r.reply(ack)
@@ -119,6 +128,27 @@ class SpineLoopbackTest {
                     }
                 }
             }
+        }
+
+        /** Like the app: accept the offer, read every piece, confirm only then. */
+        private fun takeFile(r: SecureWire.Received.Message, s: Socket) {
+            val offer = Messages.json.decodeFromString(FileOffer.serializer(), String(r.body))
+            r.reply(Ack.OK)
+            val pieces = SecureWire.readFileChunks(ch, s.getInputStream(), hex(offer.key), hex(offer.id), offer.size,
+                offer.chunks, System.currentTimeMillis() + 30_000) ?: return
+            files.put(offer to pieces.fold(ByteArray(0)) { a, b -> a + b })
+            fileReceipt?.let { Transport.writeFrame(s.getOutputStream(), ch.fileReceipt(hex(offer.id), it, aPub)) }
+        }
+
+        /** Send Alice a file; [chunkKey] ≠ the offer's key = a tampered transfer. */
+        fun sendFile(name: String, data: ByteArray, id: ByteArray = crypto.randomBytes(16),
+                     key: ByteArray = crypto.randomBytes(32), chunkKey: ByteArray = key,
+                     claimedSize: Long = data.size.toLong()): Ack = toAlice { s ->
+            val offer = FileOffer(id.hexs(), name, claimedSize, "application/octet-stream", key.hexs(),
+                FileTransfer.chunkCount(claimedSize))
+            SecureWire.sendFile(ch, s.getInputStream(), s.getOutputStream(), aPub,
+                Messages.json.encodeToString(FileOffer.serializer(), offer).toByteArray(), id, chunkKey,
+                FileTransfer.split(data))
         }
 
         fun down() {
@@ -169,6 +199,7 @@ class SpineLoopbackTest {
     }
 
     private fun hex(s: String) = ByteArray(s.length / 2) { i -> s.substring(2 * i, 2 * i + 2).toInt(16).toByte() }
+    private fun ByteArray.hexs() = joinToString("") { "%02x".format(it) }
 
     private fun waitUntil(what: String, ms: Long = 15_000, cond: () -> Boolean) {
         val end = System.currentTimeMillis() + ms
@@ -939,6 +970,81 @@ class SpineLoopbackTest {
         assertFalse("no identity key, friend table or channel left", MessageService.keysInRam())
         assertTrue("and nothing gets in any more", runCatching { bob.text("b-1", "anyone?") }.isFailure)
         assertEquals(0, heldFiles())
+    }
+
+    // ---- E. files -------------------------------------------------------------------
+
+    private fun fileIn(chatId: String) = ChatStore.thread(chatId).messages.firstOrNull { it.file != null }
+
+    @Test
+    fun a_file_arrives_whole_in_ram_and_counts_only_after_the_last_piece() {
+        val bob = Phone("Bob", 'b').also { it.up() }
+        bob.friends[aliceId] = aPub
+        configureAlice(friends = listOf(bob.cmId))
+        val data = crypto.randomBytes(FileTransfer.CHUNK * 30 + 123)          // 31 pieces, the last short
+        assertEquals("confirmed only once it's all there", Ack.OK, bob.sendFile("../../holiday.jpg", data))
+        val m = fileIn(bob.cmId)!!
+        assertEquals("a path in the name is stripped", "holiday.jpg", m.file!!.name)
+        assertEquals(data.size.toLong(), m.file!!.size)
+        val got = java.io.ByteArrayOutputStream().also { m.file!!.writeTo(it) }.toByteArray()
+        assertTrue("byte for byte", got.contentEquals(data))
+        assertEquals("nothing written anywhere", 0, heldFiles())
+    }
+
+    @Test
+    fun a_file_over_100_mb_is_refused_before_a_single_byte_is_read() {
+        val bob = Phone("Bob", 'b').also { it.up() }
+        bob.friends[aliceId] = aPub
+        configureAlice(friends = listOf(bob.cmId))
+        // The offer CLAIMS 100 MB + 1: refused on the offer alone — no piece is sent or read.
+        assertEquals(Ack.REJECTED, bob.sendFile("big.zip", ByteArray(0), claimedSize = FileTransfer.MAX_BYTES + 1))
+        assertTrue(ConnDiag.dump().contains("nothing read"))
+        assertNull(fileIn(bob.cmId))
+    }
+
+    @Test
+    fun a_tampered_piece_means_no_file_and_no_receipt() {
+        val bob = Phone("Bob", 'b').also { it.up() }
+        bob.friends[aliceId] = aPub
+        configureAlice(friends = listOf(bob.cmId))
+        val e = runCatching { bob.sendFile("x.bin", crypto.randomBytes(100_000), chunkKey = crypto.randomBytes(32)) }
+        assertTrue("never confirmed", e.isFailure)
+        assertNull("nothing kept", fileIn(bob.cmId))
+    }
+
+    @Test
+    fun a_file_while_locked_waits_for_the_unlock_and_a_resend_is_not_kept_twice() {
+        val bob = Phone("Bob", 'b').also { it.up() }
+        bob.friends[aliceId] = aPub
+        configureAlice(friends = listOf(bob.cmId))
+        MessageService.closeVault()
+        val data = crypto.randomBytes(5_000)
+        val id = crypto.randomBytes(16)
+        assertEquals("files are RAM-only, not held: try again after unlock", Ack.RETRY, bob.sendFile("a.txt", data, id))
+        configureAlice(friends = listOf(bob.cmId))                            // unlocked
+        assertEquals(Ack.OK, bob.sendFile("a.txt", data, id))
+        assertEquals("its final receipt got lost; re-sent → 'already here'", Ack.OK, bob.sendFile("a.txt", data, id))
+        assertEquals(1, ChatStore.thread(bob.cmId).messages.count { it.file != null })
+    }
+
+    @Test
+    fun my_file_counts_as_sent_only_after_their_final_receipt() {
+        val bob = Phone("Bob", 'b').also { it.up() }
+        bob.friends[aliceId] = aPub
+        configureAlice(friends = listOf(bob.cmId))
+        val data = crypto.randomBytes(FileTransfer.CHUNK * 3)
+        bob.fileReceipt = null                                                // he reads it all but never confirms
+        assertEquals(MessageService.FileResult.QUEUED,
+            MessageService.sendFile(bob.cmId, "notes.pdf", "application/pdf", org.cmchat.app.media.Chunked.of(data), SelfTimer.OFF))
+        val (offer, got) = bob.files.poll(15, TimeUnit.SECONDS) ?: throw AssertionError("no file\n${ConnDiag.dump()}")
+        assertEquals("notes.pdf", offer.name)
+        assertTrue(got.contentEquals(data))
+        waitUntil("no final receipt logged") { ConnDiag.dump().contains("no receipt after the file") }
+        assertEquals(MsgState.SENDING, ChatStore.thread(bob.cmId).messages.single { it.mine }.state)
+        bob.fileReceipt = Ack.OK
+        bob.text("b-1", "got it?")                                           // he shows up → retried
+        bob.files.poll(15, TimeUnit.SECONDS) ?: throw AssertionError("no retry")
+        waitUntil("sent only now") { ChatStore.thread(bob.cmId).messages.single { it.mine }.state == MsgState.SENT }
     }
 
     @Test
