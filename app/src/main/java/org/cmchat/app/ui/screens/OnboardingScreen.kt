@@ -19,12 +19,15 @@ import org.cmchat.app.ui.components.CmChatLogo
 import org.cmchat.app.ui.theme.*
 
 /**
- * First-run wizard for brand-new users, in very simple language. Shown once,
- * skippable. Covers: identity, PIN, Engine/Online/Invisible, adding via QR, and
- * wipe/shredder. Text comes from string resources (translation-ready).
+ * First-run wizard for brand-new users, in very simple language. Shown until
+ * finished (or skipped), skippable. Covers: identity, PIN, Engine/Online/Invisible,
+ * adding via QR, and wipe/shredder. Text comes from string resources
+ * (translation-ready). Resumable: it opens at [startPage], and every page turn
+ * is reported via [onPage] (saved in the vault), so minimising — which re-locks
+ * the app — or a restart brings you back to the same page.
  */
 @Composable
-fun OnboardingScreen(onDone: () -> Unit) {
+fun OnboardingScreen(startPage: Int = 0, onPage: (Int) -> Unit = {}, onDone: () -> Unit) {
     val pages = listOf(
         R.string.ob_title_1 to R.string.ob_body_1,
         R.string.ob_title_2 to R.string.ob_body_2,
@@ -32,7 +35,8 @@ fun OnboardingScreen(onDone: () -> Unit) {
         R.string.ob_title_4 to R.string.ob_body_4,
         R.string.ob_title_5 to R.string.ob_body_5,
     )
-    var page by remember { mutableStateOf(0) }
+    var page by remember { mutableStateOf(startPage.coerceIn(0, pages.lastIndex)) }
+    LaunchedEffect(page) { onPage(page) }
     val last = page == pages.lastIndex
 
     Column(Modifier.fillMaxSize().background(CmBackground).padding(24.dp)) {

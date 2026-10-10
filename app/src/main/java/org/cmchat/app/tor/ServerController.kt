@@ -90,6 +90,27 @@ object ServerController {
     /** A connected peer that sends nothing must not hold a slot forever. */
     private const val CONN_READ_TIMEOUT_MS = 15_000
 
+    /**
+     * The user tapped STOP on My Server: it stays down — no vault save, Tor
+     * coming back, or unlock re-publishes it — until they tap Start
+     * ([userStart]). Restored from the vault at unlock, so it survives restarts.
+     */
+    val stoppedByUser = MutableStateFlow(false)
+
+    /** My Server → Stop: down, and it STAYS down until [userStart]. */
+    fun userStop() {
+        stoppedByUser.value = true
+        stop()
+        org.cmchat.app.diag.ConnDiag.sys("My server: stopped by you — stays off until you tap Start")
+    }
+
+    /** My Server → Start: the only way back after [userStop]. */
+    fun userStart(faceName: String, existingOnionKey: String?, existingOnionAddress: String?,
+                  onPublished: (OnionPublish) -> Unit) {
+        stoppedByUser.value = false
+        start(faceName, existingOnionKey, existingOnionAddress, onPublished)
+    }
+
     /** Set by MessageService: handles each accepted connection synchronously. */
     @Volatile
     var onIncoming: ((java.net.Socket) -> Unit)? = null
@@ -155,6 +176,8 @@ object ServerController {
         existingOnionAddress: String? = null,
         onPublished: (OnionPublish) -> Unit,
     ) {
+        // Stopped by the user: nothing automatic brings it back (only userStart).
+        if (stoppedByUser.value) return
         // Fast path: already online for THIS exact key -> nothing to do. Prevents
         // the re-publish storm when the start effect re-fires on recomposition.
         if (_status.value is ServerStatus.Online && activeKey == existingOnionKey) return
@@ -203,9 +226,15 @@ object ServerController {
                     lastPublished = Published(faceName, activeKey, pub.onion)
                     onPublished(pub)
                     org.cmchat.app.diag.Diag.i("onion", "published ${org.cmchat.app.diag.Redact.onionShort(pub.onion)}")
+                    // Compare with the address your friend's log dials ("resolve …").
+                    org.cmchat.app.diag.ConnDiag.sys("My server is up at " +
+                        "${org.cmchat.app.diag.Redact.onionShort(pub.onion)} — friends must reach me at this address " +
+                        "(${if (existingOnionKey != null) "stored" else "NEW"} key)")
                     _status.value = ServerStatus.Online(pub.onion, faceName, System.currentTimeMillis())
                 }.onFailure { e ->
                     org.cmchat.app.diag.Diag.e("onion", "publish failed", e)
+                    org.cmchat.app.diag.ConnDiag.sys("My server: publish FAILED (${e.javaClass.simpleName}) — " +
+                        "nothing can reach me until it's up")
                     _status.value = ServerStatus.Failed(e.message ?: "publish failed")
                 }
             }
@@ -219,6 +248,7 @@ object ServerController {
      * address-update to contacts. Manual (triggered from My Server).
      */
     fun requestNewAddress(urgent: Boolean = false, onNew: (OnionPublish) -> Unit) {
+        if (stoppedByUser.value) return
         // Debounce at the GATE: claim the 60s window SYNCHRONOUSLY, so a burst of
         // calls (rapid taps, or the adversarial self-test) collapses to ONE real
         // rotation instead of launching a coroutine per call. Debounced calls are
@@ -273,6 +303,8 @@ object ServerController {
                 }.onSuccess { pub ->
                     _status.value = ServerStatus.Online(pub.onion, faceName, System.currentTimeMillis())
                     lastPublished = Published(faceName, pub.newPrivateKey, pub.onion)
+                    org.cmchat.app.diag.ConnDiag.sys("My server: NEW address " +
+                        "${org.cmchat.app.diag.Redact.onionShort(pub.onion)} (the old one answers only until Tor restarts)")
                     onNew(pub)
                     org.cmchat.app.diag.Diag.i("onion", "rotated to new address")
                     // Keep the old address alive ~24h, then remove it.
@@ -293,6 +325,9 @@ object ServerController {
     fun stop() {
         // An explicit stop never comes back by itself.
         resumeOnOnline = null
+        // ...and forgets the onion key it was publishing (key material leaves RAM;
+        // the vault has it). pauseForTorRestart() keeps its own copy first.
+        lastPublished = null
         // Flip state synchronously so a following start()/restart() re-publishes.
         _status.value = ServerStatus.Off
         val id = currentServiceId
@@ -316,6 +351,7 @@ object ServerController {
         existingOnionAddress: String? = null,
         onPublished: (OnionPublish) -> Unit,
     ): Boolean {
+        if (stoppedByUser.value) return false
         val now = System.currentTimeMillis()
         synchronized(rotateLock) {
             if (_status.value is ServerStatus.Starting || now - lastRestartMs < MIN_RESTART_INTERVAL_MS) return false
@@ -359,7 +395,17 @@ object ServerController {
     private fun acceptLoop(server: ServerSocket) {
         scope.launch {
             while (!server.isClosed) {
-                val socket = runCatching { server.accept() }.getOrNull() ?: break
+                val socket = try {
+                    server.accept()
+                } catch (e: Exception) {
+                    // Closed by us (stop/restart) is normal; anything else leaves the
+                    // onion published but unanswered — say so in the Connection log.
+                    if (!server.isClosed) {
+                        org.cmchat.app.diag.ConnDiag.sys("My server: listener STOPPED unexpectedly " +
+                            "(${e.javaClass.simpleName}) — incoming messages can't be answered")
+                    }
+                    break
+                }
                 // DoS defense: drop beyond the accept-rate bucket or the concurrent
                 // cap, before doing any work or allocating buffers. Peers are
                 // indistinguishable pre-auth over Tor, so this is a global limit;

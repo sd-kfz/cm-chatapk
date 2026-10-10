@@ -70,9 +70,10 @@ data class ChatMessage(
 )
 
 /**
- * Per-chat presence — deliberately coarse, never an exact time. Within 24h it
- * reads "last seen recently"; after 24h it shows nothing at all. The global
- * "Share my last-seen" toggle hides your own either way.
+ * Per-chat presence — the ONLY presence shown, deliberately coarse, never an
+ * exact time and never "online". Within 24h it reads "last seen recently";
+ * after 24h it shows nothing at all. It is kept (vault, hour-rounded) when the
+ * friend goes Invisible or shuts down, and across my own restarts.
  */
 object LastSeen {
     private const val DAY_MS = 24 * 60 * 60_000L

@@ -208,6 +208,7 @@ object MessageService {
      */
     fun zeroKeys() {
         channel = null
+        myName = ""
         myCmId = null
         myPubHex = null
         contacts.clear()
@@ -266,7 +267,10 @@ object MessageService {
         if (torWatch == null) {
             torWatch = scope.launch {
                 TorService.status.collect {
-                    if (it is TorStatus.Online) { outbox.kickAll(); resendPendingKnocks() }
+                    if (it is TorStatus.Online) {
+                        outbox.kickAll(); resendPendingKnocks()
+                        org.cmchat.app.tor.TorClock.log()   // diagnostics: is this phone's clock off?
+                    }
                 }
             }
         }
@@ -465,6 +469,8 @@ object MessageService {
      * reveals whether the friend is online.
      */
     fun sendText(cmId: String, text: String, timer: SelfTimer) {
+        // Engine logs never go into a conversation (the composer says why).
+        if (org.cmchat.app.chat.EngineLog.looksLikeLog(text)) return
         // Per-message timer wins; otherwise fall back to the general timer.
         val effective = if (timer != SelfTimer.OFF) timer
             else org.cmchat.app.settings.AppSettings.generalTimer.value
@@ -539,9 +545,12 @@ object MessageService {
         if (channel == null) return
         myCmId = newCmId
         val payload = newCmId.toByteArray()
-        contacts.keys.toList().forEach { id ->
+        val friends = contacts.keys.toList()
+        ConnDiag.sys("Telling ${friends.size} friend(s) my new address (each must receive it, or they keep dialing the old one)")
+        friends.forEach { id ->
             outbox.enqueue(Outbox.Item(peer = id, label = "address update", replaceKey = "addr",
-                deliver = { sendSecureTo(id, FrameType.ADDR_UPDATE, payload) }))
+                deliver = { sendSecureTo(id, FrameType.ADDR_UPDATE, payload) },
+                onDelivered = { ConnDiag.sys("New address delivered to a friend") }))
         }
     }
 
@@ -693,9 +702,8 @@ object MessageService {
         }
         ConnDiag.inc("KNOCK received (waiting for you to accept)")
         _incomingKnocks.value = cur + KnockRequest(kp.displayName.take(24), kp.cmId)
-        if (activeChatCmId == null) {
-            org.cmchat.app.settings.AppSettings.appContext?.let { org.cmchat.app.notify.Notifier.activity(it) }
-        }
+        // A friend request always notifies (also while Invisible).
+        notify(Notice.FRIEND_REQUEST)
     }
 
     private fun dispatchFromContact(fromCmId: String, peer: CmIdData, type: FrameType, body: ByteArray) {
@@ -705,20 +713,25 @@ object MessageService {
                 val t = runCatching {
                     Messages.json.decodeFromString(TextPayload.serializer(), String(body))
                 }.getOrNull() ?: return
+                // A pasted engine log is never shown as a message (logs stay in
+                // Connection/Diagnostics) — a grey notice says one arrived.
+                if (org.cmchat.app.chat.EngineLog.looksLikeLog(t.text)) {
+                    ConnDiag.inc("message was an engine log → not shown in the chat")
+                    inChat(fromCmId) { id -> ChatStore.addSystemLine(id, org.cmchat.app.chat.EngineLog.HIDDEN_NOTICE) }
+                    return
+                }
                 // No delivery/read receipt is ever sent back (receipts dropped).
-                // While Invisible, the message is held as "missed" (orange dot);
+                // While Invisible, the message is held as "missed" (blue dot);
                 // the sender learns nothing, and it surfaces once we go Online.
                 val invisible = org.cmchat.app.settings.AppSettings.invisibleMode.value
                 if (invisible) ConnDiag.inc("held (Invisible): message kept as missed")
                 val chatCmId = inChat(fromCmId) { id ->
                     ChatStore.addTheirs(id, t.id, t.text, SelfTimer.fromLabel(t.selfTimer), missed = invisible); id
                 }
-                // Generic "Notification" unless that chat is already on screen.
-                if (activeChatCmId != chatCmId) {
-                    org.cmchat.app.settings.AppSettings.appContext?.let { ctx ->
-                        org.cmchat.app.notify.Notifier.message(ctx)
-                    }
-                }
+                // Generic "Notification" — but NOT while Invisible (then only a Buzz
+                // or a friend request notifies; the message waits as "Missed"), and
+                // not for the chat that's open in front of the user.
+                if (!invisible && !chatOnScreen(chatCmId)) notify(Notice.MESSAGE)
             }
             FrameType.DECOY_ALERT -> onDecoyAlert(fromCmId)
             FrameType.TEAM_CLOCK -> {
@@ -787,7 +800,10 @@ object MessageService {
                 forget(id)
                 onFriendTerminated?.invoke(id)
             }
-            else -> {}
+            FrameType.COVER -> {}
+            // The app was closed (swiped away): only a Buzz gets through. Say so,
+            // so a "my friend's messages never arrive" log shows WHY.
+            else -> ConnDiag.inc("app is closed (Buzz-only) → $type dropped; reopen the app to receive messages")
         }
     }
 
@@ -795,10 +811,31 @@ object MessageService {
     private fun onDecoyAlert(fromCmId: String) {
         val chatCmId = inChat(fromCmId) { id -> ChatStore.addDecoyNotice(id); id }
         ConnDiag.inc("decoy alert received")
-        if (activeChatCmId != chatCmId) {
-            org.cmchat.app.settings.AppSettings.appContext?.let { org.cmchat.app.notify.Notifier.message(it) }
+        // Not a Buzz or a friend request: no notification while Invisible.
+        if (!org.cmchat.app.settings.AppSettings.invisibleMode.value && !chatOnScreen(chatCmId)) notify(Notice.MESSAGE)
+    }
+
+    /** What a notification is about (its text is always generic). */
+    internal enum class Notice { MESSAGE, FRIEND_REQUEST, BUZZ }
+
+    /**
+     * Posts a notification. While Invisible only a Buzz or a friend request may
+     * notify (the callers decide). Tests swap this to count them, like [dialer].
+     */
+    @Volatile
+    internal var notify: (Notice) -> Unit = { n ->
+        org.cmchat.app.settings.AppSettings.appContext?.let { ctx ->
+            when (n) {
+                Notice.MESSAGE -> org.cmchat.app.notify.Notifier.message(ctx)
+                Notice.FRIEND_REQUEST -> org.cmchat.app.notify.Notifier.activity(ctx)
+                Notice.BUZZ -> org.cmchat.app.notify.Notifier.buzz(ctx)
+            }
         }
     }
+
+    /** That friend's chat is open AND the app is in front of the user. */
+    private fun chatOnScreen(chatCmId: String): Boolean =
+        activeChatCmId == chatCmId && org.cmchat.app.LifecycleController.inForeground
 
     /** A buzz arrived: throttle by the receiver setting, then shake + notify. */
     private fun onBuzz(fromCmId: String) {
@@ -808,10 +845,9 @@ object MessageService {
         // otherwise leave a blue Buzz dot on that friend until the chat is opened.
         org.cmchat.app.buzz.BuzzPolicy.requestShake(chatCmId)
         inChat(chatCmId) { id -> if (activeChatCmId != id) ChatStore.markBuzzed(id) }
-        // A real notification in the bar (heads-up + vibration), generic text only.
-        org.cmchat.app.settings.AppSettings.appContext?.let { ctx ->
-            org.cmchat.app.notify.Notifier.buzz(ctx)
-        }
+        // A real notification in the bar (heads-up + vibration), generic text only —
+        // also while Invisible.
+        notify(Notice.BUZZ)
     }
 
     // ---- wire helpers ------------------------------------------------------

@@ -20,7 +20,48 @@ continue.
 - Release signing: not set up yet (release APK is unsigned). Stable-key
   signing via GitHub secrets is a later step; see "Signing TODO" below.
 
-## Fixes from real-device testing (latest)
+## Batch 1 — core: works · safe · private (latest)
+Status words: "tested" = JVM unit/loopback test; "code" = traced/reviewed only;
+everything Tor/Android-UI still needs a device run.
+1. **Chat bubbles** — no commit ever put engine logs in the chat; the v1.2 palette
+   (f427d1f) made received bubbles #0D1117 on black, so a long received message
+   (e.g. a pasted log) looked like a dark box. Bubbles now have their own colours:
+   sent = original blue #6FB8D9 right, received = grey #2A2D33 left, am/pm under
+   each, system notices centred grey. A pasted Diagnostics/Connection log is never
+   sent (composer says why) and one that arrives shows as a grey notice (EngineLog,
+   tested + mutation-checked).
+2. **Moto can't receive** — cause report only (no networking behaviour changed);
+   the Connection log now says: "My server is up at <6 chars>…" (compare with the
+   friend's "resolve …"), publish FAILED, listener STOPPED unexpectedly, message
+   dropped because the app is closed (Buzz-only), outbox retry/give-up, new address
+   sent/delivered, and a Tor clock check.
+3. **Settings persist + Argon2 once** — general timer, Accept Buzz, Buzz-when-closed,
+   decoy (on/name/position), tools now saved in the vault and restored at unlock
+   (tested); onboarding resumes at its saved page. Vault key: Argon2id (unchanged
+   64 MiB / ops 2) runs once at unlock/create/change; saves re-encrypt with the
+   cached key on one background lane (tested: 10 saves = 0 extra Argon2 runs).
+   Vault is ONE file (salt+ciphertext), atomic temp→fsync→rename; old two-file
+   vaults convert on first save (tested). JSON now writes every field.
+4. **Exit wipes keys** — Exit zeroes the engine's identity keys + friend table and
+   the vault key (also on app close and screen destroy); keys reload at unlock.
+5. **Stop stays stopped** — `ServerController.stoppedByUser` (saved): saves, Tor
+   coming back, unlock, Restart can't republish; only Start (tested, mutation-checked).
+   Status line shows "Online · server off". stop() also forgets the onion key.
+6. **Change PIN crash-safe** — new vault written to vault2.new + fsync, read back
+   and verified, old copy kept as vault2.old, atomic rename, re-verified, then the
+   old copy shredded. Unlock settles an interrupted change (old PIN → old vault
+   back; new PIN → confirmed). Simulated crash after every step: never bricked (tested).
+7. **Shredder no-brick** — re-checked (code): red italic line under "Welcome back",
+   cleared on leaving the app (Shredder.reset → fresh lock screen → "Create a PIN");
+   duress now also wipes a kept PIN-change copy (tested).
+8. **Presence** — Invisible only at startup (default, Exit, close); never set at
+   re-unlock, so minimising keeps Online. While Invisible: no message notification
+   (Buzz + friend requests still notify; tested over loopback). Every new message is
+   unread (blue dot) until viewed Online; going Online delivers "Missed" messages
+   (label clears). Green "seen" dot and the mock "Share my last-seen" toggle removed.
+Tests: 139 JVM tests green.
+
+## Fixes from real-device testing
 - **A · Add-friend delivery:** root cause found — a Tor restart (network switch /
   watchdog) killed my onion and only an UNLOCKED app re-published it, so a phone in
   the background silently stopped receiving anything. `ServerController` now

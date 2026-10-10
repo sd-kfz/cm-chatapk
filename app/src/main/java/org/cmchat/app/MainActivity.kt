@@ -51,6 +51,13 @@ class MainActivity : ComponentActivity() {
         org.cmchat.app.tor.TorService.ensureHealthy(applicationContext)
     }
 
+    // The screen is gone (Exit, swiped away, or recreated): the vault key must not
+    // outlive it. A recreated screen starts at the lock screen anyway.
+    override fun onDestroy() {
+        org.cmchat.app.vault.SecurityFactory.lockIfCreated()
+        super.onDestroy()
+    }
+
     // Backgrounded (minimised): re-lock + wipe vault-unlock material from RAM,
     // unless "stay reachable" is on. The service keeps running so we stay online.
     override fun onStop() {

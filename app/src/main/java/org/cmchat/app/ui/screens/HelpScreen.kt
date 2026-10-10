@@ -74,13 +74,17 @@ fun HelpScreen(onBack: () -> Unit) {
                 "Each one asks you twice.")
 
             Section("4 · Presence")
-            Entry("Online and Invisible", "You always start Invisible. Tap \"Me:\" on the Friends screen to switch. " +
-                "Invisible = you still receive, but look offline; held messages show as \"Missed\" " +
-                "(orange dot) until you go Online and open that chat. Senders can't tell.")
+            Entry("Online and Invisible", "Every time the app starts (and after Exit) you're Invisible. Tap " +
+                "\"Me:\" on the Friends screen to switch — only your tap changes it; minimising keeps your choice. " +
+                "Invisible = you still receive, but look offline: no notifications for messages (a Buzz or a " +
+                "friend request still notifies), and they wait as \"Missed Message\". Go Online and they're " +
+                "delivered as new messages. Senders can't tell.")
+            Entry("New messages", "A blue dot on a friend means a new message is waiting. It goes away when " +
+                "you open that chat while Online. There is no \"online\" dot — nobody's status is shown.")
             Entry("Last seen", "Friends only ever see \"last seen recently\" — for a day after you last sent " +
-                "them something, even if you then go Invisible or close the app. Turn it off in Settings → Chats.")
+                "them something, even if you then go Invisible or close the app.")
             Entry("Minimise or Exit", "The white line minimises: the Engine keeps running. The red power " +
-                "symbol exits: it stops everything, clears memory and logs you out.")
+                "symbol exits: it stops everything, clears memory (your keys too) and logs you out.")
 
             Section("5 · Privacy and panic buttons")
             Entry("Privacy & Safety", "Sensitive settings (server, stealth, guardians, PIN, wipe) sit " +

@@ -92,6 +92,7 @@ fun ChatScreen(
 
     val cerberusOn by org.cmchat.app.guard.GuardController.cerberusArmed.collectAsState()
     var input by remember { mutableStateOf("") }
+    var logRefused by remember { mutableStateOf(false) }
     var selfTimer by remember { mutableStateOf(SelfTimer.OFF) }
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
     val context = LocalContext.current
@@ -116,7 +117,7 @@ fun ChatScreen(
             ChatStore.leaveChat(chatId)
         }
     }
-    // Online with the chat on screen = everything here is SEEN: the orange dot
+    // Online with the chat on screen = everything here is SEEN: the blue dot
     // and every "Missed Message" mark clear (also for anything arriving now).
     LaunchedEffect(chatId, invisible, thread.messages.size) {
         if (!invisible) ChatStore.markSeen(chatId)
@@ -375,6 +376,11 @@ fun ChatScreen(
                     fontFamily = Nunito, fontSize = 11.sp, textAlign = TextAlign.End,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp))
             }
+            // A pasted engine log is refused (logs stay in Connection/Diagnostics).
+            if (logRefused) {
+                Text(org.cmchat.app.chat.EngineLog.NOT_SENT_HINT, color = CmRed, fontFamily = Nunito,
+                    fontSize = 11.sp, modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 2.dp))
+            }
             // Message box (grows to ~5 lines, then scrolls) + its own send button.
             Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.Bottom) {
@@ -383,7 +389,7 @@ fun ChatScreen(
                     if (input.isEmpty()) Text("Message…", color = CmTextDim, fontFamily = Nunito, fontSize = 15.sp)
                     BasicTextField(
                         // Enter = newline; send only via the button. Body max 10,000.
-                        value = input, onValueChange = { if (it.length <= MAX_BODY_CHARS) input = it },
+                        value = input, onValueChange = { if (it.length <= MAX_BODY_CHARS) { input = it; logRefused = false } },
                         singleLine = false, maxLines = 5,
                         textStyle = TextStyle(color = CmText, fontFamily = Nunito, fontSize = 15.sp),
                         cursorBrush = SolidColor(CmBlue),
@@ -397,7 +403,9 @@ fun ChatScreen(
                     .background(if (canSend) CmBlue else CmCard)
                     .clickable(enabled = canSend) {
                         val text = input.trimEnd()
-                        if (text.isNotEmpty()) {
+                        if (org.cmchat.app.chat.EngineLog.looksLikeLog(text)) {
+                            logRefused = true
+                        } else if (text.isNotEmpty()) {
                             if (chatCmId != null) MessageService.sendText(chatCmId, text, selfTimer)
                             else ChatStore.addMine(chatId, text, selfTimer)
                             input = ""
@@ -470,6 +478,11 @@ private val TIMER_CHOICES = listOf(
     SelfTimer.OFF, SelfTimer.VIEW_ONCE, SelfTimer.S30, SelfTimer.M5, SelfTimer.M30, SelfTimer.M60,
 )
 
+/**
+ * One message: sent = blue rounded bubble on the RIGHT, received = grey rounded
+ * bubble on the LEFT, with the small am/pm time under it. (System notices are
+ * drawn by the list as centred grey text, never as a bubble.)
+ */
 @Composable
 private fun Bubble(m: ChatMessage, maxBubble: androidx.compose.ui.unit.Dp) {
     Row(Modifier.fillMaxWidth(),
@@ -480,10 +493,10 @@ private fun Bubble(m: ChatMessage, maxBubble: androidx.compose.ui.unit.Dp) {
                     fontStyle = FontStyle.Italic, modifier = Modifier.padding(bottom = 2.dp))
             }
             Box(Modifier.widthIn(max = maxBubble).clip(RoundedCornerShape(16.dp))
-                .background(if (m.mine) CmBlue.copy(alpha = 0.85f) else CmCard.copy(alpha = 0.85f))
+                .background(if (m.mine) CmBubbleMine else CmBubbleTheirs)
                 .padding(horizontal = 14.dp, vertical = 10.dp)) {
-                Text(m.text, color = if (m.mine) CmBackground else CmText, fontFamily = Nunito, fontSize = 15.sp,
-                    fontStyle = if (m.missed) FontStyle.Italic else null)
+                Text(m.text, color = if (m.mine) CmBubbleMineText else CmBubbleText, fontFamily = Nunito,
+                    fontSize = 15.sp, fontStyle = if (m.missed) FontStyle.Italic else null)
             }
             // Time only (h:mm AM/PM) — no delivery/read receipts. A timed message
             // also shows its small RED self-timer (no countdown).

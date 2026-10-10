@@ -117,7 +117,6 @@ private fun AppNavContent() {
 
     var nav by remember { mutableStateOf<Nav>(Nav.Lock) }
     var data by remember { mutableStateOf<VaultData?>(null) }
-    var pin by remember { mutableStateOf<String?>(null) }
 
     val torStatus by TorService.status.collectAsState()
     val shredEpoch by org.cmchat.app.vault.Shredder.epoch.collectAsState()
@@ -148,15 +147,15 @@ private fun AppNavContent() {
 
     // Vault saves come from the UI AND from network threads (a friend accepted,
     // moved, terminated…): serialize them so one can never overwrite another.
-    // Returns false when locked (no PIN in RAM) — the caller's change waits.
+    // Written in the background with the session's cached vault key (Argon2id
+    // ran once, at unlock). Returns false when locked — the caller's change waits.
     val saveLock = remember { Any() }
     fun saveVault(transform: (VaultData) -> VaultData): Boolean {
-        val p = pin ?: return false
         synchronized(saveLock) {
             val cur = data ?: return false
             val updated = transform(cur)
             if (updated != cur) {
-                org.cmchat.app.vault.VaultIO.save(manager, p, updated)
+                if (!org.cmchat.app.vault.VaultIO.save(manager, updated)) return false
                 data = updated
             }
         }
@@ -199,14 +198,28 @@ private fun AppNavContent() {
         }
     }
 
-    // Re-lock on background / Exit: wipe the vault-unlock material from RAM.
+    // Re-lock on background / Exit: the vault key leaves RAM (right after any
+    // queued save is written) and the decrypted vault leaves the UI.
     LaunchedEffect(Unit) {
+        // A recreated screen starts locked: never leave an earlier unlock's key behind.
+        if (data == null) manager.lock()
         org.cmchat.app.LifecycleController.lockRequests.collect {
+            manager.lock()
             if (nav != Nav.Lock) {
-                pin = null
                 data = null
                 nav = Nav.Lock
             }
+        }
+    }
+
+    // Settings the app reads live (general timer, Buzz, decoy, tools) are saved
+    // the moment they change, and were restored at unlock: none of them may
+    // silently reset on a restart.
+    val loggedIn = data != null
+    LaunchedEffect(loggedIn) {
+        if (!loggedIn) return@LaunchedEffect
+        org.cmchat.app.settings.AppSettings.savedChoices.collect {
+            saveVault { cur -> cur.copy(settings = org.cmchat.app.settings.AppSettings.applyTo(cur.settings)) }
         }
     }
 
@@ -246,7 +259,7 @@ private fun AppNavContent() {
                 TextButton(onClick = {
                     showWipeConfirm = false
                     // Log out first so nothing decrypted stays on screen or in RAM.
-                    pin = null; data = null; nav = Nav.Lock
+                    manager.lock(); data = null; nav = Nav.Lock
                     scope.launch {
                         try {
                             // 1) stop the engine so nothing is still writing files…
@@ -342,8 +355,8 @@ private fun AppNavContent() {
     // "missed" (no receipts, so Invisible is indistinguishable to a sender).
     LaunchedEffect(torStatus, data) {
         val d = data ?: return@LaunchedEffect
-        val p = pin ?: return@LaunchedEffect
         val face = d.faces.firstOrNull() ?: return@LaunchedEffect
+        // (Stopped on My Server = stays down: ServerController.start refuses.)
         if (torStatus is TorStatus.Online) {
             ServerController.start(face.name, face.onionKey, face.onionAddress) { pub ->
                 val keyChanged = pub.newPrivateKey != null && face.onionKey == null
@@ -361,11 +374,15 @@ private fun AppNavContent() {
     when (val n = nav) {
         // A fresh lock screen after the Shredder's error is cleared (the app was
         // closed and reopened) — it then starts clean, never stuck.
-        Nav.Lock -> key(shredEpoch) { LockScreen(manager) { enteredPin, unlocked, firstRun ->
-            pin = enteredPin
+        Nav.Lock -> key(shredEpoch) { LockScreen(manager) { unlocked ->
+            // Saved choices back into the live settings BEFORE anything reads them
+            // (and before the settings mirror above starts saving).
+            org.cmchat.app.settings.AppSettings.restoreFrom(unlocked.settings)
+            ServerController.stoppedByUser.value = unlocked.settings.serverStopped
             data = unlocked
-            // Always start INVISIBLE on login.
-            org.cmchat.app.settings.AppSettings.invisibleMode.value = true
+            // Presence is NOT set here: Invisible is the state at every STARTUP
+            // (fresh process, after Exit / close), so a re-unlock after minimising
+            // keeps Online if you were Online.
             // Session window (item 7): load the saved choice and stamp this unlock.
             org.cmchat.app.settings.AppSettings.sessionWindowEnabled.value = unlocked.settings.sessionWindow
             org.cmchat.app.settings.Languages.selected.value = unlocked.settings.language
@@ -379,8 +396,8 @@ private fun AppNavContent() {
             org.cmchat.app.guard.GuardController.setCerberusMinutes(unlocked.settings.cerberusMinutes)
             org.cmchat.app.guard.GuardController.setCerberusArmed(
                 unlocked.settings.cerberusArmed && !org.cmchat.app.settings.AppSettings.stayReachable.value)
-            // Brand-new users get the one-time onboarding wizard first.
-            if (firstRun) nav = Nav.Onboarding else nav = Nav.Friends
+            // Onboarding until it's finished: a minimise (re-lock) resumes it.
+            nav = if (!unlocked.settings.onboardingSeen) Nav.Onboarding else Nav.Friends
         } }
         Nav.Friends -> {
             val threads by ChatStore.threads.collectAsState()
@@ -415,22 +432,26 @@ private fun AppNavContent() {
                         // onion address (saved with the unlock material captured here;
                         // the signed address update goes to friends). (3) Silently log
                         // out to the lock screen and leave the app.
-                        val p = pin; val cur = data
+                        val cur = data
+                        // Everything locks NOW; the vault key is kept for exactly ONE
+                        // late save (the new address), then wiped (or after 90 s).
+                        val late = if (ServerController.stoppedByUser.value) null
+                            else org.cmchat.app.vault.VaultIO.holdForLateSave(manager)
                         MessageService.tripDecoy()
-                        if (p != null && cur != null) {
+                        if (late != null && cur != null) {
                             ServerController.requestNewAddress(urgent = true) { pub ->
-                                val me = cur.faces.firstOrNull() ?: return@requestNewAddress
+                                val me = cur.faces.firstOrNull() ?: return@requestNewAddress late.release()
                                 val updated = cur.copy(faces = cur.faces.map { f ->
                                     if (f.id == me.id) f.copy(onionKey = pub.newPrivateKey ?: f.onionKey,
                                         onionAddress = pub.onion) else f
                                 })
                                 // Saved to disk only — the decrypted vault is NOT put
                                 // back into RAM, since we're locked now.
-                                org.cmchat.app.vault.VaultIO.save(manager, p, updated)
+                                late.save(updated)
                                 myCmId(updated)?.let { id -> MessageService.sendAddressUpdate(id) }
                             }
                         }
-                        pin = null; data = null; nav = Nav.Lock
+                        manager.lock(); data = null; nav = Nav.Lock
                         // …and leave the app (Home screen). The engine keeps running
                         // briefly so the alerts + new address can go out silently;
                         // reopening needs the PIN.
@@ -517,9 +538,9 @@ private fun AppNavContent() {
                 saveVault { cur -> cur.copy(settings = cur.settings.copy(sessionWindow = enabled)) }
             },
             onOpenIntegrity = { nav = Nav.Integrity },
-            // Argon2id runs on a background dispatcher; the result is handed back on
-            // the main thread. On a successful change we swap the in-RAM pin so the
-            // session keeps saving under the new passcode.
+            // Argon2id runs on a background dispatcher (both PINs were just typed);
+            // the result is handed back on the main thread. After a change the
+            // session keeps saving under the new key (VaultManager swaps it).
             verifyVaultPin = { entered, cb ->
                 scope.launch {
                     val ok = withContext(Dispatchers.Default) { manager.verify(entered) }
@@ -529,17 +550,21 @@ private fun AppNavContent() {
             onChangeVaultPin = { old, new, cb ->
                 scope.launch {
                     val ok = withContext(Dispatchers.Default) { manager.changePin(old, new) }
-                    if (ok) pin = new
                     cb(ok)
                 }
             },
         )
         Nav.Diagnostics -> org.cmchat.app.ui.screens.DiagnosticsScreen(onBack = { nav = Nav.Settings })
-        Nav.Onboarding -> org.cmchat.app.ui.screens.OnboardingScreen(onDone = {
-            saveVault { cur -> cur.copy(settings = cur.settings.copy(onboardingSeen = true)) }
-            nav = Nav.Friends
-            showReviewSettings = true
-        })
+        Nav.Onboarding -> org.cmchat.app.ui.screens.OnboardingScreen(
+            startPage = data?.settings?.onboardingPage ?: 0,
+            // Each page is saved, so minimising (or a restart) resumes right here.
+            onPage = { p -> saveVault { cur -> cur.copy(settings = cur.settings.copy(onboardingPage = p)) } },
+            onDone = {
+                saveVault { cur -> cur.copy(settings = cur.settings.copy(onboardingSeen = true)) }
+                nav = Nav.Friends
+                showReviewSettings = true
+            },
+        )
         Nav.Help -> org.cmchat.app.ui.screens.HelpScreen(onBack = { nav = Nav.Settings })
         Nav.Connection -> org.cmchat.app.ui.screens.ConnectionScreen(
             contacts = data?.contacts?.mapNotNull { c -> c.cmId?.let { id -> c.name to id } } ?: emptyList(),
@@ -603,15 +628,22 @@ private fun AppNavContent() {
         Nav.MyServer -> {
             val face = data?.faces?.firstOrNull()
             MyServerScreen(
+                // Stop STAYS stopped (saved): only this Start brings it back.
                 onStart = {
-                    if (face != null) ServerController.start(face.name, face.onionKey, face.onionAddress) {}
+                    if (face != null) {
+                        ServerController.userStart(face.name, face.onionKey, face.onionAddress) {}
+                        saveVault { cur -> cur.copy(settings = cur.settings.copy(serverStopped = false)) }
+                    }
                 },
-                onStop = { ServerController.stop() },
+                onStop = {
+                    ServerController.userStop()
+                    saveVault { cur -> cur.copy(settings = cur.settings.copy(serverStopped = true)) }
+                },
                 onRestart = {
                     if (face != null) ServerController.restart(face.name, face.onionKey, face.onionAddress) {}
                 },
                 onRequestNewAddress = {
-                    if (pin != null && face != null) {
+                    if (data != null && face != null) {
                         ServerController.requestNewAddress { pub ->
                             // Persist the new onion key/address, recompute my
                             // CMC-ID, and tell contacts (signed address-update).

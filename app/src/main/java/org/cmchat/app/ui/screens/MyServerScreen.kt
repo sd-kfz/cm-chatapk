@@ -32,6 +32,7 @@ fun MyServerScreen(
 ) {
     val tor by TorService.status.collectAsState()
     val server by ServerController.status.collectAsState()
+    val stoppedByYou by ServerController.stoppedByUser.collectAsState()
     val scope = rememberCoroutineScope()
     var selfTest by remember { mutableStateOf<String?>(null) }
 
@@ -80,6 +81,10 @@ fun MyServerScreen(
                 Text("Error: ${it.reason}", color = CmRed, fontFamily = Nunito, fontSize = 12.sp,
                     maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
+            if (stoppedByYou) {
+                Text("Stopped by you — it stays off (nothing can reach you) until you tap Start.",
+                    color = CmOrange, fontFamily = Nunito, fontSize = 12.sp)
+            }
         }
 
         Spacer(Modifier.height(16.dp))
@@ -91,7 +96,7 @@ fun MyServerScreen(
             ServerButton("Stop", CmRed, Modifier.weight(1f),
                 enabled = server !is ServerStatus.Off) { onStop(); now = System.currentTimeMillis() }
             ServerButton(if (restartWait > 0) "Restart ${restartWait}s" else "Restart", CmBlue, Modifier.weight(1f),
-                enabled = !starting && restartWait == 0) { onRestart(); now = System.currentTimeMillis() }
+                enabled = !starting && !stoppedByYou && restartWait == 0) { onRestart(); now = System.currentTimeMillis() }
         }
         Spacer(Modifier.height(10.dp))
         Box(Modifier.padding(horizontal = 16.dp)) {

@@ -1,91 +1,165 @@
 package org.cmchat.app.vault
 
-import kotlinx.serialization.json.Json
-import org.cmchat.app.crypto.CryptoManager
 import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
 import java.security.SecureRandom
 
 /**
- * One encrypted file in app-internal storage holding the [VaultData] JSON,
- * plus a sibling file with the Argon2id salt. Only these two files touch
- * disk; messages/files/statuses live in RAM only.
+ * The vault on disk: ONE file in app-internal storage,
+ *
+ *     vault2.dat = salt (16) || nonce (24) || secretbox(JSON)
+ *
+ * The key is Argon2id(PIN, salt); [VaultManager] derives it once per unlock and
+ * keeps it in RAM for the session. Salt and ciphertext live in the same file,
+ * so they can never get out of step, and every write replaces the file
+ * ATOMICALLY (temp file → fsync → rename), so a crash or a dead battery
+ * mid-save can never leave a half-written vault.
+ *
+ * Older builds kept the salt and the ciphertext in two files (salt.dat +
+ * vault.dat); those are read as-is and shredded after the first new write.
+ *
+ * This class only moves bytes — it never sees the PIN or a key.
  */
-class Vault(private val crypto: CryptoManager, private val dir: File) {
+class Vault(private val dir: File) {
 
-    private val vaultFile = File(dir, "vault.dat")
-    private val saltFile = File(dir, "salt.dat")
-    private val json = Json { ignoreUnknownKeys = true }
+    private val file = File(dir, "vault2.dat")
+    private val tmp = File(dir, "vault2.tmp")
+    /** A PIN change in progress: the re-encrypted vault, checked before it goes live. */
+    private val next = File(dir, "vault2.new")
+    /** The vault as it was before a PIN change — kept until the change is confirmed. */
+    private val prev = File(dir, "vault2.old")
+    private val legacyVault = File(dir, "vault.dat")
+    private val legacySalt = File(dir, "salt.dat")
 
-    fun exists(): Boolean = vaultFile.exists() && saltFile.exists()
+    /** The stored salt + sealed bytes. */
+    class Blob(val salt: ByteArray, val sealed: ByteArray)
 
-    fun create(pin: String, data: VaultData) {
+    /** Test hook: simulate the process dying right after this PIN-change step. */
+    internal var crashAfterStep: Int? = null
+
+    fun exists(): Boolean =
+        file.exists() || prev.exists() || (legacyVault.exists() && legacySalt.exists())
+
+    /** The current vault, or null when there is none. */
+    fun read(): Blob? = readFile(file) ?: readLegacy()
+
+    /** The copy kept by an interrupted PIN change (normally null). */
+    fun readPrevious(): Blob? = readFile(prev)
+
+    /** Atomically replace the vault with [sealed] under [salt]. */
+    fun write(salt: ByteArray, sealed: ByteArray) {
+        require(salt.size == SALT_BYTES) { "bad salt length" }
         dir.mkdirs()
-        val salt = crypto.randomSalt()
-        saltFile.writeBytes(salt)
-        writeEncrypted(pin, salt, data)
-    }
-
-    fun save(pin: String, data: VaultData) {
-        val salt = saltFile.readBytes()
-        writeEncrypted(pin, salt, data)
-    }
-
-    fun load(pin: String): VaultData? {
-        if (!exists()) return null
-        val salt = saltFile.readBytes()
-        val key = crypto.deriveKey(pin, salt)
-        val plain = crypto.open(vaultFile.readBytes(), key)
-        key.fill(0)                               // zero the Argon2 key ASAP
-        if (plain == null) return null
-        return try {
-            json.decodeFromString(VaultData.serializer(), String(plain, Charsets.UTF_8))
-        } finally {
-            plain.fill(0)                          // zero the decrypted plaintext
-        }
+        writeSynced(tmp, salt, sealed)
+        // rename(2) swaps the file in one step: a reader sees the old or the new, never half.
+        if (!tmp.renameTo(file)) throw IOException("vault replace failed")
+        shredLegacy()
     }
 
     /**
-     * Re-encrypt the vault under a NEW passcode. Loads the data with [oldPin],
-     * writes a FRESH salt, and re-seals the SAME data under [newPin]. Returns
-     * false (and changes nothing) if [oldPin] is wrong. On success the old
-     * passcode can no longer open the vault — a new salt + new Argon2id key.
+     * Swap in a vault re-encrypted under a NEW PIN, crash-safe:
+     *  1. write it to vault2.new and fsync,
+     *  2. read it back — [verify] must confirm the new PIN's key opens it,
+     *  3. keep a copy of the current vault as vault2.old (fsync),
+     *  4. rename vault2.new over vault2.dat (one atomic step),
+     *  5. [verify] vault2.dat once more, then shred vault2.old.
+     * Dying at any point leaves the old vault, or the new one plus the kept old
+     * copy (which [VaultManager.unlock] resolves) — never a vault no PIN opens.
+     * Returns false (old vault untouched and current) if a check fails.
      */
-    fun changePin(oldPin: String, newPin: String): Boolean {
-        val data = load(oldPin) ?: return false
-        val salt = crypto.randomSalt()
-        saltFile.writeBytes(salt)
-        writeEncrypted(newPin, salt, data)
+    fun replaceForPinChange(salt: ByteArray, sealed: ByteArray, verify: (Blob) -> Boolean): Boolean {
+        require(salt.size == SALT_BYTES) { "bad salt length" }
+        val current = read() ?: return false
+        dir.mkdirs()
+        writeSynced(next, salt, sealed)
+        step(1)
+        val written = readFile(next)
+        if (written == null || !verify(written)) { shred(next); return false }
+        step(2)
+        writeSynced(prev, current.salt, current.sealed)
+        step(3)
+        if (!next.renameTo(file)) { shred(next); shred(prev); return false }
+        step(4)
+        val live = readFile(file)
+        if (live == null || !verify(live)) {
+            // The new copy didn't survive: put the old vault back (atomic) and report failure.
+            if (!prev.renameTo(file)) throw IOException("vault restore failed")
+            return false
+        }
+        shred(prev)
+        shredLegacy()
         return true
     }
 
-    /** Best-effort wipe: overwrite then delete. Flash wear-levelling means
-     * this is not a forensic guarantee, only that the plaintext key material
-     * and ciphertext are cleared from the normal filesystem view. */
-    fun wipe() {
-        overwriteAndDelete(vaultFile)
-        overwriteAndDelete(saltFile)
+    /** An interrupted PIN change is void (the current vault opened): drop its leftovers. */
+    fun discardLeftovers() {
+        shred(prev)
+        shred(next)
+        shred(tmp)
+        // An old-format pair is stale once the new file is the live vault.
+        if (file.exists()) shredLegacy()
     }
 
-    private fun writeEncrypted(pin: String, salt: ByteArray, data: VaultData) {
-        val key = crypto.deriveKey(pin, salt)
-        val plain = json.encodeToString(VaultData.serializer(), data).toByteArray(Charsets.UTF_8)
-        try {
-            vaultFile.writeBytes(crypto.seal(plain, key))
-        } finally {
-            // Zero key material + the serialized plaintext as soon as we're done.
-            key.fill(0)
-            plain.fill(0)
+    /** An interrupted PIN change never finished for the user: the kept copy goes back live. */
+    fun restorePrevious() {
+        if (!prev.exists()) return
+        if (!prev.renameTo(file)) throw IOException("vault restore failed")
+        shred(next)
+        shredLegacy()
+    }
+
+    /** Best-effort wipe: overwrite then delete. Flash wear-levelling means this is
+     * not a forensic guarantee, only that ciphertext and salt leave the normal
+     * filesystem view. */
+    fun wipe() {
+        listOf(file, tmp, next, prev, legacyVault, legacySalt).forEach { shred(it) }
+    }
+
+    private fun step(n: Int) {
+        if (crashAfterStep == n) throw IllegalStateException("simulated crash after step $n")
+    }
+
+    private fun readFile(f: File): Blob? {
+        if (!f.exists()) return null
+        val all = runCatching { f.readBytes() }.getOrNull() ?: return null
+        if (all.size <= SALT_BYTES) return null
+        return Blob(all.copyOfRange(0, SALT_BYTES), all.copyOfRange(SALT_BYTES, all.size))
+    }
+
+    private fun readLegacy(): Blob? {
+        if (!legacyVault.exists() || !legacySalt.exists()) return null
+        val salt = runCatching { legacySalt.readBytes() }.getOrNull() ?: return null
+        if (salt.size != SALT_BYTES) return null
+        return Blob(salt, runCatching { legacyVault.readBytes() }.getOrNull() ?: return null)
+    }
+
+    private fun writeSynced(f: File, salt: ByteArray, sealed: ByteArray) {
+        FileOutputStream(f).use { out ->
+            out.write(salt)
+            out.write(sealed)
+            out.flush()
+            runCatching { out.fd.sync() }       // on flash before anything points at it
         }
     }
 
-    private fun overwriteAndDelete(f: File) {
+    private fun shredLegacy() {
+        if (legacyVault.exists() || legacySalt.exists()) {
+            shred(legacyVault)
+            shred(legacySalt)
+        }
+    }
+
+    private fun shred(f: File) {
         if (!f.exists()) return
         runCatching {
-            val len = f.length().toInt().coerceAtLeast(1)
+            val len = f.length().toInt().coerceIn(1, 1 shl 20)
             val junk = ByteArray(len)
             SecureRandom().nextBytes(junk)
             f.writeBytes(junk)
         }
         f.delete()
     }
+
+    companion object { const val SALT_BYTES = 16 }
 }

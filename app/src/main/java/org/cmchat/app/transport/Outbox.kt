@@ -116,7 +116,11 @@ class Outbox(
                 }
                 q.first()
             }
-            if (!head.stillWanted() || now() - head.createdAt > MAX_AGE_MS) { drop(peer, head); continue }
+            if (!head.stillWanted()) { drop(peer, head); continue }
+            if (now() - head.createdAt > MAX_AGE_MS) {
+                org.cmchat.app.diag.ConnDiag.out("${head.label}: given up — not delivered within 24 h")
+                drop(peer, head); continue
+            }
             // Read BEFORE the attempt: a kick that lands while a (slow, Tor) attempt
             // is in flight still triggers an immediate retry if that attempt fails.
             val seen = poke.value
@@ -136,6 +140,8 @@ class Outbox(
             }
             val wait = backoffMs[minOf(failures, backoffMs.size - 1)]
             failures++
+            org.cmchat.app.diag.ConnDiag.out(
+                "${head.label}: not delivered yet (try $failures) — next try in ${wait / 1000}s or when they reappear")
             withTimeoutOrNull(wait) { poke.first { it != seen } }   // backoff, or until kicked
         }
     }

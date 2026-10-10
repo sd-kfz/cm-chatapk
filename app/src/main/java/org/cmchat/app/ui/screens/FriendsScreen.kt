@@ -115,10 +115,13 @@ fun FriendsScreen(
 
             // ---- thin status line: Engine (left) .......... Me (right)
             Spacer(Modifier.height(6.dp))
-            StatusLine(online, torStatus, invisible) {
+            val serverOff by org.cmchat.app.tor.ServerController.stoppedByUser.collectAsState()
+            StatusLine(online, torStatus, invisible, serverOff) {
                 val nowInvisible = !invisible
                 org.cmchat.app.settings.AppSettings.invisibleMode.value = nowInvisible
-                if (!nowInvisible) org.cmchat.app.chat.ChatStore.markMissedSeen()
+                // Going Online delivers what was held: "Missed" clears, the
+                // messages show as new (blue dot until viewed).
+                if (!nowInvisible) org.cmchat.app.chat.ChatStore.deliverMissed()
             }
             Spacer(Modifier.height(8.dp))
 
@@ -179,7 +182,7 @@ fun FriendsScreen(
                 verticalArrangement = Arrangement.spacedBy(5.dp),
                 contentPadding = PaddingValues(bottom = 80.dp),  // clear the "+"
             ) {
-                items(contacts) { c -> FriendRow(c, online, onOpenChat, onCancel = { cancelFor = c }) }
+                items(contacts) { c -> FriendRow(c, onOpenChat, onCancel = { cancelFor = c }) }
             }
 
             // Tools dock (only when a tool is enabled) — behaviour unchanged.
@@ -295,9 +298,11 @@ private fun PlusIcon() {
 }
 
 @Composable
-private fun StatusLine(online: Boolean, status: TorStatus, invisible: Boolean, onToggleMe: () -> Unit) {
+private fun StatusLine(online: Boolean, status: TorStatus, invisible: Boolean, serverOff: Boolean,
+                       onToggleMe: () -> Unit) {
     val engineLabel = when (status) {
-        is TorStatus.Online -> "Online"
+        // You stopped My Server: nothing can reach you until you tap Start there.
+        is TorStatus.Online -> if (serverOff) "Online · server off" else "Online"
         is TorStatus.Connecting -> "Connecting ${status.percent}%"
         is TorStatus.Starting -> "Starting"
         is TorStatus.Offline -> "Offline"
@@ -323,10 +328,11 @@ private fun StatusLine(online: Boolean, status: TorStatus, invisible: Boolean, o
 
 /**
  * A dense friend card: small round avatar, name + one sub-line, and markers on
- * the right — ORANGE = new/missed message, BLUE = a Buzz, TEAL = seen recently.
+ * the right — a BLUE dot means a new message is waiting (nothing else: there is
+ * no "online" dot). Presence is only the coarse "last seen recently" line.
  */
 @Composable
-private fun FriendRow(c: Contact, online: Boolean, onOpenChat: (Contact) -> Unit, onCancel: () -> Unit = {}) {
+private fun FriendRow(c: Contact, onOpenChat: (Contact) -> Unit, onCancel: () -> Unit = {}) {
     val recent = c.lastSeenMs != null && System.currentTimeMillis() - c.lastSeenMs <= 24 * 3_600_000L
     @OptIn(ExperimentalFoundationApi::class)
     Row(
@@ -361,11 +367,9 @@ private fun FriendRow(c: Contact, online: Boolean, onOpenChat: (Contact) -> Unit
                 modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { onCancel() }
                     .padding(horizontal = 10.dp, vertical = 6.dp))
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (c.unread || c.missed) Dot(CmOrange)
-            if (c.buzzed) Dot(CmBuzzBlue)
-            if (!c.unread && !c.missed && !c.buzzed) Dot(if (recent && online) CmTeal else Frame)
-        }
+        // The only dot: BLUE = a new message is waiting (incl. one held while
+        // Invisible). A Buzz shows as its "Buzzed you" line.
+        if (c.unread || c.missed) Dot(CmUnreadBlue)
     }
 }
 

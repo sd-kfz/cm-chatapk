@@ -43,7 +43,7 @@ private enum class Pad { DIGITS, LETTERS, SYMBOLS }
 private const val MAX_UNLOCK_INPUT = 128
 
 @Composable
-fun LockScreen(manager: VaultManager, onUnlocked: (String, VaultData, firstRun: Boolean) -> Unit) {
+fun LockScreen(manager: VaultManager, onUnlocked: (VaultData) -> Unit) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -106,7 +106,9 @@ fun LockScreen(manager: VaultManager, onUnlocked: (String, VaultData, firstRun: 
                     val r = withContext(Dispatchers.Default) { manager.unlock(entered) }
                     busy = false
                     when (r) {
-                        is UnlockResult.Success -> { wrongCount = 0; onUnlocked(entered, r.data, false) }
+                        // The vault key was derived ONCE (Argon2id) and is cached by the
+                        // manager for this session; the typed PIN isn't kept anywhere.
+                        is UnlockResult.Success -> { wrongCount = 0; onUnlocked(r.data) }
                         UnlockResult.Duress -> {
                             // Shredder PIN: the vault is already gone; erase
                             // EVERYTHING else silently and show only a fake error.
@@ -179,7 +181,8 @@ fun LockScreen(manager: VaultManager, onUnlocked: (String, VaultData, firstRun: 
                         scope.launch {
                             val data = withContext(Dispatchers.Default) { manager.createVault(firstPin, nickname) }
                             busy = false
-                            onUnlocked(firstPin, data, true)
+                            firstPin = ""
+                            onUnlocked(data)
                         }
                     }
                     .padding(horizontal = 28.dp, vertical = 12.dp),

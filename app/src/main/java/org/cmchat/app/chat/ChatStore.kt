@@ -11,7 +11,8 @@ data class ChatThread(
     val messages: List<ChatMessage> = emptyList(),
     val teamHour: String? = null,
     val peerLastSeen: Long? = null,
-    /** Orange unread dot: something arrived while invisible, not yet viewed. */
+    /** A NEW message is waiting (blue dot on the friend's row) — set by every
+     * incoming message, cleared when the chat is viewed while Online. */
     val unread: Boolean = false,
     /** Blue Buzz dot: a buzz arrived; cleared when the conversation is opened. */
     val buzzed: Boolean = false,
@@ -51,18 +52,24 @@ object ChatStore {
         // doesn't start until the user goes Online and views it.
         val m = ChatMessage(id, mine = false, text = text, state = MsgState.SENT,
             selfTimer = timer, seenAt = if (missed) null else System.currentTimeMillis(), missed = missed)
-        update(chatId) { it.copy(messages = it.messages + m, unread = it.unread || missed) }
+        // Every new message is unread until the chat is viewed while Online.
+        update(chatId) { it.copy(messages = it.messages + m, unread = true) }
         touchPeer(chatId)
     }
 
-    /** Clear the orange unread dot (chat viewed while Online). */
+    /** Clear the blue unread dot (chat viewed while Online). */
     fun markRead(chatId: String) = update(chatId) { it.copy(unread = false) }
 
-    /** Going Online: start self-timers on missed messages now that they're seen. */
-    fun markMissedSeen(now: Long = System.currentTimeMillis()) {
+    /**
+     * Going Online: messages held while Invisible are DELIVERED — they're no
+     * longer "Missed" (that label clears), they show in the chat as normal new
+     * messages (still unread: blue dot until viewed), and their self-timers start.
+     */
+    fun deliverMissed(now: Long = System.currentTimeMillis()) {
         _threads.update { m -> m.mapValues { (_, t) ->
-            t.copy(messages = t.messages.map {
-                if (it.missed && it.seenAt == null) it.copy(seenAt = now) else it
+            if (t.messages.none { it.missed }) t
+            else t.copy(unread = true, messages = t.messages.map {
+                if (it.missed) it.copy(missed = false, seenAt = it.seenAt ?: now) else it
             })
         } }
     }
@@ -106,13 +113,19 @@ object ChatStore {
 
     /**
      * I'm Online with this chat on screen: everything in it is now SEEN — the
-     * orange dot and every "Missed Message" mark clear (and seen-based timers run).
+     * blue dot and every "Missed Message" mark clear (and seen-based timers run).
      */
     fun markSeen(chatId: String, now: Long = System.currentTimeMillis()) = update(chatId) { t ->
         if (!t.unread && t.messages.none { it.missed }) t
         else t.copy(unread = false, messages = t.messages.map {
             if (it.missed) it.copy(missed = false, seenAt = it.seenAt ?: now) else it
         })
+    }
+
+    /** A plain grey system notice (centred, no bubble). Not chat content. */
+    fun addSystemLine(chatId: String, text: String, at: Long = System.currentTimeMillis()) = update(chatId) {
+        it.copy(messages = it.messages + ChatMessage(newId(), mine = false, text = text,
+            state = MsgState.SENT, createdAt = at, system = true))
     }
 
     /** A Buzz arrived from this friend (blue dot until the chat is opened). */
@@ -123,7 +136,7 @@ object ChatStore {
 
     /**
      * Add a small alert line (italic-bold) where the next message would be. It
-     * is never self-destructed. Marks the chat unread (orange dot).
+     * is never self-destructed. Marks the chat unread (blue dot).
      */
     fun addAlert(chatId: String, text: String, at: Long = System.currentTimeMillis()) = update(chatId) {
         it.copy(messages = it.messages + alertLine(text, at), unread = true)

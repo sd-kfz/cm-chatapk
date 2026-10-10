@@ -57,8 +57,8 @@ class ViewOnceTest {
         ChatStore.addTheirs(chat, "id-1", "hi", SelfTimer.VIEW_ONCE, missed = true)
         ChatStore.burnViewOnce(chat)
         assertEquals("unseen view-once must NOT burn yet", 1, msgs().size)
-        // Going Online marks missed messages seen; now it burns.
-        ChatStore.markMissedSeen()
+        // Going Online delivers missed messages (seen); now it burns.
+        ChatStore.deliverMissed()
         ChatStore.burnViewOnce(chat)
         assertTrue(msgs().isEmpty())
     }

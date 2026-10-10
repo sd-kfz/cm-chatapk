@@ -64,6 +64,11 @@ object LifecycleController {
         lockRequests.tryEmit(Unit)
     }
 
+    /** The app's screen is in front of the user (between onResume and onStop). */
+    @Volatile
+    var inForeground = false
+        private set
+
     /**
      * App moved to the background (minimised). Unless "stay reachable" is on,
      * re-lock the UI and wipe the vault-unlock material from RAM (PIN + decrypted
@@ -71,6 +76,7 @@ object LifecycleController {
      * running, so minimised = still online and Cerberus keeps counting.
      */
     fun onAppBackground() {
+        inForeground = false
         // Shredder aftermath: leaving the app clears its error, so reopening
         // shows a normal (fresh) lock screen — never a dead one.
         org.cmchat.app.vault.Shredder.reset()
@@ -101,7 +107,9 @@ object LifecycleController {
             Diag.i("life", "closed but staying reachable")
             return
         }
-        // RAM is dropped either way (incl. anything still queued to send).
+        // RAM is dropped either way (incl. anything still queued to send), and
+        // the vault key leaves RAM.
+        org.cmchat.app.vault.SecurityFactory.lockIfCreated()
         MessageService.clearOutbox()
         ChatStore.clearAll()
         ToolsState.clear()
@@ -110,6 +118,8 @@ object LifecycleController {
 
         val keepListening = AppSettings.buzzListenerWhenClosed.value &&
             !AppSettings.invisibleMode.value
+        // Closing ends this start: the next open starts Invisible.
+        AppSettings.startupPresence()
         if (keepListening) {
             // Buzz-only: Tor + onion stay up; only a BUZZ does anything now.
             MessageService.buzzOnlyMode = true
@@ -117,13 +127,16 @@ object LifecycleController {
             BuzzListenerService.start(ctx)
             listening = true
             Diag.i("life", "closed -> buzz-listener alive")
+            org.cmchat.app.diag.ConnDiag.sys("App closed: Buzz-only — messages are dropped until you reopen the app")
         } else {
             fullClose(ctx)
+            org.cmchat.app.diag.ConnDiag.sys("App closed: fully offline — nothing reaches you until you reopen")
         }
     }
 
     /** The user came back to the foreground. */
     fun onAppForeground() {
+        inForeground = true
         // Back from our own scanner/share sheet: cancel the safety lock.
         deferredLock?.cancel(); deferredLock = null
         ownLaunchUntil = 0L
@@ -139,6 +152,11 @@ object LifecycleController {
     fun exit(context: Context) {
         val ctx = context.applicationContext
         MessageService.clearOutbox()
+        // Anti-seizure: the identity keys and the friend table leave RAM too.
+        // They come back from the vault at the next unlock.
+        MessageService.zeroKeys()
+        org.cmchat.app.vault.SecurityFactory.lockIfCreated()   // the vault key too
+        AppSettings.startupPresence()
         ChatStore.clearAll()
         ToolsState.clear()
         BuzzPolicy.clear()

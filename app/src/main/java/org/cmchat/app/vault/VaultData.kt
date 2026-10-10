@@ -48,7 +48,9 @@ data class VaultSettings(
     val cerberusMinutes: Int = 90,
     /** Cerberus idle auto-wipe armed (default ON, as before). */
     val cerberusArmed: Boolean = true,
-    val defaultSelfTimer: String = "30s",
+    /** General timer for all messages (a [org.cmchat.app.chat.SelfTimer] label). Was
+     * never read before, so its old "30s" default was never in effect: Off. */
+    val defaultSelfTimer: String = "off",
     /** App-wide text size step, -6..+6 (0 = default). Applied to every screen. */
     val textSize: Int = 0,
     /** Separate 4-8 digit PIN gating the Privacy & Safety section (null = unset). */
@@ -63,8 +65,27 @@ data class VaultSettings(
     val bridgeLines: String = "",
     /** Cover traffic (decoy frames) to hide when you're really messaging. */
     val coverTraffic: Boolean = false,
-    /** First-run onboarding wizard has been shown. */
+    /** First-run onboarding wizard has been finished. Until then it re-opens at unlock. */
     val onboardingSeen: Boolean = false,
+    /** The onboarding page reached, so minimising (or a restart) resumes there. */
+    val onboardingPage: Int = 0,
+
+    // ---- settings that used to live only in RAM (they reset on every restart) ----
+    /** "Accept Buzz" frequency ([org.cmchat.app.buzz.BuzzFrequency] name). */
+    val buzzFrequency: String = "H1",
+    /** "Let a Buzz reach me when closed". */
+    val buzzWhenClosed: Boolean = true,
+    /** Decoy chat on/off, its name, and whether it sits at the top. */
+    val decoyEnabled: Boolean = false,
+    val decoyName: String = "Notes to self",
+    val decoyAtTop: Boolean = true,
+    /** Which tools sit on the main page. */
+    val toolCalc: Boolean = false,
+    val toolNotes: Boolean = false,
+    val toolFlash: Boolean = false,
+
+    /** I stopped My Server: it stays down (no automatic re-publish) until I tap Start. */
+    val serverStopped: Boolean = false,
 )
 
 /** Everything persisted in the encrypted vault. Messages are NOT here. */

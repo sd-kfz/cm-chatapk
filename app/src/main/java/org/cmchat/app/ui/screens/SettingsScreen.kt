@@ -98,8 +98,6 @@ fun SettingsScreen(
 
             GroupHeader("Chats")
             GeneralTimerRow()
-            ToolToggle("Share my last-seen", org.cmchat.app.settings.AppSettings.shareLastSeen,
-                hint = "Let friends see you were online recently.")
             BuzzFrequencyRow()
             ToolToggle("Let a Buzz reach me when closed",
                 org.cmchat.app.settings.AppSettings.buzzListenerWhenClosed,

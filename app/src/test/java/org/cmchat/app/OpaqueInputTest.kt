@@ -58,9 +58,9 @@ class OpaqueInputTest {
             for (near in listOf(pass.trim() + " ", pass.replace("'", "\\'"), pass.uppercase() + "x")) {
                 if (near != pass && near != pass.reversed()) assertEquals(UnlockResult.WrongPin, m.unlock(near))
             }
-            // The passcode influenced no file names: only the vault + salt exist,
-            // and the passcode is not stored anywhere in them.
-            assertEquals(setOf("vault.dat", "salt.dat"), dir.list()!!.toSet())
+            // The passcode influenced no file names: only the vault file exists
+            // (salt + ciphertext in one), and the passcode is not stored in it.
+            assertEquals(setOf("vault2.dat"), dir.list()!!.toSet())
             val onDisk = dir.listFiles()!!.joinToString("") { String(it.readBytes(), Charsets.ISO_8859_1) }
             assertFalse(onDisk.contains(pass))
         }

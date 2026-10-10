@@ -596,4 +596,29 @@ class SpineLoopbackTest {
         assertTrue(t.messages.none { it.missed })
         assertTrue(t.messages.single().seenAt != null)
     }
+
+    @Test
+    fun while_invisible_a_message_waits_silently_but_a_buzz_still_notifies() {
+        val notices = CopyOnWriteArrayList<MessageService.Notice>()
+        val before = MessageService.notify
+        MessageService.notify = { notices += it }
+        try {
+            val bob = Phone("Bob", 'b').also { it.up() }
+            bob.friends[aliceId] = aPub
+            configureAlice(friends = listOf(bob.cmId))
+            AppSettings.invisibleMode.value = true
+            bob.text("b-1", "you there?")
+            waitUntil("held as missed") { ChatStore.thread(bob.cmId).messages.any { it.missed } }
+            bob.send(FrameType.BUZZ, ByteArray(0))
+            waitUntil("a Buzz notifies even while Invisible") { MessageService.Notice.BUZZ in notices }
+            assertFalse("no message notification while Invisible", MessageService.Notice.MESSAGE in notices)
+            // Online again: the next message notifies (its chat isn't on screen).
+            AppSettings.invisibleMode.value = false
+            bob.text("b-2", "now?")
+            waitUntil("a message notifies once Online") { MessageService.Notice.MESSAGE in notices }
+            assertTrue("and it's a new, unread message", ChatStore.thread(bob.cmId).unread)
+        } finally {
+            MessageService.notify = before
+        }
+    }
 }
