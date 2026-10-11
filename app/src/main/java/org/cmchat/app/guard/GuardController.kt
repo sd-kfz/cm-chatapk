@@ -1,0 +1,126 @@
+package org.cmchat.app.guard
+
+import android.content.Context
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import org.cmchat.app.chat.ChatStore
+import org.cmchat.app.tor.ServerController
+import org.cmchat.app.tor.TorService
+
+
+object GuardController {
+
+    private val _cerberusArmed = MutableStateFlow(true)
+    val cerberusArmed: StateFlow<Boolean> = _cerberusArmed.asStateFlow()
+
+    private val _killDeadline = MutableStateFlow<Long?>(null)
+    val killDeadline: StateFlow<Long?> = _killDeadline.asStateFlow()
+
+
+    private val _cerberusMinutes = MutableStateFlow(90)
+    val cerberusMinutes: StateFlow<Int> = _cerberusMinutes.asStateFlow()
+
+
+    val CERBERUS_CHOICES = listOf(15, 30, 60, 90, 180)
+
+
+    @Volatile private var cerberusIdleMs: Long = GuardLogic.CERBERUS_90_MIN
+    @Volatile private var lastTouch: Long = System.currentTimeMillis()
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var loop: Job? = null
+    private var appContext: Context? = null
+
+    fun init(context: Context) {
+        appContext = context.applicationContext
+        touch()
+        if (loop == null) loop = scope.launch { watch() }
+    }
+
+
+    fun touch() { lastTouch = System.currentTimeMillis() }
+
+
+    fun setCerberusMinutes(minutes: Int) {
+        val m = CERBERUS_CHOICES.minByOrNull { kotlin.math.abs(it - minutes) } ?: 90
+        _cerberusMinutes.value = m
+        cerberusIdleMs = m * 60_000L
+        touch()
+    }
+
+    fun setCerberusArmed(armed: Boolean) { _cerberusArmed.value = armed }
+
+    fun armKillTimer(durationMs: Long) {
+        val d = durationMs.coerceIn(0, GuardLogic.KILL_MAX_MS)
+        _killDeadline.value = System.currentTimeMillis() + d
+    }
+
+
+    fun armKillAt(hour: Int, minute: Int, now: Long = System.currentTimeMillis()) {
+        _killDeadline.value = GuardLogic.nextOccurrence(hour, minute, now)
+    }
+
+    fun cancelKillTimer() { _killDeadline.value = null }
+
+    private suspend fun watch() {
+        while (scope.isActive) {
+            val now = System.currentTimeMillis()
+            val kill = _killDeadline.value
+            val cerberusFires = _cerberusArmed.value &&
+                GuardLogic.cerberusExpired(lastTouch, cerberusIdleMs, now)
+            val killFires = kill != null && now >= kill
+            if (cerberusFires || killFires) {
+                wipeAndDie()
+                return
+            }
+            delay(1000)
+        }
+    }
+
+
+    fun wipeRamOnly() {
+        org.cmchat.app.transport.MessageService.clearOutbox()
+        org.cmchat.app.transport.MessageService.dropHeld()
+        ChatStore.clearAll()
+        org.cmchat.app.tools.ToolsState.clear()
+        org.cmchat.app.buzz.BuzzPolicy.clear()
+        org.cmchat.app.diag.Diag.clear()
+        appContext?.let {
+            org.cmchat.app.diag.CrashCatcher.delete(it)
+            org.cmchat.app.notify.Notifier.clearAll(it)
+            org.cmchat.app.tools.Flashlight.off(it)
+        }
+        ServerController.stop()
+    }
+
+
+    fun wipeAndDie() {
+        org.cmchat.app.transport.MessageService.clearOutbox()
+
+        org.cmchat.app.transport.MessageService.dropHeld()
+        ChatStore.clearAll()
+        org.cmchat.app.tools.ToolsState.clear()
+        org.cmchat.app.buzz.BuzzPolicy.clear()
+        org.cmchat.app.diag.Diag.clear()
+        appContext?.let {
+            org.cmchat.app.diag.CrashCatcher.delete(it)
+            org.cmchat.app.notify.Notifier.clearAll(it)
+            org.cmchat.app.tools.Flashlight.off(it)
+        }
+        ServerController.stop()
+        appContext?.let { TorService.stop(it) }
+
+        scope.launch {
+            delay(300)
+            android.os.Process.killProcess(android.os.Process.myPid())
+        }
+    }
+}

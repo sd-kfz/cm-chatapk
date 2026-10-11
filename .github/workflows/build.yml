@@ -1,0 +1,139 @@
+name: Build CM-Chat APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+# Needed so the build can publish the signed APKs to a GitHub Release.
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      # Decode the real release keystore if the repo secrets are set, and export
+      # the signing env for Gradle. Nothing secret is stored in the repo.
+      - name: Decode signing keystore (if configured)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KS_PW: ${{ secrets.KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KS_KEY_PW: ${{ secrets.KEY_PASSWORD }}
+        if: ${{ env.KEYSTORE_BASE64 != '' }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/cmchat.keystore"
+          {
+            echo "CMCHAT_KEYSTORE=$RUNNER_TEMP/cmchat.keystore"
+            echo "CMCHAT_KEYSTORE_PASSWORD=$KS_PW"
+            echo "CMCHAT_KEY_ALIAS=$KS_ALIAS"
+            echo "CMCHAT_KEY_PASSWORD=$KS_KEY_PW"
+          } >> "$GITHUB_ENV"
+
+      # If no real keystore is configured, generate an EPHEMERAL one so the
+      # release APKs are signed and therefore installable. NOTE: this key is new
+      # on every run, so upgrading in place needs an uninstall until the repo
+      # owner configures a stable KEYSTORE_BASE64 secret.
+      - name: Generate ephemeral signing key (if none configured)
+        if: ${{ env.CMCHAT_KEYSTORE == '' }}
+        run: |
+          keytool -genkeypair -v -keystore "$RUNNER_TEMP/cmchat-ephemeral.keystore" \
+            -storepass cmchat -keypass cmchat -alias cmchat \
+            -keyalg RSA -keysize 2048 -validity 3650 \
+            -dname "CN=CM-Chat, OU=dev, O=CM-Chat, C=US"
+          {
+            echo "CMCHAT_KEYSTORE=$RUNNER_TEMP/cmchat-ephemeral.keystore"
+            echo "CMCHAT_KEYSTORE_PASSWORD=cmchat"
+            echo "CMCHAT_KEY_ALIAS=cmchat"
+            echo "CMCHAT_KEY_PASSWORD=cmchat"
+          } >> "$GITHUB_ENV"
+
+      - name: Run unit tests and build debug and release APKs
+        run: |
+          set +e
+          ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease :twin:testDebugUnitTest :twin:assembleDebug --no-daemon --stacktrace 2>&1 | tee gradle-build.log
+          status=${PIPESTATUS[0]}
+          exit $status
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-log
+          path: gradle-build.log
+
+      # Debug APKs are now per-ABI (+ a universal one); upload them all.
+      - name: Upload debug APKs
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cm-chat-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload twin calculator APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: calculator-twin-apk
+          path: twin/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload release APKs
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cm-chat-apk
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+      # Publish the SIGNED RELEASE APKs as the builds to use (not debuggable,
+      # screenshots blocked). The debug APK is attached only as a clearly labeled
+      # testing build. All are signed with the project's stable key (see
+      # build.gradle.kts) so they install/upgrade in place.
+      - name: Publish APKs to Release
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v0.1-build${{ github.run_number }}"
+          R=app/build/outputs/apk/release
+          D=app/build/outputs/apk/debug
+          # Release filename is "-release.apk" when signed, "-release-unsigned.apk"
+          # if no keystore secret is set — pick whichever exists.
+          rel() { ls "$R/app-$1-release.apk" 2>/dev/null || ls "$R/app-$1-release-unsigned.apk"; }
+          cp "$(rel arm64-v8a)"   "$RUNNER_TEMP/CM-Chat-arm64-RELEASE.apk"
+          cp "$(rel armeabi-v7a)" "$RUNNER_TEMP/CM-Chat-arm32-RELEASE.apk"
+          cp "$D/app-arm64-v8a-debug.apk" "$RUNNER_TEMP/CM-Chat-arm64-debug-TESTING.apk"
+          cp twin/build/outputs/apk/debug/twin-debug.apk "$RUNNER_TEMP/Calculator-twin.apk"
+          NOTES="$(cat <<'EOF'
+          **Install the RELEASE file for your phone:**
+
+          - **CM-Chat-arm64-RELEASE.apk** — Modern phones (basically any phone from the last several years).
+          - **CM-Chat-arm32-RELEASE.apk** — Older 32-bit phones only.
+
+          The RELEASE build is the one to use: it is not debuggable and blocks screenshots and the recent-apps preview.
+
+          Optional: **Calculator-twin.apk** — a separate, plain calculator app that opens CM-Chat (same key 10 times; "reset" 20 times forgets the key). It disguises the app while open; it does NOT hide CM-Chat from your app list on modern Android.
+
+          For developers only: **CM-Chat-arm64-debug-TESTING.apk** is a debuggable build (logs / attaching a debugger). Like the release build it blocks screenshots and the recents preview; it is not for real conversations.
+
+          Upgrading from an earlier build installs in place (same signing key) and keeps your vault. If install fails, uninstall the old app first — note that uninstalling erases the vault for good.
+          EOF
+          )"
+          gh release create "$TAG" \
+            "$RUNNER_TEMP/CM-Chat-arm64-RELEASE.apk" \
+            "$RUNNER_TEMP/CM-Chat-arm32-RELEASE.apk" \
+            "$RUNNER_TEMP/Calculator-twin.apk" \
+            "$RUNNER_TEMP/CM-Chat-arm64-debug-TESTING.apk" \
+            --title "CM-Chat $TAG" \
+            --notes "$NOTES"

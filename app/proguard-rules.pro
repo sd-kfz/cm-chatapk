@@ -1,0 +1,50 @@
+# Strip all android.util.Log calls from the release build.
+-assumenosideeffects class android.util.Log {
+    public static *** v(...);
+    public static *** d(...);
+    public static *** i(...);
+    public static *** w(...);
+    public static *** e(...);
+    public static *** wtf(...);
+}
+
+# JNA (native binding used by lazysodium) — reflection + native, keep intact.
+-keep class com.sun.jna.** { *; }
+-keepclassmembers class * extends com.sun.jna.** { *; }
+-dontwarn com.sun.jna.**
+-dontwarn java.awt.**
+
+# libsodium / lazysodium.
+-keep class com.goterl.lazysodium.** { *; }
+-dontwarn com.goterl.lazysodium.**
+
+# Tor (tor-android service + jtorctl control library).
+-keep class org.torproject.** { *; }
+-keep class net.freehaven.tor.control.** { *; }
+-dontwarn org.torproject.**
+
+# IPtProxy (gomobile-generated JNI bindings for obfs4/snowflake). These are
+# driven via JNI + go.Seq reflection, so R8 must not rename or strip them.
+-keep class IPtProxy.** { *; }
+-keep class go.** { *; }
+-dontwarn IPtProxy.**
+-dontwarn go.**
+
+# ZXing.
+-keep class com.google.zxing.** { *; }
+-keep class com.journeyapps.** { *; }
+-dontwarn com.journeyapps.**
+
+# Keep the hidden build marker so minification cannot strip it.
+-keep class org.cmchat.app.BuildMark { *; }
+
+# kotlinx.serialization — keep generated serializers for our models.
+-keepattributes *Annotation*, InnerClasses
+-dontnote kotlinx.serialization.**
+-keepclassmembers class org.cmchat.app.** {
+    *** Companion;
+}
+-keepclasseswithmembers class org.cmchat.app.** {
+    kotlinx.serialization.KSerializer serializer(...);
+}
+-keep,includedescriptorclasses class org.cmchat.app.**$$serializer { *; }

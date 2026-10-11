@@ -1,0 +1,103 @@
+package org.cmchat.app.ui.components
+
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameMillis
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.delay
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import org.cmchat.app.ui.theme.CmBlueGlow
+import org.cmchat.app.ui.theme.CmRedGlow
+import org.cmchat.app.ui.theme.CmTextDim
+import org.cmchat.app.ui.theme.Nunito
+
+
+private fun glowWord(blur: Float, alpha: Float): AnnotatedString = buildAnnotatedString {
+    withStyle(SpanStyle(color = CmBlueGlow, shadow = Shadow(CmBlueGlow.copy(alpha = alpha), Offset.Zero, blur))) {
+        append("CM-C")
+    }
+    withStyle(SpanStyle(color = CmRedGlow, shadow = Shadow(CmRedGlow.copy(alpha = alpha), Offset.Zero, blur))) {
+        append("hat")
+    }
+}
+
+private val BASE = glowWord(blur = 16f, alpha = 0.45f)
+private val BLOOM = glowWord(blur = 40f, alpha = 1f)
+
+
+@Composable
+fun CmChatLogo(modifier: Modifier = Modifier, size: Int = 26, sweepMs: Int = 6500, active: Boolean = true) {
+
+    val pad = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
+    if (!active) {
+        Box(modifier.clipToBounds()) {
+            Text("CM-Chat", pad, color = CmTextDim, fontFamily = Nunito, fontSize = size.sp,
+                fontWeight = FontWeight.Bold)
+        }
+        return
+    }
+
+
+    val sweep = remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
+    val lifecycle = androidx.compose.ui.platform.LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle, sweepMs) {
+        lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.RESUMED) {
+            while (true) {
+                withFrameMillis { ms -> sweep.floatValue = (ms % sweepMs) / sweepMs.toFloat() }
+                delay(50)
+            }
+        }
+    }
+    Box(modifier.clipToBounds()) {
+
+        Text(BASE, pad, fontFamily = Nunito, fontSize = size.sp, fontWeight = FontWeight.Bold)
+
+        Text(
+            BLOOM,
+            Modifier
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithContent {
+                    drawContent()
+                    val w = this.size.width
+                    val band = w * 0.3f
+
+                    val cx = -band + (w + 2 * band) * sweep.floatValue
+                    drawRect(
+                        brush = Brush.horizontalGradient(
+                            0f to Color.Transparent, 0.5f to Color.Black, 1f to Color.Transparent,
+                            startX = cx - band, endX = cx + band,
+                        ),
+                        blendMode = BlendMode.DstIn,
+                    )
+                }
+                .then(pad),
+            fontFamily = Nunito, fontSize = size.sp, fontWeight = FontWeight.Bold,
+        )
+    }
+}

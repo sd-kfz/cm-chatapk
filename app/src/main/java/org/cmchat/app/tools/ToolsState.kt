@@ -1,0 +1,47 @@
+package org.cmchat.app.tools
+
+import kotlinx.coroutines.flow.MutableStateFlow
+
+
+data class NoteCheck(val id: Long, val text: String, val done: Boolean = false)
+
+
+object ToolsState {
+    val calcEnabled = MutableStateFlow(false)
+    val notesEnabled = MutableStateFlow(false)
+    val flashlightEnabled = MutableStateFlow(false)
+
+
+    val notes = MutableStateFlow("")
+
+
+    val checks = MutableStateFlow<List<NoteCheck>>(emptyList())
+
+    private var checkSeq = 0L
+
+
+    const val MAX_CHECKS = 10
+
+
+    const val MAX_NOTES_CHARS = 10_000
+
+    fun addCheck() {
+        if (checks.value.size >= MAX_CHECKS) return
+        checks.value = checks.value + NoteCheck(id = ++checkSeq, text = "")
+    }
+
+    fun setCheckText(id: Long, text: String) {
+        checks.value = checks.value.map { if (it.id == id) it.copy(text = text) else it }
+    }
+
+    fun toggleCheck(id: Long) {
+        checks.value = checks.value.map { if (it.id == id) it.copy(done = !it.done) else it }
+    }
+
+    fun anyEnabled(): Boolean = calcEnabled.value || notesEnabled.value || flashlightEnabled.value
+
+
+    fun hasContent(): Boolean = notes.value.isNotBlank() || checks.value.isNotEmpty()
+
+    fun clear() { notes.value = ""; checks.value = emptyList() }
+}
