@@ -60,14 +60,15 @@ android {
     buildTypes {
         debug {
             // Stable signer (when configured) so published debug APKs upgrade in
-            // place. FLAG_SECURE is disabled in debug (see MainActivity) so these
-            // test builds can be screenshotted.
+            // place. FLAG_SECURE is now ON in debug too (ALLOW_SHOTS=false): the
+            // only build that allows screenshots is the separate `debugShots`.
             if (hasKeystore) signingConfig = signingConfigs.getByName("stable")
+            buildConfigField("boolean", "ALLOW_SHOTS", "false")
         }
         release {
             // Not debuggable (no attachable debugger, no run-as file access) and
-            // FLAG_SECURE is applied in release (MainActivity) to block screenshots
-            // and the recent-apps preview. This is the build to ship.
+            // FLAG_SECURE is applied (MainActivity) to block screenshots and the
+            // recent-apps preview. This is the build to ship.
             isDebuggable = false
             isMinifyEnabled = true
             isShrinkResources = true
@@ -76,6 +77,16 @@ android {
                 "proguard-rules.pro",
             )
             if (hasKeystore) signingConfig = signingConfigs.getByName("stable")
+            buildConfigField("boolean", "ALLOW_SHOTS", "false")
+        }
+        // TESTING ONLY — never shipped. Identical to debug but WITHOUT FLAG_SECURE
+        // (ALLOW_SHOTS=true), so screenshots, screen recording and the recents
+        // preview work while developing. CI never builds this; produce it on demand
+        // with `assembleDebugShots`.
+        create("debugShots") {
+            initWith(getByName("debug"))
+            matchingFallbacks += listOf("debug")
+            buildConfigField("boolean", "ALLOW_SHOTS", "true")
         }
     }
 

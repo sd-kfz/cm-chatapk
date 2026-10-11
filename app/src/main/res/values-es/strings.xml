@@ -399,7 +399,6 @@
     <string name="tools_torch_on">Linterna ENCENDIDA — toca para apagar</string>
     <string name="tools_torch_off">Toca para encender la linterna</string>
     <string name="tools_calculator">Calculadora</string>
-    <string name="tools_tap_10">toca 10 veces</string>
     <string name="tools_clear_notes_q">¿Borrar tus notas?</string>
     <string name="tools_clear_notes_text">Se borrarán el bloc de notas y la lista de tareas. No se puede deshacer.</string>
     <string name="tools_keep">Conservar</string>

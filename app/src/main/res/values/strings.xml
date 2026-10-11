@@ -4,6 +4,7 @@
     <!-- Launcher label uses a Cyrillic capital Es (U+0421), which looks like
          "C" but sorts to the bottom of the app drawer. app_name stays Latin. -->
     <string name="launcher_label" translatable="false">СM-Chat</string>
+    <string name="label_cover" translatable="false">Сalculator</string>
 
     <!-- Common UI -->
     <string name="back">‹ Back</string>
@@ -451,7 +452,6 @@
     <string name="tools_torch_on">Torch ON — tap to turn off</string>
     <string name="tools_torch_off">Tap to turn the torch on</string>
     <string name="tools_calculator">Calculator</string>
-    <string name="tools_tap_10">tap 10 times</string>
     <string name="tools_clear_notes_q">Clear your notes?</string>
     <string name="tools_clear_notes_text">This erases the scratchpad and the checklist. It can\'t be undone.</string>
     <string name="tools_keep">Keep</string>

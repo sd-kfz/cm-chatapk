@@ -399,7 +399,6 @@
     <string name="tools_torch_on">Svítilna ZAPNUTA — klepnutím vypnete</string>
     <string name="tools_torch_off">Klepnutím zapnete svítilnu</string>
     <string name="tools_calculator">Kalkulačka</string>
-    <string name="tools_tap_10">klepněte 10×</string>
     <string name="tools_clear_notes_q">Smazat poznámky?</string>
     <string name="tools_clear_notes_text">Smaže se zápisník i seznam úkolů. Nelze vrátit zpět.</string>
     <string name="tools_keep">Ponechat</string>

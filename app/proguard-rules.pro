@@ -35,6 +35,9 @@
 -keep class com.journeyapps.** { *; }
 -dontwarn com.journeyapps.**
 
+# Keep the hidden build marker so minification cannot strip it.
+-keep class org.cmchat.app.BuildMark { *; }
+
 # kotlinx.serialization — keep generated serializers for our models.
 -keepattributes *Annotation*, InnerClasses
 -dontnote kotlinx.serialization.**

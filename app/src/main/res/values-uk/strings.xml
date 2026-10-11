@@ -399,7 +399,6 @@
     <string name="tools_torch_on">Ліхтарик УВІМК. — торкніться, щоб вимкнути</string>
     <string name="tools_torch_off">Торкніться, щоб увімкнути ліхтарик</string>
     <string name="tools_calculator">Калькулятор</string>
-    <string name="tools_tap_10">торкніться 10 разів</string>
     <string name="tools_clear_notes_q">Очистити нотатки?</string>
     <string name="tools_clear_notes_text">Блокнот і список справ буде очищено. Це не можна скасувати.</string>
     <string name="tools_keep">Залишити</string>

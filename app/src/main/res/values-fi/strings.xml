@@ -399,7 +399,6 @@
     <string name="tools_torch_on">Valo PÄÄLLÄ — napauta sammuttaaksesi</string>
     <string name="tools_torch_off">Napauta sytyttääksesi valon</string>
     <string name="tools_calculator">Laskin</string>
-    <string name="tools_tap_10">napauta 10 kertaa</string>
     <string name="tools_clear_notes_q">Tyhjennetäänkö muistiinpanot?</string>
     <string name="tools_clear_notes_text">Muistilappu ja tehtävälista tyhjennetään. Tätä ei voi perua.</string>
     <string name="tools_keep">Säilytä</string>

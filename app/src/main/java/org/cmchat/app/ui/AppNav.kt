@@ -604,7 +604,11 @@ private fun AppNavContent() {
                 saveVault { cur -> cur.copy(settings = cur.settings.copy(privacyPin = null)) }
             },
             coverOn = coverOn,
-            onCoverMode = { on -> org.cmchat.app.tools.CoverMode.setOn(context, on); coverOn = on },
+            onCoverMode = { on ->
+                org.cmchat.app.tools.CoverMode.setOn(context, on)
+                org.cmchat.app.tools.CoverDisguise.apply(context, on)   // flip the launcher label now
+                coverOn = on
+            },
             myNickname = data?.faces?.firstOrNull()?.name ?: "",
             // My own nickname: saved, and sent to every friend until each one has it.
             onRenameMe = { newName ->

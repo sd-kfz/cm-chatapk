@@ -399,7 +399,6 @@
     <string name="tools_torch_on">Licht AN — tippen zum Ausschalten</string>
     <string name="tools_torch_off">Tippen, um das Licht einzuschalten</string>
     <string name="tools_calculator">Taschenrechner</string>
-    <string name="tools_tap_10">10-mal tippen</string>
     <string name="tools_clear_notes_q">Notizen löschen?</string>
     <string name="tools_clear_notes_text">Notizzettel und Checkliste werden gelöscht. Das kann nicht rückgängig gemacht werden.</string>
     <string name="tools_keep">Behalten</string>

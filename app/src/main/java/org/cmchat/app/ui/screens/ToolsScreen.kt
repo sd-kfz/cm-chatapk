@@ -154,8 +154,7 @@ fun CalculatorCover(onOpen: () -> Unit) {
         Box(Modifier.weight(1f)) {
             CalculatorPad(onKey = { feed(it) }) { clear ->
                 Row(Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(Tr.s(R.string.tools_tap_10), color = CmTextFaint, fontFamily = Nunito, fontSize = 11.sp,
-                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic, modifier = Modifier.weight(1f))
+                    androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
                     Text(Tr.s(R.string.tools_reset), color = CmTextDim, fontFamily = Nunito, fontSize = 13.sp,
                         modifier = Modifier.clip(RoundedCornerShape(8.dp))
                             .clickable { clear(); feed(org.cmchat.app.tools.CoverSecret.RESET) }

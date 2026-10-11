@@ -399,7 +399,6 @@
     <string name="tools_torch_on">Lommelykt PÅ — trykk for å slå av</string>
     <string name="tools_torch_off">Trykk for å slå på lommelykten</string>
     <string name="tools_calculator">Kalkulator</string>
-    <string name="tools_tap_10">trykk 10 ganger</string>
     <string name="tools_clear_notes_q">Tømme notatene dine?</string>
     <string name="tools_clear_notes_text">Dette tømmer notatblokken og sjekklisten. Det kan ikke angres.</string>
     <string name="tools_keep">Behold</string>

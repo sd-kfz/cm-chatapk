@@ -399,7 +399,6 @@
     <string name="tools_torch_on">Фонарик ВКЛ. — нажмите, чтобы выключить</string>
     <string name="tools_torch_off">Нажмите, чтобы включить фонарик</string>
     <string name="tools_calculator">Калькулятор</string>
-    <string name="tools_tap_10">нажмите 10 раз</string>
     <string name="tools_clear_notes_q">Очистить заметки?</string>
     <string name="tools_clear_notes_text">Блокнот и список дел будут очищены. Это нельзя отменить.</string>
     <string name="tools_keep">Оставить</string>

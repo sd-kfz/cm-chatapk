@@ -399,7 +399,6 @@
     <string name="tools_torch_on">Lámpa BE — koppints a kikapcsoláshoz</string>
     <string name="tools_torch_off">Koppints a lámpa bekapcsolásához</string>
     <string name="tools_calculator">Számológép</string>
-    <string name="tools_tap_10">koppints 10-szer</string>
     <string name="tools_clear_notes_q">Törlöd a jegyzeteidet?</string>
     <string name="tools_clear_notes_text">Ez törli a jegyzetfüzetet és a teendőlistát. Nem vonható vissza.</string>
     <string name="tools_keep">Megtartás</string>

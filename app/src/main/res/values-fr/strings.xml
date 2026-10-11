@@ -399,7 +399,6 @@
     <string name="tools_torch_on">Lampe ALLUMÉE — touchez pour l\'éteindre</string>
     <string name="tools_torch_off">Touchez pour allumer la lampe</string>
     <string name="tools_calculator">Calculatrice</string>
-    <string name="tools_tap_10">touchez 10 fois</string>
     <string name="tools_clear_notes_q">Effacer vos notes ?</string>
     <string name="tools_clear_notes_text">Le bloc-notes et la liste de tâches seront effacés. Impossible d\'annuler.</string>
     <string name="tools_keep">Garder</string>

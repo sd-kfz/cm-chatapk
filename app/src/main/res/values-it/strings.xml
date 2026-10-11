@@ -399,7 +399,6 @@
     <string name="tools_torch_on">Torcia ACCESA — tocca per spegnere</string>
     <string name="tools_torch_off">Tocca per accendere la torcia</string>
     <string name="tools_calculator">Calcolatrice</string>
-    <string name="tools_tap_10">tocca 10 volte</string>
     <string name="tools_clear_notes_q">Cancellare le note?</string>
     <string name="tools_clear_notes_text">Verranno cancellati il blocco note e la lista di controllo. Non si può annullare.</string>
     <string name="tools_keep">Tieni</string>

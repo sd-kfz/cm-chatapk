@@ -32,7 +32,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
@@ -60,7 +59,6 @@ private val Background = Color(0xFF000000)
 private val Card = Color(0xFF0D1117)
 private val Ink = Color(0xFFE7EBF1)
 private val InkDim = Color(0xFF8B94A3)
-private val InkFaint = Color(0xFF565F6C)
 private val Accent = Color(0xFF35C6F2)
 private val OpColor = Color(0xFFE0793E)
 
@@ -87,8 +85,7 @@ private fun Calculator(onOpen: () -> Unit) {
         Box(Modifier.weight(1f)) {
             Pad(onKey = { feed(it) }) { clear ->
                 Row(Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(stringResource(R.string.hint), color = InkFaint, fontFamily = Nunito, fontSize = 11.sp,
-                        fontStyle = FontStyle.Italic, modifier = Modifier.weight(1f))
+                    Spacer(Modifier.weight(1f))
                     Text(stringResource(R.string.reset), color = InkDim, fontFamily = Nunito, fontSize = 13.sp,
                         modifier = Modifier.clip(RoundedCornerShape(8.dp))
                             .clickable { clear(); feed(Secret.RESET) }

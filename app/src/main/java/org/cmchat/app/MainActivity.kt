@@ -18,10 +18,16 @@ class MainActivity : ComponentActivity() {
         // Where frames that arrive while locked are held (sealed) until unlock.
         org.cmchat.app.transport.MessageService.heldDir = java.io.File(filesDir, "held")
         org.cmchat.app.diag.CrashCatcher.install(this)
-        // No screenshots, blank in recents, no screen recording — ALWAYS in
-        // release. In debug builds FLAG_SECURE is left OFF so test builds can be
-        // screenshotted; a shipped release build is never screenshottable.
-        if (!BuildConfig.DEBUG) {
+        // Keep the launcher icon label AND the recents/task title in step with cover
+        // mode (CM-Chat <-> the Cyrillic Сalculator). The flower icon never changes.
+        val coverOn = org.cmchat.app.tools.CoverMode.isOn(this)
+        org.cmchat.app.tools.CoverDisguise.apply(this, coverOn)
+        setTaskDescription(android.app.ActivityManager.TaskDescription(
+            getString(if (coverOn) R.string.label_cover else R.string.app_name)))
+        // No screenshots, blank in recents, no screen recording — in EVERY shipped
+        // build type (debug and release alike). Only the testing-only `debugShots`
+        // variant leaves it off (BuildConfig.ALLOW_SHOTS); that variant is never shipped.
+        if (!BuildConfig.ALLOW_SHOTS) {
             window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
         }
         setContent {

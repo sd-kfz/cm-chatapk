@@ -399,7 +399,6 @@
     <string name="tools_torch_on">Latarka WŁ. — stuknij, aby wyłączyć</string>
     <string name="tools_torch_off">Stuknij, aby włączyć latarkę</string>
     <string name="tools_calculator">Kalkulator</string>
-    <string name="tools_tap_10">stuknij 10 razy</string>
     <string name="tools_clear_notes_q">Wyczyścić notatki?</string>
     <string name="tools_clear_notes_text">Notatnik i lista zadań zostaną wyczyszczone. Tego nie da się cofnąć.</string>
     <string name="tools_keep">Zachowaj</string>

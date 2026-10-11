@@ -112,25 +112,30 @@ fun FriendsScreen(
     Box(Modifier.fillMaxSize().background(CmBackground)) {
         Column(Modifier.fillMaxSize().padding(horizontal = 14.dp)) {
 
-            // ---- top bar: wordmark (letters only, left) .......... minimise / exit
+            // ---- top bar: wordmark (left) .......... minimise / exit, then the thin
+            // status line. The whole top bar is pinned to the DEFAULT text size
+            // (FixedScale): the icons and spacing stay fixed and balanced no matter
+            // where the Settings text-size slider sits, so it never looks lopsided.
             Spacer(Modifier.height(10.dp))
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Wordmark(online)
-                Spacer(Modifier.weight(1f))
-                IconBtn(onClick = onMinimise) { MinimiseIcon() }
-                Spacer(Modifier.width(6.dp))
-                IconBtn(onClick = onExit) { PowerIcon() }
-            }
-
-            // ---- thin status line: Engine (left) .......... Me (right)
-            Spacer(Modifier.height(6.dp))
             val serverOff by org.cmchat.app.tor.ServerController.stoppedByUser.collectAsState()
-            StatusLine(online, torStatus, invisible, serverOff) {
-                val nowInvisible = !invisible
-                org.cmchat.app.settings.AppSettings.invisibleMode.value = nowInvisible
-                // Going Online delivers what was held: "Missed" clears, the
-                // messages show as new (blue dot until viewed).
-                if (!nowInvisible) org.cmchat.app.chat.ChatStore.deliverMissed()
+            FixedScale {
+                Column {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Wordmark(online)
+                        Spacer(Modifier.weight(1f))
+                        IconBtn(onClick = onMinimise) { MinimiseIcon() }
+                        Spacer(Modifier.width(8.dp))
+                        IconBtn(onClick = onExit) { PowerIcon() }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    StatusLine(online, torStatus, invisible, serverOff) {
+                        val nowInvisible = !invisible
+                        org.cmchat.app.settings.AppSettings.invisibleMode.value = nowInvisible
+                        // Going Online delivers what was held: "Missed" clears, the
+                        // messages show as new (blue dot until viewed).
+                        if (!nowInvisible) org.cmchat.app.chat.ChatStore.deliverMissed()
+                    }
+                }
             }
             Spacer(Modifier.height(8.dp))
 
@@ -278,6 +283,22 @@ private fun MinimiseIcon() {
 /** EXIT — the red power symbol (drawn; shared with the chat's Kill pill). */
 @Composable
 private fun PowerIcon() = org.cmchat.app.ui.components.PowerGlyph(WordRed, 24)
+
+/**
+ * Renders [content] at the app's DEFAULT text size by dividing the Settings
+ * text-size slider back out of the font scale. The top bar uses this so its
+ * icons and spacing stay fixed and symmetric at every slider setting; the chat
+ * content below is outside it and still scales normally.
+ */
+@Composable
+private fun FixedScale(content: @Composable () -> Unit) {
+    val step by org.cmchat.app.settings.AppSettings.textSize.collectAsState()
+    val d = androidx.compose.ui.platform.LocalDensity.current
+    androidx.compose.runtime.CompositionLocalProvider(
+        androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(
+            d.density, d.fontScale / org.cmchat.app.settings.AppSettings.textScale(step)),
+    ) { content() }
+}
 
 /** The "+" on the cyan button, drawn (crisp at any size). */
 @Composable
