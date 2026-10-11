@@ -125,7 +125,7 @@ jobs:
 
           Optional: **Calculator-twin.apk** — a separate, plain calculator app that opens CM-Chat (same key 10 times; "reset" 20 times forgets the key). It disguises the app while open; it does NOT hide CM-Chat from your app list on modern Android.
 
-          For developers only: **CM-Chat-arm64-debug-TESTING.apk** allows screenshots — do not use it for real conversations.
+          For developers only: **CM-Chat-arm64-debug-TESTING.apk** is a debuggable build (logs / attaching a debugger). Like the release build it blocks screenshots and the recents preview; it is not for real conversations.
 
           Upgrading from an earlier build installs in place (same signing key) and keeps your vault. If install fails, uninstall the old app first — note that uninstalling erases the vault for good.
           EOF
